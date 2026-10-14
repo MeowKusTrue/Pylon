@@ -61,7 +61,8 @@ public class Spectrum : FrameworkElement
         var r = Math.Min(w / 2, 3);
         for (var i = 0; i < Bars; i++)
         {
-            var h = Math.Max(_levels[i] * ActualHeight, 2);
+            var h = _levels[i] * ActualHeight;
+            if (h < 1) continue; // silence draws nothing, not a dotted baseline
             dc.DrawRoundedRectangle(brush, null, new Rect(i * slot + (slot - w) / 2, ActualHeight - h, w, h), r, r);
         }
     }
@@ -158,7 +159,7 @@ public static class AudioTap
             client.GetService(ref iid, out var service);
             capture = (IAudioCaptureClient)service;
             client.Start();
-            while (_gen == gen)
+            while (Volatile.Read(ref _gen) == gen)
             {
                 Thread.Sleep(15);
                 while (capture.GetNextPacketSize(out var packet) == 0 && packet > 0)

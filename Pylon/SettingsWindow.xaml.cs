@@ -14,6 +14,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow(Window owner, string? category = null)
     {
         InitializeComponent();
+        if (Motion.ByPointer) Loaded += (_, _) => Motion.Pop((UIElement)Content);
         Owner = owner;
         var work = SystemParameters.WorkArea;
         if (Height > work.Height - 20) Height = work.Height - 20;

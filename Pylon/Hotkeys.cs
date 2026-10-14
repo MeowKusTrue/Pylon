@@ -32,6 +32,7 @@ public static class Hotkeys
         new("slower", "Playback", "Slower", "OemMinus", w => w.ChangeRate(-1)),
         new("normalspeed", "Playback", "Normal speed", "Oem2", w => w.ChangeRate(0)),
         new("record", "Playback", "Record", "Shift+R", w => w.ToggleRecord()),
+        new("abloop", "Playback", "A-B loop", "Shift+L", w => w.ToggleAbLoop()),
         new("snapshot", "Playback", "Take a snapshot", "Shift+S", w => w.Snapshot()),
 
         new("fwd1", "Seeking", "Very short jump forward", "Shift+Right", w => w.Skip(0, +1)),

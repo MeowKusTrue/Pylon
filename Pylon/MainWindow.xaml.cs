@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     bool _showRemaining, _fullscreen, _minimal, _mini, _isAudio, _rateApplied, _rescan, _recording, _netPresetApplying;
     long _resumeAt;
     string? _recordFile;
+    string _title = ""; // media title for history, independent of what the title bar shows
     WindowState _restoreState;
     Rect _restoreBounds;
     readonly DispatcherTimer _tick, _hideTimer, _osdTimer, _clickTimer, _resumeTimer, _engineTimer;
@@ -109,13 +110,13 @@ public partial class MainWindow : Window
         };
         Seek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
         MiniSeek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
-        FxPanel.CloseRequested += () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); };
+        FxPanel.CloseRequested += HideEffects;
 
         _tick = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => Refresh(), Dispatcher);
         _hideTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num("ui.hideafter"))), DispatcherPriority.Normal, (_, _) => HideControls(), Dispatcher) { IsEnabled = false };
-        _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { OsdBorder.Opacity = 0; _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { Motion.FadeOut(OsdBorder); _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); TogglePlay(); }, Dispatcher) { IsEnabled = false };
-        _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { ResumeBanner.Visibility = Visibility.Collapsed; _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
 
         SourceInitialized += (_, _) =>
@@ -352,6 +353,7 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(title)) title = Library.DisplayName(src);
         var artist = media.Meta(MetadataType.Artist);
 
+        _title = title;
         TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
         Title = $"{title} - Pylon";
@@ -362,6 +364,8 @@ public partial class MainWindow : Window
         Seek.Waveform = MiniSeek.Waveform = _isAudio;
         Seek.SetWaveSeed(src);
         MiniSeek.SetWaveSeed(src);
+        if (_isAudio && !isUrl && Settings.Bool("ui.realwave")) LoadWaveform(src);
+        ClearLoop();
         MusicCaption.Text = MiniTitle.Text;
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
 
@@ -377,7 +381,8 @@ public partial class MainWindow : Window
                 case "Ask": _resumeAt = h!.Time; break;
             }
         }
-        ResumeBanner.Visibility = _resumeAt > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (_resumeAt > 0) Motion.In(ResumeBanner, dy: 12);
+        else ResumeBanner.Visibility = Visibility.Collapsed;
         ResumeText.Text = L.F("You’ve watched till {0} already.", Fmt(_resumeAt));
         if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
 
@@ -416,6 +421,7 @@ public partial class MainWindow : Window
     {
         SaveProgress(finished: true);
         KeepAwake(false);
+        if (_sleepEndOfItem) { _sleepEndOfItem = false; Refresh(); Osd(L.T("Sleep timer: stopped")); return; }
         if (Settings.Str("playback.repeat") == "One") { PlayAt(_index, startAt: 0); return; }
         if (Settings.Bool("playback.stopeach")) { Refresh(); return; }
         var next = NextIndex(+1);
@@ -449,7 +455,7 @@ public partial class MainWindow : Window
         if (CurrentPath is not { } path || _mp.Length <= 0) return;
         var t = finished ? _mp.Length : _mp.Time;
         if (t <= 0) return;
-        Library.Remember(path, TitleText.Text, t, _mp.Length, _isAudio);
+        Library.Remember(path, _title, t, _mp.Length, _isAudio);
     }
 
     void SetArtwork(string? url)
@@ -484,9 +490,11 @@ public partial class MainWindow : Window
         ResumeBanner.Visibility = Visibility.Collapsed;
         TimeText.Text = DurationText.Text = "--:--:--";
         Seek.Value = MiniSeek.Value = 0;
+        ClearLoop();
         _preview.Open(null);
         KeepAwake(false);
         ApplyLayout();
+        UpdateControlButtons();
         Sidebar.Render();
     }
 
@@ -695,16 +703,18 @@ public partial class MainWindow : Window
 
     public void ToggleEffects()
     {
-        if (FxPanel.Visibility == Visibility.Visible) { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }
+        if (Motion.IsShown(FxPanel)) HideEffects();
         else ShowEffects(video: !_isAudio && _index >= 0);
     }
+
+    void HideEffects() => Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 16, animate: Motion.ByPointer);
 
     void ShowEffects(bool video)
     {
         if (_fullscreen) ToggleFullscreen();
         if (_mini) ToggleMiniplayer();
         FxPanel.ShowTab(video);
-        FxPanel.Visibility = Visibility.Visible;
+        Motion.In(FxPanel, dx: 16, animate: Motion.ByPointer);
         ApplyLayout();
     }
 
@@ -790,7 +800,7 @@ public partial class MainWindow : Window
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
-            case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? Title.Replace(" - Pylon", "") : "Pylon"; break;
+            case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
             case "playback.repeat" or "controls.skipbtn": UpdateControlButtons(); break;
@@ -944,11 +954,11 @@ public partial class MainWindow : Window
         {
             OverlayControlsHost.Content = null;
             Root.Children.Add(ControlsBar);
-            OverlayControlsHost.Visibility = Visibility.Visible;
+            Motion.In(OverlayControlsHost, animate: false); // also cancels a running fade-out
             Overlay.Cursor = null;
             _hideTimer.Stop();
         }
-        OverlayControlsHost.Opacity = _fullscreen ? Settings.Num("ui.fsopacity") / 100 : 1;
+        ControlsBar.Opacity = floating ? Settings.Num("ui.fsopacity") / 100 : 1;
         var hideBar = (_minimal && !_fullscreen) || _mini || (_fullscreen && !Settings.Bool("ui.fscontrols"));
         ControlsBar.Visibility = hideBar ? Visibility.Collapsed : Visibility.Visible;
         MiniBar.Visibility = _mini ? Visibility.Visible : Visibility.Collapsed;
@@ -958,13 +968,14 @@ public partial class MainWindow : Window
     void ToggleSidebar(LibraryPanel.Section? section = null)
     {
         if (!Settings.Bool("library.enabled")) return;
-        var show = Sidebar.Visibility != Visibility.Visible || (section != null && Sidebar.Current != section);
+        var show = !Motion.IsShown(Sidebar) || (section != null && Sidebar.Current != section);
         if (show && (_fullscreen || _minimal || _mini)) { _minimal = false; if (_fullscreen) ToggleFullscreen(); if (_mini) ToggleMiniplayer(); }
-        Sidebar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show) Motion.In(Sidebar, dx: -16, animate: Motion.ByPointer);
         if (show && section != null) Sidebar.Show(section.Value);
         SidebarBtn.IsChecked = show;
         ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
-        ApplyLayout();
+        if (show) ApplyLayout();
+        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -16, animate: Motion.ByPointer);
     }
 
     double _radius = 10;
@@ -993,7 +1004,7 @@ public partial class MainWindow : Window
 
     void ShowControls()
     {
-        OverlayControlsHost.Visibility = Visibility.Visible;
+        Motion.In(OverlayControlsHost, dy: 8, animate: _fullscreen);
         Overlay.Cursor = null;
         _hideTimer.Stop();
         if (Settings.Str("ui.autohide") != "Never") _hideTimer.Start();
@@ -1003,7 +1014,7 @@ public partial class MainWindow : Window
     {
         _hideTimer.Stop();
         if (!_fullscreen || ControlsBar.IsMouseOver) return;
-        OverlayControlsHost.Visibility = Visibility.Hidden;
+        Motion.Out(OverlayControlsHost, () => OverlayControlsHost.Visibility = Visibility.Hidden, dy: 8, ms: 200);
         Overlay.Cursor = Cursors.None;
     }
 
@@ -1151,7 +1162,7 @@ public partial class MainWindow : Window
     [
         ("stop", "Stop", false), ("skip15", "Skip back / forward", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
         ("frame", "Next frame", false), ("speed", "Playback speed", false), ("snapshot", "Snapshot", false), ("record", "Record", false),
-        ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
+        ("abloop", "A-B loop", false), ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
         ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
     ];
 
@@ -1179,6 +1190,7 @@ public partial class MainWindow : Window
         SnapBtn.Visibility = V(ButtonOn("snapshot"));
         RecordBtn.Visibility = V(ButtonOn("record"));
         LoopBtn.Visibility = V(ButtonOn("loop"));
+        AbBtn.Visibility = V(ButtonOn("abloop") && _index >= 0);
         ShuffleBtn.Visibility = V(ButtonOn("shuffle"));
         MuteBtn.Visibility = Volume.Visibility = V(ButtonOn("volume"));
         AudioBtn.Visibility = V(ButtonOn("audio"));
@@ -1202,6 +1214,7 @@ public partial class MainWindow : Window
             CustomizeList.Children.Add(row);
         }
         CustomizePopup.IsOpen = true;
+        Motion.Pop(CustomizePopup.Child, dy: 6, origin: new Point(0, 1));
     }
 
     void CustomizeDone_Click(object sender, RoutedEventArgs e) => CustomizePopup.IsOpen = false;
@@ -1384,7 +1397,8 @@ public partial class MainWindow : Window
         ResumeBanner.Visibility = Visibility.Collapsed;
     }
 
-    void ResumeClose_Click(object sender, RoutedEventArgs e) => ResumeBanner.Visibility = Visibility.Collapsed;
+    void ResumeClose_Click(object sender, RoutedEventArgs e) => HideResume();
+    void HideResume() => Motion.Out(ResumeBanner, () => ResumeBanner.Visibility = Visibility.Collapsed, dy: 12);
 
     void Seek_MouseMove(object sender, MouseEventArgs e)
     {
@@ -1436,6 +1450,7 @@ public partial class MainWindow : Window
         Sub($"{L.T("Profile")} ({L.T(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
         CastMenu(),
+        SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
         Item("Customize Player", "paint-brush-duotone", null, ShowCustomize),
@@ -1443,6 +1458,100 @@ public partial class MainWindow : Window
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
+
+    // ───────── sleep timer ─────────
+
+    DateTime? _sleepAt;
+    bool _sleepEndOfItem;
+    DispatcherTimer? _sleepTimer;
+
+    MenuItem SleepMenu(string? glyph)
+    {
+        var header = _sleepAt is { } at ? L.F("Sleep Timer ({0} min left)", Math.Max(1, (int)Math.Ceiling((at - DateTime.Now).TotalMinutes)))
+                   : _sleepEndOfItem ? L.T("Sleep Timer (end of item)") : L.T("Sleep Timer");
+        return Sub(header, glyph,
+        [
+            Item("Off", null, null, () => SetSleep(0), check: _sleepAt == null && !_sleepEndOfItem),
+            .. new[] { 15, 30, 45, 60, 90 }.Select(m => (object)Item(L.F("{0} min", m), null, null, () => SetSleep(m))),
+            Item("End of current item", null, null, () => SetSleep(-1), check: _sleepEndOfItem, enabled: _index >= 0),
+        ]);
+    }
+
+    /// <summary>Minutes until playback pauses (the last 10 s fade out); -1 = when the current item ends; 0 = off.</summary>
+    void SetSleep(int minutes)
+    {
+        _sleepEndOfItem = minutes == -1;
+        _sleepAt = minutes > 0 ? DateTime.Now.AddMinutes(minutes) : null;
+        _sleepTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => SleepTick(), Dispatcher);
+        _sleepTimer.Interval = TimeSpan.FromSeconds(1);
+        if (_sleepAt != null) _sleepTimer.Start(); else _sleepTimer.Stop();
+        ApplyVolume(); // undo a fade that was in progress
+        Osd(minutes switch { 0 => L.T("Sleep timer off"), -1 => L.T("Stops at the end of this item"), _ => L.F("Sleep timer: {0} min", minutes) });
+    }
+
+    void SleepTick()
+    {
+        if (_sleepAt is not { } at) return;
+        var left = at - DateTime.Now;
+        if (left > TimeSpan.FromSeconds(10)) { _sleepTimer!.Interval = TimeSpan.FromSeconds(1); return; }
+        _sleepTimer!.Interval = TimeSpan.FromMilliseconds(100);
+        if (left > TimeSpan.Zero)
+        {
+            _mp.Volume = (int)Math.Round(Volume.Value * MaxVolume * left.TotalSeconds / 10); // fade out
+            return;
+        }
+        _sleepTimer.Stop();
+        _sleepAt = null;
+        if (_mp.IsPlaying) _mp.Pause();
+        ApplyVolume();
+        Osd(L.T("Sleep timer: paused"));
+    }
+
+    // ───────── A-B loop ─────────
+
+    long _loopA = -1, _loopB = -1;
+    DispatcherTimer? _loopTimer;
+
+    /// <summary>First press marks A, second marks B and starts looping, third clears it.</summary>
+    public void ToggleAbLoop()
+    {
+        if (_index < 0 || !_mp.IsSeekable) return;
+        var t = _mp.Time;
+        if (_loopA < 0) { _loopA = t; Osd(L.F("Loop start (A): {0}", Fmt(t))); }
+        else if (_loopB < 0 && t > _loopA + 300) { _loopB = t; _mp.Time = _loopA; Osd(L.F("A-B loop: {0} – {1}", Fmt(_loopA), Fmt(_loopB))); }
+        else { ClearLoop(); Osd(L.T("A-B loop off")); return; }
+        ShowLoop();
+    }
+
+    void ClearLoop()
+    {
+        _loopA = _loopB = -1;
+        ShowLoop();
+    }
+
+    void ShowLoop()
+    {
+        var len = _mp.Length;
+        double At(long ms) => ms < 0 || len <= 0 ? double.NaN : (double)ms / len;
+        Seek.SetLoop(At(_loopA), At(_loopB));
+        MiniSeek.SetLoop(At(_loopA), At(_loopB));
+        AbBtn.IsChecked = _loopA >= 0;
+        _loopTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(25), DispatcherPriority.Render, (_, _) =>
+        {
+            if (_loopB >= 0 && _mp.Time >= _loopB) _mp.Time = _loopA;
+        }, Dispatcher);
+        if (_loopB >= 0) _loopTimer.Start(); else _loopTimer.Stop();
+    }
+
+    void Ab_Click(object sender, RoutedEventArgs e) => ToggleAbLoop();
+
+    async void LoadWaveform(string src)
+    {
+        var peaks = await Waveform.GetAsync(src);
+        if (peaks == null || CurrentPath != src) return;
+        Seek.SetPeaks(peaks);
+        MiniSeek.SetPeaks(peaks);
+    }
 
     MenuItem DiscMenu()
     {
@@ -1483,6 +1592,8 @@ public partial class MainWindow : Window
                 Item("Repeat All", null, null, () => Settings.Set("playback.repeat", Settings.Str("playback.repeat") == "All" ? "Off" : "All"), check: Settings.Str("playback.repeat") == "All"),
                 Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
                 Item("Next Frame", null, KeyOf("frame"), NextFrame),
+                Item("A-B Loop", null, KeyOf("abloop"), ToggleAbLoop, check: _loopA >= 0, enabled: _index >= 0),
+                SleepMenu(null),
             ]),
             Sub("Video", "monitor", [
                 Item("Fullscreen", null, KeyOf("fullscreen"), ToggleFullscreen, check: _fullscreen),
@@ -1582,6 +1693,7 @@ public partial class MainWindow : Window
     {
         if (!Settings.Bool("osd.enable")) return;
         OsdText.Text = text;
+        OsdBorder.BeginAnimation(OpacityProperty, null);
         OsdBorder.Opacity = 1;
         _osdTimer.Stop();
         _osdTimer.Interval = TimeSpan.FromSeconds(seconds > 0 ? seconds : Settings.Num("osd.time"));

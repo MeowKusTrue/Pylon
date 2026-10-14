@@ -91,13 +91,32 @@ public class SeekBar : FrameworkElement
     /// <summary>Raised while the user clicks/drags, with the new position 0..1.</summary>
     public event Action<double>? Seek;
 
-    // ponytail: decorative pseudo-waveform seeded from the file name, like the mockup; a real one needs an audio decode pass.
+    // decorative pseudo-waveform seeded from the file name (like the mockup) until the real one is decoded
     byte[] _bars = [];
+    byte[]? _peaks;
     public void SetWaveSeed(string seed)
     {
+        _peaks = null;
         var heights = new byte[] { 2, 4, 6, 8, 10, 12, 14, 14, 14, 8, 8 };
         var rnd = new Random(seed.Aggregate(17, (h, c) => unchecked(h * 31 + c))); // stable across runs
         _bars = Enumerable.Range(0, 400).Select(_ => heights[rnd.Next(heights.Length)]).ToArray();
+        InvalidateVisual();
+    }
+
+    /// <summary>Real loudness per bin (0..255) from <see cref="Pylon.Waveform"/>; replaces the decorative bars.</summary>
+    public void SetPeaks(byte[]? peaks)
+    {
+        _peaks = peaks;
+        InvalidateVisual();
+    }
+
+    double _loopA = double.NaN, _loopB = double.NaN;
+
+    /// <summary>A-B loop range as positions 0..1 (NaN = not set); B alone stays NaN while only A is marked.</summary>
+    public void SetLoop(double a, double b)
+    {
+        _loopA = a;
+        _loopB = b;
         InvalidateVisual();
     }
 
@@ -124,6 +143,14 @@ public class SeekBar : FrameworkElement
         Brush Track = B("BgB2"), Fill = B("AccentBright"), Thumb = B("Accent"), Played = B("AccentDim"), Unplayed = B("FgA4"), FgHover = B("FgA3");
         dc.DrawRoundedRectangle(Track, null, new Rect(0, 0, w, h), 6, 6);
         var v = Math.Clamp(Value, 0, 1);
+        if (!double.IsNaN(_loopA))
+        {
+            var accent = (Thumb as SolidColorBrush)?.Color ?? Colors.Orange;
+            double xa = 2 + _loopA * (w - 4), xb = double.IsNaN(_loopB) ? xa : 2 + _loopB * (w - 4);
+            dc.DrawRoundedRectangle(new SolidColorBrush(Color.FromArgb(0x38, accent.R, accent.G, accent.B)), null, new Rect(xa, 0, Math.Max(2, xb - xa), h), 4, 4);
+            dc.DrawRectangle(Thumb, null, new Rect(xa - 1, 0, 2, h));
+            if (!double.IsNaN(_loopB)) dc.DrawRectangle(Thumb, null, new Rect(xb - 1, 0, 2, h));
+        }
         if (!Waveform)
         {
             var x = 2 + v * (w - 12);
@@ -133,10 +160,10 @@ public class SeekBar : FrameworkElement
             return;
         }
         var tx = 2 + v * (w - 8);
-        int i = 0;
+        int i = 0, count = Math.Max(1, (int)Math.Ceiling((w - 10) / 5));
         for (double bx = 6; bx < w - 4; bx += 5, i++)
         {
-            double bh = _bars[i % _bars.Length];
+            double bh = _peaks is { Length: > 0 } p ? 2 + p[Math.Min(p.Length - 1, i * p.Length / count)] / 255.0 * (h - 10) : _bars[i % _bars.Length];
             var brush = bx + 2 < tx ? Played : (_hover >= 0 && bx < _hover ? FgHover : Unplayed);
             dc.DrawRoundedRectangle(brush, null, new Rect(bx, (h - bh) / 2, 2, bh), 1, 1);
         }

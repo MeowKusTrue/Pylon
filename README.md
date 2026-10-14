@@ -20,6 +20,8 @@ Pylon brings the community **"VLC Redesign"** Figma concept to life as a real pl
 - **Settings:** 13 categories and about 150 options. They apply instantly; when libVLC must restart, playback resumes where it was.
 - **Effects:** a 10-band equalizer with presets, compressor, spatializer, stereo widener, pitch shift, and karaoke. For video: color, crop and rotate.
 - **Themes:** dark, light, follow Windows, OLED black, Midnight, Nord and Sepia, plus 9 accent colors and adjustable corner rounding (including the window corners on Windows 11).
+- **Playback tools:** A-B loop (`Shift+L`, range shown on the seek bar), sleep timer with a gentle fade-out, a real waveform on the music seek bar (decoded once in the background, cached).
+- **Motion:** quick ease-out transitions for panels, menus, dialogs and library pages; hotkey actions stay instant, and Windows' "Animation effects" switch turns them off.
 - **Audio spectrum:** live bars under the cover art, optionally over video too. Only Pylon's own sound is captured (WASAPI process loopback, Windows 10 2004+).
 - **Languages:** English and Russian (Settings → General → Interface language).
 - **Updates:** checks GitHub Releases once a day and updates itself in place.

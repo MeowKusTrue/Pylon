@@ -17,6 +17,8 @@ public partial class App : Application
             return;
         }
         Perf.Mark("startup");
+        Motion.HookMenus();
+        Motion.HookPress();
         Settings.Load();
         L.Init();
         Perf.Mark("settings + strings");

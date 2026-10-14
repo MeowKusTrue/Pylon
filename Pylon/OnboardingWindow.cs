@@ -25,6 +25,7 @@ public class OnboardingWindow : Window
     {
         Owner = owner;
         _step = step;
+        Loaded += (_, _) => Motion.Pop((UIElement)Content); // first-run delight tier
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
         Background = Brushes.Transparent;

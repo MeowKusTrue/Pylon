@@ -17,6 +17,7 @@ public partial class DialogWindow : Window
     DialogWindow(Window owner, string title, UIElement body)
     {
         InitializeComponent();
+        if (Motion.ByPointer) Loaded += (_, _) => Motion.Pop((UIElement)Content);
         Owner = owner;
         TitleText.Text = L.T(title);
         CancelBtn.Content = L.T("Cancel");

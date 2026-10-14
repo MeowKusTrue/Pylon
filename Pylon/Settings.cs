@@ -359,6 +359,7 @@ public static class Settings
                 T("ui.front", "Bring Pylon to the front when playback starts", false),
                 T("ui.cover", "Show cover art in the window when playing audio", true),
                 Seg("ui.spectrum", "Audio spectrum", "Music", "Off", "Music", "Music and video"),
+                T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
                 T("ui.browser", "Show the file browser inside the open dialog", true).Off(),
                 T("ui.appicon", "Allow the app icon to change", true).Off(),
                 S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),

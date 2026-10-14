@@ -122,10 +122,17 @@ public partial class LibraryPanel : UserControl
         _pos = _nav.Count - 1;
         CloseSearch();
         Render();
+        Slide(1);
     }
 
-    void Back_Click(object sender, RoutedEventArgs e) { if (_pos > 0) { _pos--; Render(); } }
-    void Forward_Click(object sender, RoutedEventArgs e) { if (_pos < _nav.Count - 1) { _pos++; Render(); } }
+    void Back_Click(object sender, RoutedEventArgs e) { if (_pos > 0) { _pos--; Render(); Slide(-1); } }
+    void Forward_Click(object sender, RoutedEventArgs e) { if (_pos < _nav.Count - 1) { _pos++; Render(); Slide(1); } }
+
+    /// <summary>New pages come in from the side they live on: deeper from the right, back from the left.</summary>
+    void Slide(int direction)
+    {
+        if (IsVisible && Motion.ByPointer) Motion.Pop(List, scale: 1, dx: 14 * direction, ms: 200);
+    }
 
     public void Render()
     {

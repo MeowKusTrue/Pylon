@@ -166,6 +166,7 @@
                     </Button>
                     <Button x:Name="SnapBtn" Style="{StaticResource IconButton}" Tag="camera" Width="30" Margin="0,0,12,0" Click="Snap_Click" ToolTip="{local:T 'Take a snapshot (Shift+S)'}" Visibility="Collapsed"/>
                     <ToggleButton x:Name="RecordBtn" Style="{StaticResource IconButton}" Tag="record" Width="30" Margin="0,0,12,0" Click="Record_Click" ToolTip="{local:T 'Record (Shift+R)'}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="AbBtn" Style="{StaticResource IconButton}" Tag="brackets-square" Width="30" Margin="0,0,12,0" Click="Ab_Click" ToolTip="{local:T 'A-B loop (Shift+L)'}" Visibility="Collapsed"/>
                     <ToggleButton x:Name="LoopBtn" Style="{StaticResource IconButton}" Tag="repeat" Width="30" Margin="0,0,12,0" Click="Loop_Click" ToolTip="{local:T 'Repeat'}" Visibility="Collapsed"/>
                     <ToggleButton x:Name="ShuffleBtn" Style="{StaticResource IconButton}" Tag="shuffle" Width="30" Margin="0,0,12,0" Click="Shuffle_Click" ToolTip="{local:T 'Shuffle'}" Visibility="Collapsed"/>
                     <Button x:Name="MuteBtn" Style="{StaticResource IconButton}" Tag="speaker-high" Padding="0" Click="Mute_Click" ToolTip="{local:T 'Mute (M)'}"/>
