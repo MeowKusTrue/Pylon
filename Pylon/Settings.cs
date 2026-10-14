@@ -148,6 +148,8 @@ public static class Settings
         if (Effects.TransformArg() is { } transform) { Add("--video-filter=transform"); Add($"--transform-type={transform}"); }
         Add($"--snapshot-format={Str("video.snapformat").ToLowerInvariant()}");
         if (Str("video.par") is { Length: > 0 } par && par != "1:1") Add($"--monitor-par={par}");
+        Add("--d3d11-upscale-mode=" + Str("video.upscale") switch { "Point" => "point", "Video processor" => "processor", "Super Resolution" => "super", _ => "linear" });
+        Add("--d3d11-hdr-mode=" + Str("video.hdr") switch { "Never" => "never", "Always" => "always", "Generate HDR from SDR" => "generate", _ => "auto" });
 
         // Audio
         if (!Bool("audio.enable")) Add("--no-audio");
@@ -189,6 +191,7 @@ public static class Settings
         if (Bool("audio.eq2pass")) Add("--equalizer-2pass");
         Add($"--audio-replay-gain-mode={Str("audio.replaygain").ToLowerInvariant() switch { "track" => "track", "album" => "album", _ => "none" }}");
         Add($"--audio-replay-gain-preamp={Inv(Num("audio.preamp"))}");
+        Add($"--audio-replay-gain-default={Inv(Num("audio.rgdefault"))}");
         Add($"--audio-language={Lang("audio.lang")}");
         switch (Str("audio.visualizer"))
         {
@@ -360,6 +363,9 @@ public static class Settings
                 T("ui.cover", "Show cover art in the window when playing audio", true),
                 Seg("ui.spectrum", "Audio spectrum", "Music", "Off", "Music", "Music and video"),
                 T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
+                Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
+                T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
+                T("lyrics.online", "Find lyrics online", true, "Searches lrclib.net by artist and title when a track has no .ttml or .lrc file next to it."),
                 T("ui.browser", "Show the file browser inside the open dialog", true).Off(),
                 T("ui.appicon", "Allow the app icon to change", true).Off(),
                 S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),
@@ -442,6 +448,11 @@ public static class Settings
                 T("video.fullscreen", "Start videos in fullscreen", false),
                 T("video.screensaver", "Stop the screensaver during playback", true),
                 T("video.wallpaper", "Play video as desktop wallpaper", false).Off(NotInLibVlc)),
+            Sec("Enhancement",
+                C("video.upscale", "Upscaling", "Linear", ["Linear", "Point", "Video processor", "Super Resolution"],
+                  "Super Resolution sharpens low-resolution video on the GPU (NVIDIA RTX Video, Intel VSR).", engine: true),
+                C("video.hdr", "HDR output", "Auto", ["Auto", "Never", "Always", "Generate HDR from SDR"],
+                  "Generate HDR from SDR uses RTX Video HDR on NVIDIA GPUs. Turn on HDR in Windows display settings first.", engine: true)),
             Sec("Picture",
                 S("fxv.hue", "Hue", 0, -180, 180, 1, "°"),
                 S("fxv.brightness", "Brightness", 1, 0, 2, 0.01, ""),
@@ -488,8 +499,9 @@ public static class Settings
                 T("audio.normalize", "Normalize loudness", false, "Evens out loud and quiet files.", engine: true),
                 N("audio.normlevel", "Target level", 2, 0, 10, "", engine: true, step: 0.1),
                 T("audio.night", "Night mode", false, "Compresses loud peaks so you can keep the volume low.", engine: true),
-                C("audio.replaygain", "Replay gain", "Off", ["Off", "Track", "Album"], engine: true),
-                N("audio.preamp", "Replay gain preamp", 0, -20, 20, " dB", engine: true, step: 0.5)),
+                C("audio.replaygain", "Replay gain", "Off", ["Off", "Track", "Album"], "Plays every track at the same loudness using the ReplayGain tags in the files.", engine: true),
+                N("audio.preamp", "Replay gain preamp", 0, -20, 20, " dB", engine: true, step: 0.5),
+                N("audio.rgdefault", "Gain for files without tags", -7, -20, 10, " dB", engine: true, step: 0.5)),
             Sec("Effects",
                 T("audio.eq", "Equalizer", false),
                 new Opt { Kind = OptKind.Choice, Key = "audio.eqpreset", Label = "Equalizer preset", Default = "Flat", DynamicOptions = () => Effects.PresetNames },

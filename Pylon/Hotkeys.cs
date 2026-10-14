@@ -33,6 +33,9 @@ public static class Hotkeys
         new("normalspeed", "Playback", "Normal speed", "Oem2", w => w.ChangeRate(0)),
         new("record", "Playback", "Record", "Shift+R", w => w.ToggleRecord()),
         new("abloop", "Playback", "A-B loop", "Shift+L", w => w.ToggleAbLoop()),
+        new("nextchapter", "Playback", "Next chapter", "Shift+N", w => w.JumpChapter(+1)),
+        new("prevchapter", "Playback", "Previous chapter", "Shift+P", w => w.JumpChapter(-1)),
+        new("bookmark", "Playback", "Add bookmark", "Ctrl+B", w => w.AddBookmark()),
         new("snapshot", "Playback", "Take a snapshot", "Shift+S", w => w.Snapshot()),
 
         new("fwd1", "Seeking", "Very short jump forward", "Shift+Right", w => w.Skip(0, +1)),
@@ -63,7 +66,6 @@ public static class Hotkeys
         new("openfolder", "Media", "Open folder", "Ctrl+F", w => w.OpenFolder()),
         new("openstream", "Media", "Open network stream", "Ctrl+N", w => w.OpenStream()),
         new("opendisc", "Media", "Open disc", "Ctrl+D", w => w.OpenDisc()),
-        new("opencapture", "Media", "Open capture device", "Ctrl+C", w => w.OpenCapture()),
         new("settings", "App", "Settings", "Ctrl+P", w => w.OpenSettings()),
         new("effects", "App", "Effects and filters", "Ctrl+E", w => w.ToggleEffects()),
         new("about", "App", "About Pylon", "Shift+F1", w => w.ShowAbout()),

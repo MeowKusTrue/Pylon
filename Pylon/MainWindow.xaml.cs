@@ -122,11 +122,20 @@ public partial class MainWindow : Window
 
         SourceInitialized += (_, _) =>
         {
+            StartMediaSession();
             RestoreSavedBounds();
             HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WndProc);
         };
         ContentRendered += (_, _) => Perf.Mark("first frame");
         SetupThumbButtons();
+        CompositionTarget.Rendering += SmoothSeek;
+        // the preview card's shadow reaches down over the bar; with a hit-testable popup window the pointer "left" the bar,
+        // the popup closed, the pointer was back on the bar, it reopened... (flickering cursor and card). Make it click-through.
+        SeekPreview.Opened += (_, _) =>
+        {
+            if (PresentationSource.FromVisual(SeekPreview.Child) is HwndSource src)
+                SetWindowLong(src.Handle, -20 /*GWL_EXSTYLE*/, GetWindowLong(src.Handle, -20) | 0x20 /*WS_EX_TRANSPARENT*/ | 0x08000000 /*WS_EX_NOACTIVATE*/);
+        };
         Loaded += (_, _) =>
         {
             Perf.Mark("loaded");
@@ -214,7 +223,7 @@ public partial class MainWindow : Window
         _mp.EndReached += (_, _) => Dispatcher.BeginInvoke(OnEnded);
         _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnError);
         _mp.Playing += (_, _) => Dispatcher.BeginInvoke(OnPlaying);
-        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(() => { if (_mini) SizeMini(); else FitToVideo(); }); };
+        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
 
         if (oldMp != null)
         {
@@ -361,6 +370,9 @@ public partial class MainWindow : Window
 
         _title = title;
         _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
+        _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
+        _session?.SetTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
+        _lyricsFor = null;
         TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
         Title = $"{title} - Pylon";
@@ -373,6 +385,10 @@ public partial class MainWindow : Window
         MiniSeek.SetWaveSeed(src);
         if (_isAudio && !isUrl && Settings.Bool("ui.realwave")) LoadWaveform(src);
         ClearLoop();
+        _is360 = false;
+        _view.Reset(animate: false);
+        _chapters = [];
+        UpdateMarks();
         MusicCaption.Text = MiniTitle.Text;
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
 
@@ -415,6 +431,8 @@ public partial class MainWindow : Window
 
     void OnPlaying()
     {
+        LoadChapters();
+        Detect360();
         if (!_rateApplied)
         {
             _rateApplied = true;
@@ -470,7 +488,8 @@ public partial class MainWindow : Window
     void SetArtwork(string? url)
     {
         var bmp = url == null ? null : LoadFull(url);
-        ArtImage.Source = ArtBackdrop.Source = bmp;
+        ArtImage.Source = bmp;
+        ArtBackdrop.SetImage(bmp);
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -500,6 +519,10 @@ public partial class MainWindow : Window
         TimeText.Text = DurationText.Text = "--:--:--";
         Seek.Value = MiniSeek.Value = 0;
         ClearLoop();
+        _chapters = [];
+        UpdateMarks();
+        _is360 = false;
+        _session?.Clear();
         _preview.Open(null);
         KeepAwake(false);
         ApplyLayout();
@@ -512,8 +535,7 @@ public partial class MainWindow : Window
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
         if (len > 0)
         {
-            if (!Seek.IsDragging) Seek.Value = (double)t / len;
-            if (!MiniSeek.IsDragging) MiniSeek.Value = (double)t / len;
+            if (!_mp.IsPlaying) ShowPosition((double)t / len); // while playing, SmoothSeek moves the thumb every frame
         }
         if (_index >= 0)
         {
@@ -523,6 +545,8 @@ public partial class MainWindow : Window
         }
         PlayBtn.IsChecked = MiniPlay.IsChecked = _mp.IsPlaying;
         UpdateThumbPlay();
+        _session?.SetState(_mp.IsPlaying, _index >= 0);
+        if (_ticks % 5 == 0 && _index >= 0) _session?.SetTimeline(TimeSpan.FromMilliseconds(t), TimeSpan.FromMilliseconds(len));
         var spectrum = Settings.Str("ui.spectrum");
         AudioTap.Volume = _mp.Volume / 100.0;
         MusicSpectrum.Active = _mp.IsPlaying && spectrum != "Off";
@@ -809,7 +833,7 @@ public partial class MainWindow : Window
             case "ui.corners": ApplyCorners(); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
-            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
@@ -855,6 +879,7 @@ public partial class MainWindow : Window
             case "On": _mp.SetDeinterlace(mode); break;
             case "Off": _mp.SetDeinterlace(null); break;
         }
+        FitVideo(); // aspect / crop changes reshape the box
     }
 
     void ApplyAudioSettings()
@@ -974,7 +999,154 @@ public partial class MainWindow : Window
         var hideBar = (_minimal && !_fullscreen) || _mini || (_fullscreen && !Settings.Bool("ui.fscontrols"));
         ControlsBar.Visibility = hideBar ? Visibility.Collapsed : Visibility.Visible;
         MiniBar.Visibility = _mini ? Visibility.Visible : Visibility.Collapsed;
+        UpdateAmbient();
+        ApplyLyricsLayout();
         UpdateCornerMask();
+    }
+
+    // ───────── seek bar that glides instead of stepping 5 times a second ─────────
+
+    double _shownMs = -1;
+    long _lastFrame;
+
+    void ShowPosition(double v)
+    {
+        v = Math.Clamp(v, 0, 1);
+        if (!Seek.IsDragging) Seek.Value = v;
+        if (!MiniSeek.IsDragging) MiniSeek.Value = v;
+    }
+
+    /// <summary>
+    /// Every frame the thumb advances on its own clock and is eased toward libVLC's reported time, so it never steps
+    /// or jumps back by a few pixels; real jumps (seeking, a new track) are taken as they are.
+    /// </summary>
+    void SmoothSeek(object? sender, EventArgs e)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var dt = _lastFrame == 0 ? 0 : Math.Min(0.1, (now - _lastFrame) / (double)Stopwatch.Frequency);
+        _lastFrame = now;
+        long len = _mp.Length;
+        if (_index < 0 || len <= 0 || !_mp.IsPlaying) { _shownMs = -1; return; }
+        var target = PlaybackClock() * 1000;
+        if (_shownMs < 0 || Math.Abs(target - _shownMs) > 700) _shownMs = target;
+        else _shownMs = Math.Max(_shownMs, _shownMs + dt * 1000 * _mp.Rate + (target - _shownMs) * 0.1); // never backwards
+        ShowPosition(_shownMs / len);
+    }
+
+    // ───────── lyrics ─────────
+
+    string? _lyricsFor;
+    (string Title, string? Artist, string? Album, double Duration) _track;
+    long _clockMs, _clockStamp;
+
+    void Lyrics_Click(object sender, RoutedEventArgs e) => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics"));
+
+    void ApplyLyricsLayout()
+    {
+        var on = Settings.Bool("ui.lyrics") && _isAudio && _index >= 0 && !_mini;
+        LyricsBtn.IsChecked = Settings.Bool("ui.lyrics");
+        if ((LyricsPane.Visibility == Visibility.Visible) != on)
+        {
+            LyricsColumn.Width = on ? new GridLength(1.5, GridUnitType.Star) : new GridLength(0);
+            if (on) Motion.In(LyricsPane, dx: 40, animate: Motion.ByPointer);
+            else LyricsPane.Visibility = Visibility.Collapsed;
+            Dispatcher.BeginInvoke(() => MusicLayout_SizeChanged(MusicLayout, null!), DispatcherPriority.Loaded);
+        }
+        if (on && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks
+    }
+
+    async void LoadLyrics(string path)
+    {
+        _lyricsFor = path;
+        LyricsPane.Clock ??= PlaybackClock;
+        if (LyricsPane.Tag == null)
+        {
+            LyricsPane.Tag = true;
+            LyricsPane.Seek += s => { if (_mp.IsSeekable) _mp.Time = (long)(s * 1000); };
+        }
+        LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
+        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration);
+        if (CurrentPath != path) return;
+        if (doc != null) LyricsPane.Show(doc);
+        else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
+    }
+
+    /// <summary>libVLC reports time in steps; between them the lyrics clock runs on its own so the fill sweeps smoothly.</summary>
+    double PlaybackClock()
+    {
+        var t = _mp.Time;
+        var now = Stopwatch.GetTimestamp();
+        if (t != _clockMs) { _clockMs = t; _clockStamp = now; }
+        var ahead = _mp.IsPlaying ? Math.Min(0.5, (now - _clockStamp) / (double)Stopwatch.Frequency * _mp.Rate) : 0;
+        return t / 1000.0 + ahead;
+    }
+
+    // ───────── around the video: blurred frames instead of black bars ─────────
+
+    DispatcherTimer? _ambientTimer;
+    int _ambientSlot;
+    bool _ambientBusy;
+
+    bool AmbientOn => Settings.Str("ui.videobg") != "Black" && Video.Visibility == Visibility.Visible && !_isAudio && !_fullscreen && !_mini;
+
+    void UpdateAmbient()
+    {
+        var on = AmbientOn;
+        VideoBackdrop.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        Ambient.Live = on && Settings.Bool("ui.livebg");
+        ArtBackdrop.Live = MusicView.Visibility == Visibility.Visible && Settings.Bool("ui.livebg");
+        FitVideo();
+        _ambientTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => { if (AmbientOn && _mp.IsPlaying) GrabAmbient(); }, Dispatcher);
+        _ambientTimer.IsEnabled = on;
+    }
+
+    /// <summary>With a backdrop the video box takes the picture's own shape, so the blur shows around it.</summary>
+    void FitVideo()
+    {
+        uint w = 0, h = 0;
+        if (!AmbientOn || !_mp.Size(0, ref w, ref h) || w == 0 || h == 0 || Stage.ActualWidth <= 0 || Stage.ActualHeight <= 0)
+        {
+            Video.Width = Video.Height = double.NaN;
+            return;
+        }
+        static double? Ratio(string s) => s.Split(':') is [var a, var b] && double.TryParse(a, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x)
+            && double.TryParse(b, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) && y > 0 ? x / y : null;
+        var sar = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video).Data.Video is { SarNum: > 0, SarDen: > 0 } v ? (double)v.SarNum / v.SarDen : 1;
+        var aspect = Ratio(Settings.Str("video.aspect")) ?? Ratio(Settings.Str("video.crop")) ?? w * sar / h;
+        double sw = Stage.ActualWidth, sh = Stage.ActualHeight;
+        if (sw / sh > aspect) { Video.Height = sh; Video.Width = Math.Round(sh * aspect); }
+        else { Video.Width = sw; Video.Height = Math.Round(sw / aspect); }
+    }
+
+    void Video_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateCornerMask();
+    void Stage_SizeChanged(object sender, SizeChangedEventArgs e) => FitVideo();
+
+    /// <summary>A tiny snapshot of the current frame becomes the blurred backdrop (taken off the UI thread).</summary>
+    async void GrabAmbient()
+    {
+        if (_ambientBusy) return;
+        _ambientBusy = true;
+        var file = Path.Combine(Path.GetTempPath(), $"pylon-ambient-{_ambientSlot ^= 1}.png");
+        var mp = _mp;
+        var frame = await Task.Run(() =>
+        {
+            try
+            {
+                File.Delete(file);
+                if (!mp.TakeSnapshot(0, file, 160, 0)) return null;
+                for (var i = 0; i < 40 && !File.Exists(file); i++) Thread.Sleep(25);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.StreamSource = new MemoryStream(File.ReadAllBytes(file));
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch (Exception e) when (e is IOException or NotSupportedException or ObjectDisposedException or UnauthorizedAccessException) { return null; }
+        });
+        _ambientBusy = false;
+        if (frame != null && AmbientOn) Ambient.SetImage(frame);
     }
 
     void ToggleSidebar(LibraryPanel.Section? section = null)
@@ -1009,7 +1181,7 @@ public partial class MainWindow : Window
     void UpdateCornerMask()
     {
         var r = new Rect(0, 0, Overlay.ActualWidth, Overlay.ActualHeight);
-        CornerMask.Data = _fullscreen || _mini || r.IsEmpty || _radius == 0
+        CornerMask.Data = _fullscreen || _mini || r.IsEmpty || _radius == 0 || AmbientOn // the mask is a solid color; over the blur it would show as dark corners
             ? null
             : new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(r), new RectangleGeometry(r, _radius, _radius));
     }
@@ -1106,6 +1278,12 @@ public partial class MainWindow : Window
     /// <summary>Without the top bar, the stage and the mini controls move the window.</summary>
     void DragArea_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ClickCount == 2 && Video.IsVisible && !_mini && e.ChangedButton == MouseButton.Left && Settings.Str("controls.dblclick") == "Toggle fullscreen")
+        {
+            ToggleFullscreen(); // double click on the blurred area around the video
+            e.Handled = true;
+            return;
+        }
         if (!(_mini || _minimal) || _fullscreen || e.ChangedButton != MouseButton.Left) return;
         if (e.OriginalSource is DependencyObject d && FindAncestor<ButtonBase>(d) != null) return;
         if (e.OriginalSource is DependencyObject d2 && FindAncestor<SeekBar>(d2) != null) return;
@@ -1163,7 +1341,8 @@ public partial class MainWindow : Window
 
     void MusicLayout_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var size = Math.Max(80, Math.Min(738, Math.Min(MusicLayout.ActualWidth, MusicLayout.ActualHeight - (_mini ? 0 : 70))));
+        var width = LyricsPane.Visibility == Visibility.Visible ? MusicLayout.ActualWidth * 0.4 : MusicLayout.ActualWidth; // cover column next to the lyrics
+        var size = Math.Max(80, Math.Min(738, Math.Min(width, MusicLayout.ActualHeight - (_mini ? 0 : 70))));
         ArtFrame.Width = ArtFrame.Height = size;
         ArtClip.Rect = new Rect(0, 0, size, size);
     }
@@ -1175,13 +1354,14 @@ public partial class MainWindow : Window
         ("stop", "Stop", false), ("skip15", "Skip back / forward", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
         ("frame", "Next frame", false), ("speed", "Playback speed", false), ("snapshot", "Snapshot", false), ("record", "Record", false),
         ("abloop", "A-B loop", false), ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
-        ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
+        ("lyrics", "Lyrics", true), ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
     ];
 
     static MainWindow()
     {
         foreach (var (id, label, def) in ControlButtons)
             Settings.Register(new Opt { Kind = OptKind.Toggle, Key = "ui.btn." + id, Label = label, Default = def ? "true" : "false" });
+        Settings.Register(new Opt { Kind = OptKind.Toggle, Key = "ui.lyrics", Label = "Lyrics", Default = "false" }); // lyrics panel open
     }
 
     static bool ButtonOn(string id) => Settings.Bool("ui.btn." + id);
@@ -1203,6 +1383,7 @@ public partial class MainWindow : Window
         RecordBtn.Visibility = V(ButtonOn("record"));
         LoopBtn.Visibility = V(ButtonOn("loop"));
         AbBtn.Visibility = V(ButtonOn("abloop") && _index >= 0);
+        LyricsBtn.Visibility = V(ButtonOn("lyrics") && _index >= 0 && _isAudio);
         ShuffleBtn.Visibility = V(ButtonOn("shuffle"));
         MuteBtn.Visibility = Volume.Visibility = V(ButtonOn("volume"));
         AudioBtn.Visibility = V(ButtonOn("audio"));
@@ -1289,7 +1470,6 @@ public partial class MainWindow : Window
         PlayList([$"{scheme}:///{drive}/"], 0);
     }
 
-    public void OpenCapture() => PlayList(["dshow://"], 0);
 
     // ───────────────────────── input ─────────────────────────
 
@@ -1314,6 +1494,7 @@ public partial class MainWindow : Window
     void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
     {
         Activate(); // the overlay is a separate window; keep keyboard focus on the player
+        if (_is360 && e.ClickCount == 1) BeginLook(e.GetPosition(Overlay));
         if (e.ClickCount == 2)
         {
             _clickTimer.Stop();
@@ -1335,6 +1516,7 @@ public partial class MainWindow : Window
 
     void Overlay_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_looking) { Look(e.GetPosition(Overlay)); return; }
         if (!_fullscreen) return;
         // sensitivity: ignore jitter of a few pixels on Low
         var p = e.GetPosition(Overlay);
@@ -1344,7 +1526,64 @@ public partial class MainWindow : Window
         ShowControls();
     }
 
-    void Overlay_MouseWheel(object sender, MouseWheelEventArgs e) => Wheel(e.Delta, horizontal: false);
+    void Overlay_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_is360) { _view.Zoom(-e.Delta / 120.0 * 6); return; } // wheel = field of view in 360° video
+        Wheel(e.Delta, horizontal: false);
+    }
+
+    void Overlay_MouseUp(object sender, MouseButtonEventArgs e) => EndLook();
+
+    // ───────── 360° video: drag to look around, the view keeps gliding after a flick ─────────
+
+    bool _is360, _looking;
+    readonly ViewAngles _view = new();
+    Point _lookLast;
+    double _lookVx, _lookVy;
+    long _lookStamp;
+
+    void Detect360()
+    {
+        var was = _is360;
+        _is360 = _mp.Media?.Tracks.Any(t => t.TrackType == TrackType.Video && t.Data.Video.Projection != VideoProjection.Rectangular) == true;
+        if (!_is360 || was) return;
+        _view.Attach(_mp);
+        Osd(L.T("360° video: drag to look around, scroll to zoom"), 4);
+    }
+
+    void BeginLook(Point p)
+    {
+        _looking = true;
+        _lookLast = p;
+        _lookVx = _lookVy = 0;
+        _lookStamp = Stopwatch.GetTimestamp();
+        _view.Hold();
+        Overlay.CaptureMouse();
+    }
+
+    void Look(Point p)
+    {
+        var dx = p.X - _lookLast.X;
+        var dy = p.Y - _lookLast.Y;
+        if (Math.Abs(dx) + Math.Abs(dy) > 3) _clickTimer.Stop(); // a drag, not a click: don't pause
+        var degPerPx = _view.Fov / Math.Max(1, Overlay.ActualWidth); // the picture stays under the pointer
+        _view.Move(-dx * degPerPx, -dy * degPerPx);
+        var now = Stopwatch.GetTimestamp();
+        var dt = Math.Max(1e-3, (now - _lookStamp) / (double)Stopwatch.Frequency);
+        _lookVx = 0.6 * _lookVx + 0.4 * (-dx * degPerPx / dt); // smoothed velocity in degrees/s
+        _lookVy = 0.6 * _lookVy + 0.4 * (-dy * degPerPx / dt);
+        _lookStamp = now;
+        _lookLast = p;
+    }
+
+    void EndLook()
+    {
+        if (!_looking) return;
+        _looking = false;
+        Overlay.ReleaseMouseCapture();
+        if ((Stopwatch.GetTimestamp() - _lookStamp) / (double)Stopwatch.Frequency > 0.08) return; // held still before letting go
+        _view.Fling(Math.Clamp(_lookVx, -720, 720), Math.Clamp(_lookVy, -720, 720)); // a wild flick spins a little, not for whole turns
+    }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
@@ -1420,7 +1659,8 @@ public partial class MainWindow : Window
     {
         if (_index < 0 || _mp.Length <= 0) return;
         var pos = Math.Clamp((x - 2) / Math.Max(1, Seek.ActualWidth - 4), 0, 1); // same mapping as a click
-        PreviewTime.Text = Fmt((long)(pos * _mp.Length));
+        var at = (long)(pos * _mp.Length);
+        PreviewTime.Text = _chapters.LastOrDefault(c => c.Time <= at) is { Name: { Length: > 0 } chapter } ? $"{Fmt(at)}  ·  {chapter}" : Fmt(at);
         PreviewFrame.Visibility = _preview.HasMedia ? Visibility.Visible : Visibility.Collapsed;
         if (_preview.HasMedia) _preview.Request(pos);
         if (!SeekPreview.IsOpen)
@@ -1468,7 +1708,6 @@ public partial class MainWindow : Window
         Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
         Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream),
         DiscMenu(),
-        Item("Open Capture Device", "webcam-duotone", KeyOf("opencapture"), OpenCapture),
         Item("Convert", "arrows-left-right-duotone", "Ctrl + R", () => { }, enabled: false, tip: "Not available in this player yet"),
         Sub("Open Recent", "clock-counter-clockwise-duotone",
             Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(Library.TitleOf(h.Key), null, null, () => PlayList([h.Key], 0)))),
@@ -1484,6 +1723,29 @@ public partial class MainWindow : Window
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
+
+    // ───────── Windows media session (volume flyout, lock screen, media keys) ─────────
+
+    MediaSession? _session;
+
+    void StartMediaSession()
+    {
+        if (SnapMode) return;
+        try { _session = new MediaSession(new WindowInteropHelper(this).Handle); }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or TypeLoadException or PlatformNotSupportedException) { return; }
+        _session.Command += c => Dispatcher.BeginInvoke(() =>
+        {
+            switch (c)
+            {
+                case "Play": if (!_mp.IsPlaying) TogglePlay(); break;
+                case "Pause": if (_mp.IsPlaying) TogglePlay(); break;
+                case "Next": Next(); break;
+                case "Previous": Previous(); break;
+                case "Stop": Stop(); break;
+            }
+        });
+        _session.Seek += p => Dispatcher.BeginInvoke(() => { if (_mp.IsSeekable) _mp.Time = (long)p.TotalMilliseconds; });
+    }
 
     // ───────── taskbar thumbnail toolbar (open / previous / play / next under the window preview) ─────────
 
@@ -1513,6 +1775,81 @@ public partial class MainWindow : Window
         _thumbPlaying = _mp.IsPlaying;
         _thumbPlay.ImageSource = ThumbIcon(_mp.IsPlaying ? "pause-fill" : "play-fill");
         _thumbPlay.Description = L.T(_mp.IsPlaying ? "Pause" : "Play");
+    }
+
+    // ───────── chapters & bookmarks ─────────
+
+    (long Time, string Name)[] _chapters = [];
+
+    void LoadChapters()
+    {
+        _chapters = [.. _mp.FullChapterDescriptions(-1).Select((c, i) => (c.TimeOffset, string.IsNullOrWhiteSpace(c.Name) ? L.F("Chapter {0}", i + 1) : c.Name!))];
+        UpdateMarks();
+    }
+
+    List<Bookmark> CurrentBookmarks => CurrentPath is { } p && Library.Data.Bookmarks.TryGetValue(p, out var list) ? list : [];
+
+    void UpdateMarks()
+    {
+        var len = _mp.Length;
+        double[] At(IEnumerable<long> times) => len > 0 ? [.. times.Where(t => t > 0 && t < len).Select(t => (double)t / len)] : [];
+        var chapters = At(_chapters.Select(c => c.Time));
+        var bookmarks = At(CurrentBookmarks.Select(b => b.Time));
+        Seek.SetMarks(chapters, bookmarks);
+        MiniSeek.SetMarks(chapters, bookmarks);
+    }
+
+    public void JumpChapter(int dir)
+    {
+        if (_chapters.Length < 2) return;
+        var now = _mp.Time;
+        // "previous" restarts the current chapter first, like Previous does for tracks
+        var target = dir > 0 ? _chapters.FirstOrDefault(c => c.Time > now + 500)
+                             : _chapters.LastOrDefault(c => c.Time < now - 3000);
+        if (target.Name == null) return;
+        _mp.Time = target.Time;
+        Osd(target.Name);
+    }
+
+    public void AddBookmark()
+    {
+        if (CurrentPath is not { } path || !_mp.IsSeekable) return;
+        if (!Library.Data.Bookmarks.TryGetValue(path, out var list)) Library.Data.Bookmarks[path] = list = [];
+        var t = _mp.Time;
+        list.Add(new Bookmark { Time = t, Name = L.F("Bookmark {0}", Fmt(t)) });
+        list.Sort((a, b) => a.Time.CompareTo(b.Time));
+        Library.Touch();
+        UpdateMarks();
+        Osd(L.F("Bookmark added at {0}", Fmt(t)));
+    }
+
+    MenuItem ChaptersMenu()
+    {
+        var now = _mp.Time;
+        var current = _chapters.LastOrDefault(c => c.Time <= now);
+        var item = Sub("Chapters", null, _chapters.Select(c => (object)Item($"{Fmt(c.Time)}   {c.Name}", null, null, () => { _mp.Time = c.Time; Osd(c.Name); }, check: c == current)));
+        item.IsEnabled = _chapters.Length > 0;
+        return item;
+    }
+
+    MenuItem BookmarksMenu()
+    {
+        var items = new List<object> { Item("Add Bookmark", null, KeyOf("bookmark"), AddBookmark, enabled: _index >= 0) };
+        var list = CurrentBookmarks;
+        if (list.Count > 0) items.Add(new Separator());
+        foreach (var b in list.ToList())
+            items.Add(Sub($"{Fmt(b.Time)}   {b.Name}", null,
+            [
+                Item("Go to Bookmark", null, null, () => _mp.Time = b.Time),
+                Item("Rename", null, null, () =>
+                {
+                    if (DialogWindow.AskName(this, "Rename Bookmark", "Name", "", "Bookmark name", b.Name) is not { } n) return;
+                    b.Name = n;
+                    Library.Touch();
+                }),
+                Item("Delete", null, null, () => { list.Remove(b); Library.Touch(); UpdateMarks(); }),
+            ]));
+        return Sub("Bookmarks", null, items);
     }
 
     // ───────── sleep timer ─────────
@@ -1649,6 +1986,8 @@ public partial class MainWindow : Window
                 Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
                 Item("Next Frame", null, KeyOf("frame"), NextFrame),
                 Item("A-B Loop", null, KeyOf("abloop"), ToggleAbLoop, check: _loopA >= 0, enabled: _index >= 0),
+                ChaptersMenu(),
+                BookmarksMenu(),
                 SleepMenu(null),
             ]),
             Sub("Video", "monitor", [
@@ -1656,6 +1995,7 @@ public partial class MainWindow : Window
                 Item("Take Snapshot", null, KeyOf("snapshot"), Snapshot, enabled: _index >= 0 && !_isAudio),
                 Sub("Aspect Ratio", null, Settings.Find("video.aspect")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.aspect", o), check: Settings.Str("video.aspect") == o))),
                 Sub("Crop", null, Settings.Find("video.crop")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.crop", o), check: Settings.Str("video.crop") == o))),
+                Item("Reset 360° View", null, null, () => _view.Reset(), enabled: _is360),
                 Sub("Deinterlace", null, new[] { "Automatic", "On", "Off" }.Select(o => (object)Item(o, null, null, () => Settings.Set("video.deint", o), check: Settings.Str("video.deint") == o))),
             ]),
             Sub("Audio", "speaker-high", AudioMenuItems()),
@@ -1826,6 +2166,23 @@ public partial class MainWindow : Window
                         .SelectMany(c => Vlc.MediaDiscoverers(c).Select(d => $"{c}: {d.Name} | {d.LongName}"))
                         .Concat(Vlc.RendererList.Select(r => $"Renderer: {r.Name} | {r.LongName}")));
                     break;
+                case "look": // 360°: a flick at 130°/s should glide on for about 65° and settle without overshoot
+                    _is360 = true;
+                    _view.Attach(_mp);
+                    _view.Fling(130, 0);
+                    var samples = new List<string>();
+                    for (var k = 0; k < 6; k++) { await Task.Delay(200); samples.Add($"{_view.Yaw:0.0}"); }
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"yaw {string.Join(" ", samples)}{Environment.NewLine}");
+                    break;
+                case "seekprobe": // thumb position every ~16 ms: must never go back, steps should be even
+                    {
+                        var vals = new List<double>();
+                        for (var k = 0; k < 90; k++) { await Task.Delay(16); SmoothSeek(null, EventArgs.Empty); vals.Add(Seek.Value * _mp.Length); } // frames by hand: the off-screen test window gets few real ones
+                        var steps = vals.Zip(vals.Skip(1), (x, y) => y - x).ToList();
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"),
+                            $"backwards={steps.Count(d => d < -0.5)} zeroSteps={steps.Count(d => Math.Abs(d) < 0.5)} min={steps.Min():0.0}ms max={steps.Max():0.0}ms avg={steps.Average():0.0}ms{Environment.NewLine}");
+                        break;
+                    }
                 case "wait": await Task.Delay(TimeSpan.FromSeconds(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture))); break;
                 case "hotkeys" or "onboarding" or "about" or "dialog":
                     _ = Dispatcher.BeginInvoke(async () =>
@@ -1886,5 +2243,7 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hwnd, int index, int value);
     [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint flags);
 }

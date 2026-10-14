@@ -58,7 +58,7 @@
             <local:LibraryPanel x:Name="Sidebar" Visibility="Collapsed"/>
             <local:EffectsPanel x:Name="FxPanel" Grid.Column="2" Visibility="Collapsed"/>
 
-            <Grid x:Name="Stage" Grid.Column="1" Margin="10,1,10,0" MouseRightButtonUp="Stage_RightClick" MouseLeftButtonDown="DragArea_MouseDown">
+            <Grid x:Name="Stage" Grid.Column="1" Margin="10,1,10,0" MouseRightButtonUp="Stage_RightClick" MouseLeftButtonDown="DragArea_MouseDown" SizeChanged="Stage_SizeChanged">
                 <!-- Idle / drop target -->
                 <Border x:Name="IdleView" CornerRadius="10" Background="{DynamicResource BgB1}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
@@ -71,11 +71,13 @@
                 <!-- Music: blurred artwork backdrop + cover + caption -->
                 <Grid x:Name="MusicView" Visibility="Collapsed" ClipToBounds="True">
                     <Rectangle Fill="{DynamicResource StageBg}"/>
-                    <Image x:Name="ArtBackdrop" Stretch="UniformToFill" Opacity="0.28" Margin="-120" CacheMode="BitmapCache">
-                        <Image.Effect><BlurEffect Radius="90" KernelType="Gaussian" RenderingBias="Performance"/></Image.Effect>
-                    </Image>
+                    <local:Backdrop x:Name="ArtBackdrop" Opacity="0.32"/>
                     <local:Spectrum x:Name="MusicSpectrum" Height="64" VerticalAlignment="Bottom" Margin="40,0,40,14" Opacity="0.5"/>
                     <Grid x:Name="MusicLayout" Margin="40,72,40,24" SizeChanged="MusicLayout_SizeChanged">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition x:Name="LyricsColumn" Width="0"/>
+                        </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
@@ -91,6 +93,7 @@
                         </Border>
                         <TextBlock x:Name="MusicCaption" Grid.Row="1" FontSize="24" FontWeight="Medium" Foreground="{DynamicResource FgA1}"
                                    HorizontalAlignment="Center" Margin="0,40,0,0" TextTrimming="CharacterEllipsis"/>
+                        <local:LyricsView x:Name="LyricsPane" Grid.Column="1" Grid.RowSpan="2" Margin="40,-48,0,0" Visibility="Collapsed"/>
                     </Grid>
                 </Grid>
 
@@ -100,10 +103,16 @@
                     <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
                 </Border>
 
+                <!-- Around the video: its own frames, blurred (sized to the picture, the video sits on top) -->
+                <Grid x:Name="VideoBackdrop" Visibility="Collapsed">
+                    <Rectangle Fill="{DynamicResource StageBg}"/>
+                    <local:Backdrop x:Name="Ambient" Opacity="0.6"/>
+                </Grid>
+
                 <!-- Video (native HWND). Content renders in an overlay window on top of the video. -->
-                <vlc:VideoView x:Name="Video" Visibility="Collapsed" Background="Black">
+                <vlc:VideoView x:Name="Video" Visibility="Collapsed" Background="Black" SizeChanged="Video_SizeChanged">
                     <Grid x:Name="Overlay" Background="#01000000"
-                          MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseWheel="Overlay_MouseWheel" MouseRightButtonUp="Stage_RightClick">
+                          MouseLeftButtonDown="Overlay_MouseDown" MouseLeftButtonUp="Overlay_MouseUp" MouseMove="Overlay_MouseMove" MouseWheel="Overlay_MouseWheel" MouseRightButtonUp="Stage_RightClick">
                         <local:Spectrum x:Name="VideoSpectrum" Height="90" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.45"/>
                         <Path x:Name="CornerMask" Fill="{DynamicResource BgA3}" IsHitTestVisible="False"/>
                         <Border x:Name="OsdBorder" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6"
@@ -177,6 +186,7 @@
                     <ToggleButton x:Name="ShuffleBtn" Style="{StaticResource IconButton}" Tag="shuffle" Width="30" Margin="0,0,12,0" Click="Shuffle_Click" ToolTip="{local:T 'Shuffle'}" Visibility="Collapsed"/>
                     <Button x:Name="MuteBtn" Style="{StaticResource IconButton}" Tag="speaker-high" Padding="0" Click="Mute_Click" ToolTip="{local:T 'Mute (M)'}"/>
                     <local:VolumeBar x:Name="Volume" Margin="8,0,0,0"/>
+                    <ToggleButton x:Name="LyricsBtn" Style="{StaticResource IconButton}" Tag="microphone-stage" Width="30" Margin="20,0,0,0" Click="Lyrics_Click" ToolTip="{local:T 'Lyrics'}" Visibility="Collapsed"/>
                     <Button x:Name="AudioBtn" Style="{StaticResource IconButton}" Tag="waveform" Width="30" Margin="20,0,0,0" Click="Audio_Click" ToolTip="{local:T 'Audio'}"/>
                     <Button x:Name="SubsBtn" Style="{StaticResource IconButton}" Tag="subtitles" Width="30" Margin="12,0,0,0" Click="Subs_Click" ToolTip="{local:T 'Subtitles'}"/>
                     <Button x:Name="PSettingsBtn" Style="{StaticResource IconButton}" Tag="sliders-horizontal" Width="30" Margin="12,0,0,0" Click="PSettings_Click" ToolTip="{local:T 'Playback'}"/>

@@ -121,6 +121,16 @@ public class SeekBar : FrameworkElement
         InvalidateVisual();
     }
 
+    double[] _chapters = [], _bookmarks = [];
+
+    /// <summary>Chapter starts and bookmarks as positions 0..1.</summary>
+    public void SetMarks(double[] chapters, double[] bookmarks)
+    {
+        _chapters = chapters;
+        _bookmarks = bookmarks;
+        InvalidateVisual();
+    }
+
     double _hover = -1;
 
     public SeekBar()
@@ -157,6 +167,9 @@ public class SeekBar : FrameworkElement
             var x = 2 + v * (w - 12);
             if (_hover >= 0) dc.DrawRoundedRectangle(Hint, null, new Rect(2, 2, Math.Max(0, _hover - 2), h - 4), 4, 4);
             dc.DrawRoundedRectangle(Fill, null, new Rect(2, 2, x + 6, h - 4), 4, 4);
+            var gap = B("BgA3"); // window color: reads as a gap on both the played and the unplayed part
+            foreach (var c in _chapters) dc.DrawRectangle(gap, null, new Rect(2 + c * (w - 4) - 1.5, 0, 3, h)); // chapters split the bar into segments
+            DrawBookmarks(dc, w, Thumb);
             dc.DrawRoundedRectangle(Thumb, null, new Rect(x, 2, 8, h - 4), 4, 4);
             return;
         }
@@ -168,7 +181,15 @@ public class SeekBar : FrameworkElement
             var brush = bx + 2 < tx ? Played : (_hover >= 0 && bx < _hover ? FgHover : Unplayed);
             dc.DrawRoundedRectangle(brush, null, new Rect(bx, (h - bh) / 2, 2, bh), 1, 1);
         }
+        foreach (var c in _chapters) dc.DrawRectangle(FgHover, null, new Rect(2 + c * (w - 4) - 0.5, 3, 1, h - 6));
+        DrawBookmarks(dc, w, Thumb);
         dc.DrawRoundedRectangle(Thumb, null, new Rect(tx, 2, 4, h - 4), 2, 2);
+    }
+
+    void DrawBookmarks(DrawingContext dc, double w, Brush brush)
+    {
+        foreach (var b in _bookmarks) // small accent drop hanging from the top edge
+            dc.DrawRoundedRectangle(brush, null, new Rect(2 + b * (w - 4) - 3, 0, 6, 7), 3, 3);
     }
 
     double PosAt(MouseEventArgs e) => Math.Clamp((e.GetPosition(this).X - 2) / Math.Max(1, ActualWidth - 4), 0, 1);

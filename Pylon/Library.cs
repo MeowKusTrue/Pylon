@@ -56,6 +56,13 @@ public class LibraryData
     public Dictionary<string, HistoryEntry> History { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, TrackMeta> Meta { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> Subtitles { get; set; } = new(StringComparer.OrdinalIgnoreCase); // video -> extra subtitle files
+    public Dictionary<string, List<Bookmark>> Bookmarks { get; set; } = new(StringComparer.OrdinalIgnoreCase); // media -> marked moments
+}
+
+public class Bookmark
+{
+    public long Time { get; set; }
+    public string Name { get; set; } = "";
 }
 
 public static class Library
