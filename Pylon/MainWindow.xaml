@@ -71,15 +71,16 @@
                 <!-- Music: blurred artwork backdrop + cover + caption -->
                 <Grid x:Name="MusicView" Visibility="Collapsed" ClipToBounds="True">
                     <Rectangle Fill="{DynamicResource StageBg}"/>
-                    <Image x:Name="ArtBackdrop" Stretch="UniformToFill" Opacity="0.28" Margin="-120">
+                    <Image x:Name="ArtBackdrop" Stretch="UniformToFill" Opacity="0.28" Margin="-120" CacheMode="BitmapCache">
                         <Image.Effect><BlurEffect Radius="90" KernelType="Gaussian" RenderingBias="Performance"/></Image.Effect>
                     </Image>
+                    <local:Spectrum x:Name="MusicSpectrum" Height="140" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.35"/>
                     <Grid x:Name="MusicLayout" Margin="40,72,40,24" SizeChanged="MusicLayout_SizeChanged">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <Border x:Name="ArtFrame" CornerRadius="12" Background="{DynamicResource BgB1}" HorizontalAlignment="Center" VerticalAlignment="Center" Width="400" Height="400">
+                        <Border x:Name="ArtFrame" CornerRadius="12" Background="{DynamicResource BgB1}" HorizontalAlignment="Center" VerticalAlignment="Center" Width="400" Height="400" CacheMode="BitmapCache">
                             <Border.Effect><DropShadowEffect BlurRadius="60" ShadowDepth="0" Opacity="0.6"/></Border.Effect>
                             <Grid>
                                 <local:Icon x:Name="ArtPlaceholder" Glyph="music-note" Width="96" Height="96" Tint="@FgA4"/>
@@ -97,6 +98,7 @@
                 <vlc:VideoView x:Name="Video" Visibility="Collapsed" Background="Black">
                     <Grid x:Name="Overlay" Background="#01000000"
                           MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseWheel="Overlay_MouseWheel" MouseRightButtonUp="Stage_RightClick">
+                        <local:Spectrum x:Name="VideoSpectrum" Height="90" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.45"/>
                         <Path x:Name="CornerMask" Fill="{DynamicResource BgA3}" IsHitTestVisible="False"/>
                         <Border x:Name="OsdBorder" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6"
                                 CornerRadius="6" Background="{DynamicResource MenuBg}" Opacity="0" IsHitTestVisible="False">
@@ -123,13 +125,13 @@
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="PrevBtn" Style="{StaticResource IconButton}" Tag="skip-back-fill" Padding="3,2" Click="Prev_Click" ToolTip="{local:T 'Previous (P)'}"/>
                     <Button x:Name="StopBtn" Style="{StaticResource IconButton}" Tag="stop-fill" Padding="3,2" Margin="8,0,0,0" Click="Stop_Click" ToolTip="{local:T 'Stop (S)'}" Visibility="Collapsed"/>
-                    <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" ToolTip="{local:T 'Back 15 s'}" Visibility="Collapsed">
+                    <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="3,2">
                                     <Grid Width="24" Height="24">
                                         <local:Icon Glyph="arrow-counter-clockwise"/>
-                                        <TextBlock Text="15" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource FgA2}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0"/>
+                                        <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource FgA2}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0"/>
                                     </Grid>
                                 </Border>
                                 <ControlTemplate.Triggers>
@@ -139,13 +141,13 @@
                         </Button.Template>
                     </Button>
                     <ToggleButton x:Name="PlayBtn" Style="{StaticResource PlayButton}" Margin="8,0" Click="Play_Click"/>
-                    <Button x:Name="Fwd15" Style="{StaticResource IconButton}" Margin="0,0,8,0" Click="Fwd15_Click" ToolTip="{local:T 'Forward 15 s'}" Visibility="Collapsed">
+                    <Button x:Name="Fwd15" Style="{StaticResource IconButton}" Margin="0,0,8,0" Click="Fwd15_Click" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="3,2">
                                     <Grid Width="24" Height="24">
                                         <local:Icon Glyph="arrow-clockwise"/>
-                                        <TextBlock Text="15" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource FgA2}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0"/>
+                                        <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" FontSize="8" FontWeight="SemiBold" Foreground="{DynamicResource FgA2}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0"/>
                                     </Grid>
                                 </Border>
                                 <ControlTemplate.Triggers>

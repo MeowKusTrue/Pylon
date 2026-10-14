@@ -19,7 +19,8 @@ Pylon brings the community **"VLC Redesign"** Figma concept to life as a real pl
 - **Network:** network streams, devices on your local network (UPnP / mDNS), podcasts (RSS), and internet radio from radio-browser.info.
 - **Settings:** 13 categories and about 150 options. They apply instantly; when libVLC must restart, playback resumes where it was.
 - **Effects:** a 10-band equalizer with presets, compressor, spatializer, stereo widener, pitch shift, and karaoke. For video: color, crop and rotate.
-- **Themes:** dark, light, or follow Windows, plus 9 accent colors.
+- **Themes:** dark, light, follow Windows, OLED black, Midnight, Nord and Sepia, plus 9 accent colors and adjustable corner rounding (including the window corners on Windows 11).
+- **Audio spectrum:** live bars under the cover art, optionally over video too. Only Pylon's own sound is captured (WASAPI process loopback, Windows 10 2004+).
 - **Languages:** English and Russian (Settings → General → Interface language).
 - **Updates:** checks GitHub Releases once a day and updates itself in place.
 - **Controls:** keyboard shortcuts you can rebind (also system-wide), mouse-wheel and click actions, and a control bar you choose the buttons for.

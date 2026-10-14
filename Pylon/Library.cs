@@ -118,7 +118,15 @@ public static class Library
     }
 
     /// <summary>Sub-folders that contain media somewhere below them.</summary>
-    public static IEnumerable<string> MediaFolders(string dir)
+    static readonly ConcurrentDictionary<string, List<string>> FolderCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Drops the remembered subfolder scans (folder page "Refresh").</summary>
+    public static void ForgetFolders() => FolderCache.Clear();
+
+    /// <summary>Subfolders that contain media somewhere below. Recursive, so the result is cached per folder.</summary>
+    public static IEnumerable<string> MediaFolders(string dir) => FolderCache.GetOrAdd(dir, ScanFolders);
+
+    static List<string> ScanFolders(string dir)
     {
         try
         {

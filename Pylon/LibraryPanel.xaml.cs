@@ -258,7 +258,7 @@ public partial class LibraryPanel : UserControl
                 .. Library.MediaFolders(dir).Select(d => FolderRow(d, root, section)),
                 .. files.Select((f, i) => MediaRow(f, files, i)),
             ];
-        }, Folder: dir, More: () => [Item("Play All", "play", () => PlayFolder(dir)), Item("Refresh", "arrow-clockwise", Render)]);
+        }, Folder: dir, More: () => [Item("Play All", "play", () => PlayFolder(dir)), Item("Refresh", "arrow-clockwise", () => { Library.ForgetFolders(); Render(); })]);
     }
 
     Page Network() => new(Section.Network, Crumbs1("Network"), () =>

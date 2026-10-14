@@ -9,8 +9,12 @@ if (-not $Version) { $Version = ([xml](Get-Content Pylon\Pylon.csproj)).Project.
 $out = 'dist\Pylon'
 Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
 
-dotnet publish Pylon\Pylon.csproj -c Release -o $out -p:Version=$Version -p:DebugType=none
+dotnet publish Pylon\Pylon.csproj -c Release -o $out -p:Version=$Version -p:DebugType=none -p:PublishReadyToRun=true
 if ($LASTEXITCODE) { throw 'dotnet publish failed' }
+
+# libVLC's plugin cache (plugins.dat): without it every start scans ~300 plugin DLLs
+Start-Process "$out\Pylon.exe" -ArgumentList '--build-plugin-cache' -Wait
+if (-not (Test-Path "$out\libvlc\win-x64\plugins\plugins.dat")) { throw 'plugin cache was not generated' }
 
 Compress-Archive -Path "$out\*" -DestinationPath "dist\Pylon-$Version-win-x64-portable.zip"
 

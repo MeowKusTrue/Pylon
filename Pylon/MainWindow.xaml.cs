@@ -52,6 +52,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        Perf.Mark("ctor");
         InitializeComponent();
 #if DEBUG
         if (SnapMode)
@@ -63,11 +64,24 @@ public partial class MainWindow : Window
             Top = 0;
         }
 #endif
+        Perf.Mark("window created");
+        if (Perf.Enabled)
+        {
+            // profiling run: off-screen, no focus, closes itself after the first frame
+            ShowActivated = false;
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = -20000;
+            ContentRendered += async (_, _) => { await Task.Delay(1500); Perf.Mark("idle +1.5 s"); Close(); };
+        }
         Settings.Load();
         Library.Load();
+        Perf.Mark("settings + library loaded");
         ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent"));
         Core.Initialize();
+        Perf.Mark("theme applied");
+        SourceInitialized += (_, _) => ApplyCorners();
         CreateEngine(resume: false);
+        Perf.Mark("libVLC created");
         _preview = new SeekPreviewer(Dispatcher);
         PreviewImage.Source = _preview.Bitmap;
 
@@ -84,7 +98,8 @@ public partial class MainWindow : Window
         Settings.CheckUpdates = w => CheckForUpdates(manual: true, w);
         Settings.Changed += OnSettingChanged;
 
-        Volume.Value = Settings.Num("audio.startvol") / MaxVolume;
+        var startVol = Settings.Bool("audio.remember") && Settings.Str("app.volume") != "" ? Settings.Num("app.volume") : Settings.Num("audio.startvol");
+        Volume.Value = Math.Min(1, startVol / MaxVolume);
         ApplyVolume();
         Volume.Changed += _ =>
         {
@@ -108,8 +123,10 @@ public partial class MainWindow : Window
             RestoreSavedBounds();
             HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WndProc);
         };
+        ContentRendered += (_, _) => Perf.Mark("first frame");
         Loaded += (_, _) =>
         {
+            Perf.Mark("loaded");
             Video.MediaPlayer = _mp;
             Topmost = Settings.Bool("ui.ontop");
             Library.IndexMusic(Dispatcher);
@@ -147,6 +164,7 @@ public partial class MainWindow : Window
             Sidebar.Shutdown();
             SaveProgress();
             Library.Save();
+            Settings.Set("app.volume", Math.Round(Volume.Value * MaxVolume));
             Settings.Save();
         };
         Closed += (_, _) =>
@@ -170,7 +188,7 @@ public partial class MainWindow : Window
     {
         var args = Settings.EngineArgs();
         if (_rescan) { args.Add("--reset-plugins-cache"); _rescan = false; }
-        if (SnapMode) args.Add("--aout=dummy"); // silent UI test runs
+        if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) args.Add("--aout=dummy"); // silent UI test runs
         var oldMp = _mp;
         var oldVlc = Vlc;
         var time = oldMp?.Time ?? 0;
@@ -487,6 +505,10 @@ public partial class MainWindow : Window
             MiniTime.Text = len > 0 ? $"{Fmt(t)} / {Fmt(len)}" : Fmt(t);
         }
         PlayBtn.IsChecked = MiniPlay.IsChecked = _mp.IsPlaying;
+        var spectrum = Settings.Str("ui.spectrum");
+        AudioTap.Volume = _mp.Volume / 100.0;
+        MusicSpectrum.Active = _mp.IsPlaying && spectrum != "Off";
+        VideoSpectrum.Active = _mp.IsPlaying && spectrum == "Music and video";
         SpeedText.Text = $"{_mp.Rate:0.##}×";
         if (++_ticks % 25 == 0 && _mp.IsPlaying) SaveProgress(); // every ~5 s
     }
@@ -764,13 +786,14 @@ public partial class MainWindow : Window
             case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;
             case "general.language": AskRestart(); break;
             case "general.theme" or "general.accent": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); break;
+            case "ui.corners": ApplyCorners(); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? Title.Replace(" - Pylon", "") : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
-            case "playback.repeat": UpdateControlButtons(); break;
+            case "playback.repeat" or "controls.skipbtn": UpdateControlButtons(); break;
             case "playback.thumbs": _preview.Open(Settings.Bool(key) && !_isAudio && CurrentPath is { } p && !p.Contains("://") ? p : null); break;
             case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(); break;
             case "audio.eq": ApplyEqualizer(); break;
@@ -944,12 +967,28 @@ public partial class MainWindow : Window
         ApplyLayout();
     }
 
+    double _radius = 10;
+
+    /// <summary>"Corner rounding": the stage, cover art and (Windows 11) the window itself.</summary>
+    void ApplyCorners()
+    {
+        _radius = Settings.Str("ui.corners") switch { "Off" => 0, "Slight" => 6, "Strong" => 16, _ => 10 };
+        IdleView.CornerRadius = new CornerRadius(_radius);
+        ArtFrame.CornerRadius = new CornerRadius(_radius + 2);
+        ArtClip.RadiusX = ArtClip.RadiusY = _radius + 2;
+        UpdateCornerMask();
+        int pref = _radius == 0 ? 1 : _radius <= 6 ? 3 : 2; // DWMWCP_DONOTROUND / ROUNDSMALL / ROUND
+        DwmSetWindowAttribute(new WindowInteropHelper(this).Handle, 33, ref pref, sizeof(int)); // DWMWA_WINDOW_CORNER_PREFERENCE, no-op before Windows 11
+    }
+
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
     void UpdateCornerMask()
     {
         var r = new Rect(0, 0, Overlay.ActualWidth, Overlay.ActualHeight);
-        CornerMask.Data = _fullscreen || _mini || r.IsEmpty
+        CornerMask.Data = _fullscreen || _mini || r.IsEmpty || _radius == 0
             ? null
-            : new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(r), new RectangleGeometry(r, 10, 10));
+            : new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(r), new RectangleGeometry(r, _radius, _radius));
     }
 
     void ShowControls()
@@ -1110,7 +1149,7 @@ public partial class MainWindow : Window
 
     static readonly (string Id, string Label, bool Default)[] ControlButtons =
     [
-        ("stop", "Stop", false), ("skip15", "Skip ±15 s (music)", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
+        ("stop", "Stop", false), ("skip15", "Skip back / forward", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
         ("frame", "Next frame", false), ("speed", "Playback speed", false), ("snapshot", "Snapshot", false), ("record", "Record", false),
         ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
         ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
@@ -1128,7 +1167,11 @@ public partial class MainWindow : Window
     {
         static Visibility V(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
         StopBtn.Visibility = V(ButtonOn("stop"));
-        Back15.Visibility = Fwd15.Visibility = V(ButtonOn("skip15") && _isAudio && _index >= 0);
+        Back15.Visibility = Fwd15.Visibility = V(ButtonOn("skip15") && _index >= 0);
+        var skip = Settings.Int("controls.skipbtn");
+        Back15.Tag = Fwd15.Tag = skip.ToString();
+        Back15.ToolTip = L.F("Back {0} s", skip);
+        Fwd15.ToolTip = L.F("Forward {0} s", skip);
         TimeText.Visibility = V(ButtonOn("time"));
         DurationText.Visibility = V(ButtonOn("duration"));
         FrameBtn.Visibility = V(ButtonOn("frame"));
@@ -1310,8 +1353,8 @@ public partial class MainWindow : Window
     void Prev_Click(object sender, RoutedEventArgs e) => Previous();
     void Next_Click(object sender, RoutedEventArgs e) => Next();
     void Stop_Click(object sender, RoutedEventArgs e) => Stop();
-    void Back15_Click(object sender, RoutedEventArgs e) => Jump(-15_000);
-    void Fwd15_Click(object sender, RoutedEventArgs e) => Jump(15_000);
+    void Back15_Click(object sender, RoutedEventArgs e) => Jump(-Settings.Int("controls.skipbtn") * 1000);
+    void Fwd15_Click(object sender, RoutedEventArgs e) => Jump(Settings.Int("controls.skipbtn") * 1000);
     void Frame_Click(object sender, RoutedEventArgs e) => NextFrame();
     void Snap_Click(object sender, RoutedEventArgs e) => Snapshot();
     void Record_Click(object sender, RoutedEventArgs e) => ToggleRecord();
