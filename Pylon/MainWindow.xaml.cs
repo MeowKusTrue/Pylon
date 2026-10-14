@@ -34,7 +34,8 @@ public partial class MainWindow : Window
     bool _showRemaining, _fullscreen, _minimal, _mini, _isAudio, _rateApplied, _rescan, _recording, _netPresetApplying;
     long _resumeAt;
     string? _recordFile;
-    string _title = ""; // media title for history, independent of what the title bar shows
+    string _title = "";
+    string? _artist; // media title for history, independent of what the title bar shows
     WindowState _restoreState;
     Rect _restoreBounds;
     readonly DispatcherTimer _tick, _hideTimer, _osdTimer, _clickTimer, _resumeTimer, _engineTimer;
@@ -114,7 +115,7 @@ public partial class MainWindow : Window
 
         _tick = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => Refresh(), Dispatcher);
         _hideTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num("ui.hideafter"))), DispatcherPriority.Normal, (_, _) => HideControls(), Dispatcher) { IsEnabled = false };
-        _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { Motion.FadeOut(OsdBorder); _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { Motion.FadeOut(OsdBorder); Motion.FadeOut(StageOsd); _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); TogglePlay(); }, Dispatcher) { IsEnabled = false };
         _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
@@ -129,7 +130,11 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             Perf.Mark("loaded");
+            // VideoView creates its video HWND in OnApplyTemplate, which a Collapsed element never gets until first shown.
+            // Without it the first video plays with Hwnd = 0 and libVLC opens its own "Direct3D11 output" window.
+            Video.ApplyTemplate();
             Video.MediaPlayer = _mp;
+            HookOverlayWindow();
             Topmost = Settings.Bool("ui.ontop");
             Library.IndexMusic(Dispatcher);
             Hotkeys.RegisterGlobal(this);
@@ -355,6 +360,7 @@ public partial class MainWindow : Window
         var artist = media.Meta(MetadataType.Artist);
 
         _title = title;
+        _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
         TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
         Title = $"{title} - Pylon";
@@ -382,7 +388,7 @@ public partial class MainWindow : Window
                 case "Ask": _resumeAt = h!.Time; break;
             }
         }
-        if (_resumeAt > 0) Motion.In(ResumeBanner, dy: 12);
+        if (_resumeAt > 0) Motion.In(ResumeBanner, dy: 24, scale: 0.96);
         else ResumeBanner.Visibility = Visibility.Collapsed;
         ResumeText.Text = L.F("You’ve watched till {0} already.", Fmt(_resumeAt));
         if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
@@ -395,8 +401,10 @@ public partial class MainWindow : Window
             media.AddOption($":sout=#duplicate{{dst=display,dst=std{{access=file,mux=ts,dst='{_recordFile.Replace("'", "")}'}}}}");
 
         _rateApplied = false;
+        if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
+        Perf.Mark($"play, video hwnd {_mp.Hwnd}");
         _mp.Play(media);
-        Library.Remember(src, title, h?.Time ?? 0, media.Duration, _isAudio);
+        Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
         _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
         if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
         ApplyLayout();
@@ -456,7 +464,7 @@ public partial class MainWindow : Window
         if (CurrentPath is not { } path || _mp.Length <= 0) return;
         var t = finished ? _mp.Length : _mp.Time;
         if (t <= 0) return;
-        Library.Remember(path, _title, t, _mp.Length, _isAudio);
+        Library.Remember(path, _title, _artist, t, _mp.Length, _isAudio);
     }
 
     void SetArtwork(string? url)
@@ -709,14 +717,14 @@ public partial class MainWindow : Window
         else ShowEffects(video: !_isAudio && _index >= 0);
     }
 
-    void HideEffects() => Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 16, animate: Motion.ByPointer);
+    void HideEffects() => Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 32, animate: Motion.ByPointer);
 
     void ShowEffects(bool video)
     {
         if (_fullscreen) ToggleFullscreen();
         if (_mini) ToggleMiniplayer();
         FxPanel.ShowTab(video);
-        Motion.In(FxPanel, dx: 16, animate: Motion.ByPointer);
+        Motion.In(FxPanel, dx: 32, animate: Motion.ByPointer);
         ApplyLayout();
     }
 
@@ -801,7 +809,7 @@ public partial class MainWindow : Window
             case "ui.corners": ApplyCorners(); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
-            case "ui.decorations" or "library.enabled" or "ui.cover" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
@@ -925,7 +933,9 @@ public partial class MainWindow : Window
         MusicView.Visibility = hasMedia && _isAudio && !visualizer ? Visibility.Visible : Visibility.Collapsed;
         ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
         MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
-        MusicLayout.Margin = _mini ? new Thickness(16) : new Thickness(40, 72, 40, 24);
+        var spectrum = Settings.Str("ui.spectrum") != "Off";
+        MusicSpectrum.Visibility = spectrum && !_mini ? Visibility.Visible : Visibility.Collapsed;
+        MusicLayout.Margin = _mini ? new Thickness(16) : new Thickness(40, 72, 40, spectrum ? 92 : 24); // the bars get their own strip under the caption
         Video.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
         ControlsBar.BorderThickness = new Thickness(0, _isAudio && hasMedia ? 1 : 0, 0, 0);
 
@@ -972,12 +982,12 @@ public partial class MainWindow : Window
         if (!Settings.Bool("library.enabled")) return;
         var show = !Motion.IsShown(Sidebar) || (section != null && Sidebar.Current != section);
         if (show && (_fullscreen || _minimal || _mini)) { _minimal = false; if (_fullscreen) ToggleFullscreen(); if (_mini) ToggleMiniplayer(); }
-        if (show) Motion.In(Sidebar, dx: -16, animate: Motion.ByPointer);
+        if (show) Motion.In(Sidebar, dx: -32, animate: Motion.ByPointer);
         if (show && section != null) Sidebar.Show(section.Value);
         SidebarBtn.IsChecked = show;
         ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
         if (show) ApplyLayout();
-        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -16, animate: Motion.ByPointer);
+        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -32, animate: Motion.ByPointer);
     }
 
     double _radius = 10;
@@ -1006,7 +1016,7 @@ public partial class MainWindow : Window
 
     void ShowControls()
     {
-        Motion.In(OverlayControlsHost, dy: 8, animate: _fullscreen);
+        Motion.In(OverlayControlsHost, dy: 12, animate: _fullscreen);
         Overlay.Cursor = null;
         _hideTimer.Stop();
         if (Settings.Str("ui.autohide") != "Never") _hideTimer.Start();
@@ -1016,7 +1026,7 @@ public partial class MainWindow : Window
     {
         _hideTimer.Stop();
         if (!_fullscreen || ControlsBar.IsMouseOver) return;
-        Motion.Out(OverlayControlsHost, () => OverlayControlsHost.Visibility = Visibility.Hidden, dy: 8, ms: 200);
+        Motion.Out(OverlayControlsHost, () => OverlayControlsHost.Visibility = Visibility.Hidden, dy: 12, spring: Spring.Smooth);
         Overlay.Cursor = Cursors.None;
     }
 
@@ -1216,7 +1226,7 @@ public partial class MainWindow : Window
             CustomizeList.Children.Add(row);
         }
         CustomizePopup.IsOpen = true;
-        Motion.Pop(CustomizePopup.Child, dy: 6, origin: new Point(0, 1));
+        Motion.Pop(CustomizePopup.Child, dy: 10, scale: 0.95, origin: new Point(0, 1));
     }
 
     void CustomizeDone_Click(object sender, RoutedEventArgs e) => CustomizePopup.IsOpen = false;
@@ -1400,17 +1410,31 @@ public partial class MainWindow : Window
     }
 
     void ResumeClose_Click(object sender, RoutedEventArgs e) => HideResume();
-    void HideResume() => Motion.Out(ResumeBanner, () => ResumeBanner.Visibility = Visibility.Collapsed, dy: 12);
+    void HideResume() => Motion.Out(ResumeBanner, () => ResumeBanner.Visibility = Visibility.Collapsed, dy: 24, scale: 0.96);
 
-    void Seek_MouseMove(object sender, MouseEventArgs e)
+    const double PreviewOverhang = 150; // the card may stick out past either end of the bar
+
+    void Seek_MouseMove(object sender, MouseEventArgs e) => ShowSeekPreview(e.GetPosition(Seek).X);
+
+    void ShowSeekPreview(double x)
     {
         if (_index < 0 || _mp.Length <= 0) return;
-        var pos = Math.Clamp(e.GetPosition(Seek).X / Math.Max(1, Seek.ActualWidth), 0, 1);
+        var pos = Math.Clamp((x - 2) / Math.Max(1, Seek.ActualWidth - 4), 0, 1); // same mapping as a click
         PreviewTime.Text = Fmt((long)(pos * _mp.Length));
         PreviewFrame.Visibility = _preview.HasMedia ? Visibility.Visible : Visibility.Collapsed;
         if (_preview.HasMedia) _preview.Request(pos);
-        SeekPreview.HorizontalOffset = e.GetPosition(Seek).X - (_preview.HasMedia ? 132 : 40);
-        SeekPreview.IsOpen = true;
+        if (!SeekPreview.IsOpen)
+        {
+            PreviewLane.Width = Seek.ActualWidth + 2 * PreviewOverhang;
+            SeekPreview.HorizontalOffset = -PreviewOverhang;
+            SeekPreview.IsOpen = true;
+            PreviewSlider.UpdateLayout();
+            Motion.Pop(PreviewCard, dy: 10, scale: 0.9, origin: new Point(0.5, 1));
+        }
+        // 1:1 with the pointer (direct manipulation); the screen round-trip copes with the popup being nudged at screen edges
+        var laneX = PresentationSource.FromVisual(PreviewLane) != null ? PreviewLane.PointFromScreen(Seek.PointToScreen(new Point(x, 0))).X : x + PreviewOverhang;
+        var w = PreviewSlider.ActualWidth;
+        PreviewX.X = Math.Clamp(laneX - w / 2, 0, Math.Max(0, PreviewLane.Width - w));
     }
 
     void Seek_MouseLeave(object sender, MouseEventArgs e) => SeekPreview.IsOpen = false;
@@ -1447,7 +1471,7 @@ public partial class MainWindow : Window
         Item("Open Capture Device", "webcam-duotone", KeyOf("opencapture"), OpenCapture),
         Item("Convert", "arrows-left-right-duotone", "Ctrl + R", () => { }, enabled: false, tip: "Not available in this player yet"),
         Sub("Open Recent", "clock-counter-clockwise-duotone",
-            Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(h.Value.Title, null, null, () => PlayList([h.Key], 0)))),
+            Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(Library.TitleOf(h.Key), null, null, () => PlayList([h.Key], 0)))),
         new Separator(),
         Sub($"{L.T("Profile")} ({L.T(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
@@ -1724,12 +1748,36 @@ public partial class MainWindow : Window
     void Osd(string text, double seconds = 0)
     {
         if (!Settings.Bool("osd.enable")) return;
-        OsdText.Text = text;
-        OsdBorder.BeginAnimation(OpacityProperty, null);
-        OsdBorder.Opacity = 1;
+        OsdText.Text = StageOsdText.Text = text;
+        var osd = Video.IsVisible ? OsdBorder : StageOsd; // the overlay window only exists over video
+        Motion.Set(osd == OsdBorder ? StageOsd : OsdBorder, OpacityProperty, 0);
+        if (osd.Opacity < 0.05) Motion.Pop(osd, dy: -6, scale: 0.94, origin: new Point(1, 0)); // appears from its corner
+        else Motion.Set(osd, OpacityProperty, 1);
         _osdTimer.Stop();
         _osdTimer.Interval = TimeSpan.FromSeconds(seconds > 0 ? seconds : Settings.Num("osd.time"));
         _osdTimer.Start();
+    }
+
+    Window? _overlayWindow;
+
+    /// <summary>
+    /// LibVLCSharp shows its overlay window (OSD, fullscreen controls, corner mask) once the video host loads and only hides it
+    /// on unload, so over music or the idle screen it lingered as an invisible, click-eating layer. Keep it in step with the video.
+    /// </summary>
+    void HookOverlayWindow()
+    {
+        _overlayWindow = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.Title == "LibVLCSharp.WPF");
+        if (_overlayWindow == null) return;
+        _overlayWindow.IsVisibleChanged += (_, _) => { if (_overlayWindow.IsVisible != Video.IsVisible) Dispatcher.BeginInvoke(SyncOverlayWindow); };
+        Video.IsVisibleChanged += (_, _) => SyncOverlayWindow();
+        SyncOverlayWindow();
+    }
+
+    void SyncOverlayWindow()
+    {
+        if (_overlayWindow == null || _overlayWindow.Owner == null) return; // not set up by LibVLCSharp yet
+        if (Video.IsVisible && !_overlayWindow.IsVisible) _overlayWindow.Show();
+        else if (!Video.IsVisible && _overlayWindow.IsVisible) _overlayWindow.Hide();
     }
 
     static void KeepAwake(bool on) => SetThreadExecutionState(on ? 0x80000000u | 0x00000002u /*CONTINUOUS|DISPLAY_REQUIRED*/ : 0x80000000u);
@@ -1763,13 +1811,11 @@ public partial class MainWindow : Window
                 case "customize": ShowCustomize(); break;
                 case "do": Hotkeys.Actions.First(x => x.Id == arg).Run(this); break;
                 case "preview":
-                    _preview.Request(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture));
+                    ShowSeekPreview(2 + double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * (Seek.ActualWidth - 4));
                     await Task.Delay(1500);
-                    PreviewTime.Text = Fmt((long)(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * _mp.Length));
-                    SeekPreview.IsOpen = true;
                     break;
                 case "state":
-                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile}");
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile}");
                     break;
                 case "settings":
                     OpenSettings(arg.Length > 0 ? arg : null);

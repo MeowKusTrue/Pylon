@@ -64,10 +64,10 @@ Name: "{autodesktop}\Pylon"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 [Registry]
 ; ProgIDs
 Root: HKA; Subkey: "Software\Classes\Pylon.Video"; ValueType: string; ValueData: "{cm:VideoFile}"; Flags: uninsdeletekey; Tasks: assoc
-Root: HKA; Subkey: "Software\Classes\Pylon.Video\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Pylon.Video\DefaultIcon"; ValueType: string; ValueData: "{app}\FileIcons\file-video.ico"; Tasks: assoc
 Root: HKA; Subkey: "Software\Classes\Pylon.Video\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc
 Root: HKA; Subkey: "Software\Classes\Pylon.Audio"; ValueType: string; ValueData: "{cm:AudioFile}"; Flags: uninsdeletekey; Tasks: assoc
-Root: HKA; Subkey: "Software\Classes\Pylon.Audio\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assoc
+Root: HKA; Subkey: "Software\Classes\Pylon.Audio\DefaultIcon"; ValueType: string; ValueData: "{app}\FileIcons\file-audio.ico"; Tasks: assoc
 Root: HKA; Subkey: "Software\Classes\Pylon.Audio\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assoc
 
 ; "Open with" entry + Default Apps registration

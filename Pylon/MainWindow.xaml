@@ -74,7 +74,7 @@
                     <Image x:Name="ArtBackdrop" Stretch="UniformToFill" Opacity="0.28" Margin="-120" CacheMode="BitmapCache">
                         <Image.Effect><BlurEffect Radius="90" KernelType="Gaussian" RenderingBias="Performance"/></Image.Effect>
                     </Image>
-                    <local:Spectrum x:Name="MusicSpectrum" Height="140" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.35"/>
+                    <local:Spectrum x:Name="MusicSpectrum" Height="64" VerticalAlignment="Bottom" Margin="40,0,40,14" Opacity="0.5"/>
                     <Grid x:Name="MusicLayout" Margin="40,72,40,24" SizeChanged="MusicLayout_SizeChanged">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
@@ -93,6 +93,12 @@
                                    HorizontalAlignment="Center" Margin="0,40,0,0" TextTrimming="CharacterEllipsis"/>
                     </Grid>
                 </Grid>
+
+                <!-- OSD for everything that isn't video (music, idle); over video the one in the overlay window is used -->
+                <Border x:Name="StageOsd" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6" Panel.ZIndex="5"
+                        CornerRadius="6" Background="{DynamicResource MenuBg}" Opacity="0" IsHitTestVisible="False">
+                    <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
+                </Border>
 
                 <!-- Video (native HWND). Content renders in an overlay window on top of the video. -->
                 <vlc:VideoView x:Name="Video" Visibility="Collapsed" Background="Black">
@@ -224,16 +230,23 @@
         </Border>
 
         <!-- Seek preview (mockup "thumbnail" 272x189: frame + time) -->
-        <Popup x:Name="SeekPreview" PlacementTarget="{Binding ElementName=Seek}" Placement="Top" AllowsTransparency="True" IsHitTestVisible="False" VerticalOffset="-10">
-            <Border Background="{DynamicResource MenuBg}" CornerRadius="10" Padding="4" Margin="0,0,16,24">
-                <Border.Effect><DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/></Border.Effect>
-                <StackPanel>
-                    <Border x:Name="PreviewFrame" Width="256" Height="144" CornerRadius="7" ClipToBounds="True" Background="Black">
-                        <Image x:Name="PreviewImage" Stretch="Uniform"/>
+        <!-- The popup window spans the whole bar and stays put; only the card slides inside it.
+             Moving a transparent popup window on every mouse move made it flicker and flash black. -->
+        <Popup x:Name="SeekPreview" PlacementTarget="{Binding ElementName=Seek}" Placement="Top" AllowsTransparency="True" IsHitTestVisible="False" VerticalOffset="16">
+            <Grid x:Name="PreviewLane" HorizontalAlignment="Left">
+                <Border x:Name="PreviewSlider" HorizontalAlignment="Left" Padding="0,0,0,24">
+                    <Border.RenderTransform><TranslateTransform x:Name="PreviewX"/></Border.RenderTransform>
+                    <Border x:Name="PreviewCard" Background="{DynamicResource MenuBg}" CornerRadius="10" Padding="4">
+                        <Border.Effect><DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/></Border.Effect>
+                        <StackPanel>
+                            <Border x:Name="PreviewFrame" Width="256" Height="144" CornerRadius="7" ClipToBounds="True" Background="Black">
+                                <Image x:Name="PreviewImage" Stretch="Uniform"/>
+                            </Border>
+                            <TextBlock x:Name="PreviewTime" FontSize="14" Foreground="{DynamicResource FgA1}" HorizontalAlignment="Center" Margin="10,6,10,6"/>
+                        </StackPanel>
                     </Border>
-                    <TextBlock x:Name="PreviewTime" FontSize="14" Foreground="{DynamicResource FgA1}" HorizontalAlignment="Center" Margin="0,8,0,6"/>
-                </StackPanel>
-            </Border>
+                </Border>
+            </Grid>
         </Popup>
 
         <!-- Customize Player: which buttons the control bar shows -->

@@ -54,6 +54,8 @@ public partial class SettingsWindow : Window
                     _advanced = false;
                     if (SearchBox.Text.Length > 0) SearchBox.Text = ""; // also re-renders
                     else Render();
+                    Scroller.ScrollToTop();
+                    if (Motion.ByPointer) Motion.Pop(Page, dy: 14, scale: 1, spring: Spring.Smooth);
                 };
                 Nav.Children.Add(rb);
             }

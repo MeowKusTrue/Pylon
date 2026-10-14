@@ -131,7 +131,7 @@ public partial class LibraryPanel : UserControl
     /// <summary>New pages come in from the side they live on: deeper from the right, back from the left.</summary>
     void Slide(int direction)
     {
-        if (IsVisible && Motion.ByPointer) Motion.Pop(List, scale: 1, dx: 14 * direction, ms: 200);
+        if (IsVisible && Motion.ByPointer) Motion.Pop(List, scale: 1, dx: 28 * direction, spring: Spring.Smooth);
     }
 
     public void Render()
@@ -430,9 +430,7 @@ public partial class LibraryPanel : UserControl
     Row MediaRow(string path, IList<string> context, int index, int queueIndex = -1, IEnumerable<object>? extra = null)
     {
         var h = Library.HistoryOf(path);
-        var title = Library.Data.Meta.GetValueOrDefault(path) is { Title: { Length: > 0 } t } m
-            ? (m.Artist is { Length: > 0 } a ? $"{t} - {a}" : t)
-            : Library.DisplayName(path);
+        var title = Library.TitleOf(path);
         var active = queueIndex >= 0 ? queueIndex == Player.QueueIndex : string.Equals(path, Player.CurrentPath, StringComparison.OrdinalIgnoreCase);
         return new Row
         {

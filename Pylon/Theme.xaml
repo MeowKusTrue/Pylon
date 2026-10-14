@@ -266,7 +266,7 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border x:Name="knob" Width="24" Height="24" CornerRadius="4" Background="{DynamicResource FgA3}" HorizontalAlignment="Left"/>
+                            <Border x:Name="knob" Grid.ColumnSpan="2" Width="24" Height="24" CornerRadius="4" Background="{DynamicResource FgA3}" HorizontalAlignment="Left"/> <!-- slid by Motion.HookSwitches -->
                             <TextBlock x:Name="lbl" Grid.Column="1" Text="OFF" FontSize="10" Foreground="{DynamicResource FgA3}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Grid>
                     </Border>
@@ -274,8 +274,6 @@
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentBright}"/>
                             <Setter TargetName="knob" Property="Background" Value="{DynamicResource Accent}"/>
-                            <Setter TargetName="knob" Property="Grid.Column" Value="1"/>
-                            <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right"/>
                             <Setter TargetName="lbl" Property="Grid.Column" Value="0"/>
                             <Setter TargetName="lbl" Property="Text" Value="ON"/>
                             <Setter TargetName="lbl" Property="Foreground" Value="{DynamicResource Accent}"/>

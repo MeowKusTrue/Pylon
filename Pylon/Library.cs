@@ -27,6 +27,7 @@ public class SavedStream
 public class HistoryEntry
 {
     public string Title { get; set; } = "";
+    public string? Artist { get; set; }
     public long Time { get; set; }
     public long Length { get; set; }
     public bool IsAudio { get; set; }
@@ -155,11 +156,20 @@ public static class Library
         return false;
     }
 
-    public static void Remember(string path, string title, long time, long length, bool isAudio)
+    public static void Remember(string path, string title, string? artist, long time, long length, bool isAudio)
     {
         if (Excluded(path)) return;
         if (!Settings.Bool("privacy.position")) time = 0;
-        Data.History[path] = new HistoryEntry { Title = title, Time = time, Length = length, IsAudio = isAudio, LastPlayed = DateTime.Now };
+        Data.History[path] = new HistoryEntry { Title = title, Artist = artist, Time = time, Length = length, IsAudio = isAudio, LastPlayed = DateTime.Now };
+    }
+
+    /// <summary>"Title - Artist" from tags (library index, then what playback saw), else the file name.</summary>
+    public static string TitleOf(string path)
+    {
+        if (Data.Meta.GetValueOrDefault(path) is { Title: { Length: > 0 } t } m) return m.Artist is { Length: > 0 } a ? $"{t} - {a}" : t;
+        if (HistoryOf(path) is { Title: { Length: > 0 } ht } h && ht != "Pylon") // "Pylon": entries saved by 1.0.0 with the title bar text
+            return h.Artist is { Length: > 0 } ha ? $"{ht} - {ha}" : ht;
+        return DisplayName(path);
     }
 
     public static HistoryEntry? HistoryOf(string path) => Data.History.GetValueOrDefault(path);
