@@ -18,7 +18,9 @@ public partial class DialogWindow : Window
     {
         InitializeComponent();
         Owner = owner;
-        TitleText.Text = title;
+        TitleText.Text = L.T(title);
+        CancelBtn.Content = L.T("Cancel");
+        SaveBtn.Content = L.T("Save");
         Body.Content = body;
         Loaded += (_, _) => (FindFirst<TextBox>(body))?.Focus();
     }
@@ -63,7 +65,7 @@ public partial class DialogWindow : Window
         var thumbBox = new Border
         {
             Width = 112, Height = 112, CornerRadius = new CornerRadius(6), Background = R("BgB2"), BorderBrush = R("BgA4"), BorderThickness = new Thickness(2),
-            Cursor = Cursors.Hand, Margin = new Thickness(20, 0, 0, 0), ClipToBounds = true, ToolTip = "Choose a thumbnail",
+            Cursor = Cursors.Hand, Margin = new Thickness(20, 0, 0, 0), ClipToBounds = true, ToolTip = L.T("Choose a thumbnail"),
             Child = new Grid { Children = { new Border { Background = R("FgB1"), CornerRadius = new CornerRadius(5), Padding = new Thickness(3), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Child = new Icon { Glyph = "plus" } }, thumbImage } },
         };
         DialogWindow? dlg = null;
@@ -81,7 +83,7 @@ public partial class DialogWindow : Window
             BorderThickness = new Thickness(2),
             Child = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { dropText, Spacer(20), new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = addBtn } } },
         };
-        void Refresh() => dropText.Text = files.Count == 0 ? "Drag files into the box or click here to select files." : $"{files.Count} file(s) selected — click to add more.";
+        void Refresh() => dropText.Text = files.Count == 0 ? L.T("Drag files into the box or click here to select files.") : L.F("{0} file(s) selected — click to add more.", files.Count);
         Refresh();
         drop.MouseLeftButtonUp += (_, _) =>
         {
@@ -116,11 +118,11 @@ public partial class DialogWindow : Window
         urls.TextWrapping = TextWrapping.NoWrap;
         var name = Input("e.g., Favorite TV Channels");
         var optional = Section("Playlist Name", "The playlist will be saved and displayed with this title.");
-        ((TextBlock)optional.Children[0]).Inlines.Add(new System.Windows.Documents.Run(" (optional)") { Foreground = Brush("#6B6B6B") });
+        ((TextBlock)optional.Children[0]).Inlines.Add(new System.Windows.Documents.Run(" " + L.T("(optional)")) { Foreground = Brush("#6B6B6B") });
 
         var body = Stack(Section("Network URL", "You can enter multiple links to load."), urls, Spacer(20), Divider(), Spacer(20), optional, name, Spacer(40));
         var dlg = new DialogWindow(owner, "Open Network Stream", body) { Width = 1078 };
-        dlg.SaveBtn.Content = "Open";
+        dlg.SaveBtn.Content = L.T("Open");
         List<string> Links() => urls.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(u => Uri.TryCreate(u, UriKind.Absolute, out var x) && !x.IsFile).ToList();
         return dlg.Run(() => Links().Count > 0, urls) ? (Links(), string.IsNullOrWhiteSpace(name.Text) ? null : name.Text.Trim()) : null;
@@ -136,7 +138,7 @@ public partial class DialogWindow : Window
         Action<string>? capture = null;
 
         var search = Input("Search Keyboard Shortcuts...");
-        var field = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 160, Margin = new Thickness(12, 0, 0, 0), ItemsSource = new[] { "All Fields", "Action", "Hotkey" }, SelectedIndex = 0 };
+        var field = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 160, Margin = new Thickness(12, 0, 0, 0), ItemsSource = new[] { L.T("All Fields"), L.T("Action"), L.T("Hotkey") }, SelectedIndex = 0 };
         var top = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
         DockPanel.SetDock(field, Dock.Right);
         top.Children.Add(field);
@@ -155,7 +157,7 @@ public partial class DialogWindow : Window
             {
                 if (capturing != null) capturing.Content = "…";
                 capturing = b;
-                b.Content = "Press keys… (Backspace clears)";
+                b.Content = L.T("Press keys… (Backspace clears)");
                 capture = g => { map[id] = g; b.Content = g.Length > 0 ? Hotkeys.Display(g) : "—"; };
             };
             return b;
@@ -169,15 +171,15 @@ public partial class DialogWindow : Window
             {
                 var rows = group.Where(a => q.Length == 0 || field.SelectedIndex switch
                 {
-                    1 => a.Name.Contains(q, StringComparison.OrdinalIgnoreCase),
+                    1 => (a.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || L.T(a.Name).Contains(q, StringComparison.OrdinalIgnoreCase)),
                     2 => Hotkeys.Display(local[a.Id]).Contains(q, StringComparison.OrdinalIgnoreCase),
-                    _ => a.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || Hotkeys.Display(local[a.Id]).Contains(q, StringComparison.OrdinalIgnoreCase),
+                    _ => (a.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || L.T(a.Name).Contains(q, StringComparison.OrdinalIgnoreCase)) || Hotkeys.Display(local[a.Id]).Contains(q, StringComparison.OrdinalIgnoreCase),
                 }).ToList();
                 if (rows.Count == 0) continue;
-                list.Children.Add(new TextBlock { Text = group.Key, FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, list.Children.Count == 0 ? 4 : 18, 0, 8) });
+                list.Children.Add(new TextBlock { Text = L.T(group.Key), FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, list.Children.Count == 0 ? 4 : 18, 0, 8) });
                 foreach (var a in rows)
                 {
-                    var row = Columns(new TextBlock { Text = a.Name, FontSize = 14, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center }, KeyButton(a.Id, local), KeyButton(a.Id, global));
+                    var row = Columns(new TextBlock { Text = L.T(a.Name), FontSize = 14, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center }, KeyButton(a.Id, local), KeyButton(a.Id, global));
                     row.Margin = new Thickness(0, 0, 0, 6);
                     list.Children.Add(row);
                 }
@@ -205,7 +207,7 @@ public partial class DialogWindow : Window
         }
     }
 
-    static TextBlock Label(string text) => new() { Text = text, FontSize = 13, Foreground = R("FgA3") };
+    static TextBlock Label(string text) => new() { Text = L.T(text), FontSize = 13, Foreground = R("FgA3") };
 
     static Grid Columns(params UIElement[] cells)
     {
@@ -217,6 +219,33 @@ public partial class DialogWindow : Window
         return g;
     }
 
+    // ───────── Update available ─────────
+
+    /// <summary>"Pylon x.y.z is available" with the release notes. True = install (or download, for portable copies).</summary>
+    public static bool UpdateAvailable(Window owner, Updater.Release r, bool installed)
+    {
+        var notes = new TextBox
+        {
+            Text = string.IsNullOrWhiteSpace(r.Notes) ? L.T("No release notes.") : PlainNotes(r.Notes),
+            IsReadOnly = true, TextWrapping = TextWrapping.Wrap, BorderThickness = new Thickness(0), Background = Brushes.Transparent,
+            Foreground = R("FgA2"), FontSize = 14, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 320,
+        };
+        var body = Stack(
+            Section(L.F("Pylon {0} is available", r.Version.ToString(3)), L.F("You have version {0}.", Updater.Current.ToString(3))),
+            new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 10, 14, 10), Child = notes },
+            Spacer(10));
+        var dlg = new DialogWindow(owner, "Update available", body) { Width = 640 };
+        dlg.CancelBtn.Content = L.T("Later");
+        dlg.SaveBtn.Content = L.T(installed && r.SetupUrl != null ? "Update now" : "Download");
+        return dlg.Run(() => true);
+    }
+
+    /// <summary>GitHub release notes are Markdown: drop heading marks and emphasis, turn list items into bullets.</summary>
+    static string PlainNotes(string md) => string.Join("\n", md.Replace("\r\n", "\n").Split('\n')
+        .Select(l => System.Text.RegularExpressions.Regex.Replace(l.TrimEnd(), @"^#+\s*", ""))
+        .Select(l => System.Text.RegularExpressions.Regex.Replace(l, @"^\s*[*-]\s+", "• "))
+        .Select(l => l.Replace("**", "").Replace("`", ""))).Trim();
+
     // ───────── About ─────────
 
     public static void About(Window owner, string libVlcVersion)
@@ -224,11 +253,11 @@ public partial class DialogWindow : Window
         var logo = new Icon { Glyph = "logo", Width = 72, Height = 72, Margin = new Thickness(0, 0, 24, 0), VerticalAlignment = VerticalAlignment.Top };
         var text = Stack(
             new TextBlock { Text = "Pylon", FontSize = 22, Foreground = R("FgA0") },
-            new TextBlock { Text = "A VLC redesign built on libVLC", FontSize = 14, Foreground = R("Accent"), Margin = new Thickness(0, 4, 0, 14) },
-            new TextBlock { Text = $"Player {typeof(DialogWindow).Assembly.GetName().Version?.ToString(3)}  ·  libVLC {libVlcVersion.Split(' ')[0]}", FontSize = 14, Foreground = R("FgA2") },
+            new TextBlock { Text = L.T("A VLC redesign built on libVLC"), FontSize = 14, Foreground = R("Accent"), Margin = new Thickness(0, 4, 0, 14) },
+            new TextBlock { Text = $"{L.T("Player")} {typeof(DialogWindow).Assembly.GetName().Version?.ToString(3)}  ·  libVLC {libVlcVersion.Split(' ')[0]}", FontSize = 14, Foreground = R("FgA2") },
             new TextBlock
             {
-                Text = "Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on the community \"VLC Redesign\" Figma file. Icons: Phosphor (MIT). Radio directory: radio-browser.info.",
+                Text = L.T("Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on the community \"VLC Redesign\" Figma file. Icons: Phosphor (MIT). Radio directory: radio-browser.info."),
                 FontSize = 13, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), LineHeight = 21,
             });
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
@@ -237,7 +266,7 @@ public partial class DialogWindow : Window
         row.Children.Add(text);
         var dlg = new DialogWindow(owner, "About Pylon", row) { Width = 620 };
         dlg.CancelBtn.Visibility = Visibility.Collapsed;
-        dlg.SaveBtn.Content = "Close";
+        dlg.SaveBtn.Content = L.T("Close");
         dlg.Run(() => true);
     }
 
@@ -248,8 +277,8 @@ public partial class DialogWindow : Window
         var subs = new List<string>();
         var dir = Path.GetDirectoryName(video) ?? "";
         var videos = Directory.Exists(dir) ? Library.MediaFiles(dir).Where(Library.IsVideo).ToList() : [video];
-        var target = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 240, ItemsSource = new[] { "To this file", "To this folder" }, SelectedIndex = 0 };
-        var origin = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 240, Margin = new Thickness(12, 0, 0, 0), ItemsSource = new[] { "From computer", "From OpenSubtitles (needs an account)" }, SelectedIndex = 0 };
+        var target = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 240, ItemsSource = new[] { L.T("To this file"), L.T("To this folder") }, SelectedIndex = 0 };
+        var origin = new ComboBox { Style = (Style)Application.Current.FindResource("Dropdown"), Width = 240, Margin = new Thickness(12, 0, 0, 0), ItemsSource = new[] { L.T("From computer"), L.T("From OpenSubtitles (needs an account)") }, SelectedIndex = 0 };
         origin.SelectionChanged += (_, _) => origin.SelectedIndex = 0; // only local files for now
 
         var mapping = new StackPanel();
@@ -277,7 +306,7 @@ public partial class DialogWindow : Window
 
         void Refresh()
         {
-            dropText.Text = subs.Count == 0 ? "Drag subtitle files here or click to select them." : $"{subs.Count} subtitle file(s) — click to add more.";
+            dropText.Text = subs.Count == 0 ? L.T("Drag subtitle files here or click to select them.") : L.F("{0} subtitle file(s) — click to add more.", subs.Count);
             mapping.Children.Clear();
             var map = Map();
             foreach (var v in target.SelectedIndex == 0 ? [video] : videos)
@@ -322,15 +351,15 @@ public partial class DialogWindow : Window
     static Brush R(string key) => (Brush)Application.Current.FindResource(key); // current theme brush
 
     static TextBox Input(string placeholder, string text = "") =>
-        new() { Style = (Style)Application.Current.FindResource("Input"), Tag = placeholder, Text = text, Height = 41 };
+        new() { Style = (Style)Application.Current.FindResource("Input"), Tag = L.T(placeholder), Text = text, Height = 41 };
 
     static StackPanel Section(string heading, string hint) => new()
     {
         Margin = new Thickness(0, 0, 0, 20),
         Children =
         {
-            new TextBlock { Text = heading, FontSize = 16, Foreground = Brush("#C6C6C6"), LineHeight = 28 },
-            new TextBlock { Text = hint, FontSize = 14, Foreground = Brush("#6B6B6B"), LineHeight = 24.5, Margin = new Thickness(0, 5, 0, 0), TextWrapping = TextWrapping.Wrap },
+            new TextBlock { Text = L.T(heading), FontSize = 16, Foreground = Brush("#C6C6C6"), LineHeight = 28 },
+            new TextBlock { Text = L.T(hint), FontSize = 14, Foreground = Brush("#6B6B6B"), LineHeight = 24.5, Margin = new Thickness(0, 5, 0, 0), TextWrapping = TextWrapping.Wrap },
         },
     };
 

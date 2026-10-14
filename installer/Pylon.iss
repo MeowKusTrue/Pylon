@@ -184,4 +184,6 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; Val
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,Pylon}"; Flags: nowait postinstall skipifsilent
+; in-app updates run the setup with /SILENT: start the new version afterwards
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 Filename: "ms-settings:defaultapps?registeredAppUser=Pylon"; Description: "{cm:OpenDefaults}"; Flags: shellexec postinstall skipifsilent unchecked nowait; Tasks: assoc

@@ -80,11 +80,11 @@ public partial class LibraryPanel : UserControl
         InitializeComponent();
         foreach (var (section, glyph, _, tip) in RailItems)
         {
-            var b = new ToggleButton { Style = (Style)FindResource("IconButton"), Tag = glyph, ToolTip = tip, Width = 30, Margin = new Thickness(0, 0, 0, 14), DataContext = section };
+            var b = new ToggleButton { Style = (Style)FindResource("IconButton"), Tag = glyph, ToolTip = L.T(tip), Width = 30, Margin = new Thickness(0, 0, 0, 14), DataContext = section };
             b.Click += (_, _) => Show(section);
             Rail.Children.Add(b);
         }
-        var add = new Button { Style = (Style)FindResource("IconButton"), Tag = "plus", ToolTip = "Open media", Width = 30 };
+        var add = new Button { Style = (Style)FindResource("IconButton"), Tag = "plus", ToolTip = L.T("Open media"), Width = 30 };
         add.Click += (_, _) => Player.ShowOpenMenu(add);
         Rail.Children.Add(add);
         Library.Changed += () => { if (IsVisible) Render(); };
@@ -150,7 +150,7 @@ public partial class LibraryPanel : UserControl
         List.ItemsSource = rows;
 
         var count = rows.Count(r => !r.IsHeader && !r.IsAction);
-        CountText.Text = count == 1 ? "1 item" : $"{count} items";
+        CountText.Text = L.Items(count);
         BackBtn.IsEnabled = _pos > 0;
         ForwardBtn.IsEnabled = _pos < _nav.Count - 1;
         PopoutBtn.Visibility = page.Folder != null ? Visibility.Visible : Visibility.Collapsed;
@@ -187,7 +187,7 @@ public partial class LibraryPanel : UserControl
 
     // ───────── pages ─────────
 
-    static Crumb[] Crumbs1(string title) => [new(title, null)];
+    static Crumb[] Crumbs1(string title) => [new(L.T(title), null)];
 
     Page Home() => new(Section.Home, Crumbs1("Home"), () =>
     {
@@ -197,7 +197,7 @@ public partial class LibraryPanel : UserControl
         {
             var list = items.Take(3).ToList();
             if (list.Count == 0) return;
-            rows.Add(new Row { IsHeader = true, Title = header, Click = () => Navigate(more()) });
+            rows.Add(new Row { IsHeader = true, Title = L.T(header), Click = () => Navigate(more()) });
             rows.AddRange(list);
         }
         Block("Continue Watching", History,
@@ -219,23 +219,23 @@ public partial class LibraryPanel : UserControl
     Page Music() => new(Section.Music, Crumbs1("Music"), () =>
     [
         ActionRow("Add", AddMusicFolder),
-        IconRow("Songs", "music-note", () => Navigate(Songs()), sortable: false),
-        IconRow("Albums", "vinyl-record", () => Navigate(Group("Albums", m => m.Album)), sortable: false),
-        IconRow("Artists", "user", () => Navigate(Group("Artists", m => m.Artist)), sortable: false),
-        IconRow("Genres", "tag", () => Navigate(Group("Genres", m => m.Genre)), sortable: false),
+        IconRow(L.T("Songs"), "music-note", () => Navigate(Songs()), sortable: false),
+        IconRow(L.T("Albums"), "vinyl-record", () => Navigate(Group("Albums", m => m.Album)), sortable: false),
+        IconRow(L.T("Artists"), "user", () => Navigate(Group("Artists", m => m.Artist)), sortable: false),
+        IconRow(L.T("Genres"), "tag", () => Navigate(Group("Genres", m => m.Genre)), sortable: false),
     ]);
 
-    Page Songs() => new(Section.Music, [new("Music", Music), new("Songs", null)], () =>
+    Page Songs() => new(Section.Music, [new(L.T("Music"), Music), new(L.T("Songs"), null)], () =>
         Library.Data.MusicFolders.Select(f => FolderRow(f, f, Section.Music)).ToList());
 
     /// <summary>Albums / Artists / Genres, from the tag index.</summary>
-    Page Group(string title, Func<TrackMeta, string?> key) => new(Section.Music, [new("Music", Music), new(title, null)], () =>
+    Page Group(string title, Func<TrackMeta, string?> key) => new(Section.Music, [new(L.T("Music"), Music), new(L.T(title), null)], () =>
         Library.Data.Meta.Where(m => File.Exists(m.Key))
-            .GroupBy(m => key(m.Value) is { Length: > 0 } k ? k : "Unknown")
+            .GroupBy(m => key(m.Value) is { Length: > 0 } k ? k : L.T("Unknown"))
             .Select(g => IconRow(g.Key, title == "Artists" ? "user" : title == "Genres" ? "tag" : "vinyl-record", () =>
             {
                 var files = g.Select(x => x.Key).Order(StringComparer.OrdinalIgnoreCase).ToList();
-                Navigate(new Page(Section.Music, [new("Music", Music), new(title, () => Group(title, key)), new(g.Key, null)],
+                Navigate(new Page(Section.Music, [new(L.T("Music"), Music), new(L.T(title), () => Group(title, key)), new(g.Key, null)],
                     () => files.Select((f, i) => MediaRow(f, files, i)).ToList()));
             }, menu: () => FilesMenu(g.Select(x => x.Key).Order(StringComparer.OrdinalIgnoreCase).ToList())))
             .ToList());
@@ -264,9 +264,9 @@ public partial class LibraryPanel : UserControl
     Page Network() => new(Section.Network, Crumbs1("Network"), () =>
     [
         ActionRow("Add Network Stream", AddStream),
-        IconRow("Local Network", "hard-drives", () => Navigate(Discovered("Local Network", ref _lan, "upnp", "microdns")), sortable: false),
-        IconRow("Podcasts", "rss", () => Navigate(Podcasts()), sortable: false),
-        IconRow("Radio", "radio", () => Navigate(Radio()), sortable: false),
+        IconRow(L.T("Local Network"), "hard-drives", () => Navigate(Discovered(L.T("Local Network"), ref _lan, "upnp", "microdns")), sortable: false),
+        IconRow(L.T("Podcasts"), "rss", () => Navigate(Podcasts()), sortable: false),
+        IconRow(L.T("Radio"), "radio", () => Navigate(Radio()), sortable: false),
         .. Library.Data.Streams.Select(s => new Row
         {
             Title = s.Name, Glyph = "broadcast",
@@ -298,10 +298,10 @@ public partial class LibraryPanel : UserControl
         return DiscoveredPage(title, list);
     }
 
-    Page DiscoveredPage(string title, DiscoveredList l) => new(Section.Network, [new("Network", Network), new(title, null)], () =>
+    Page DiscoveredPage(string title, DiscoveredList l) => new(Section.Network, [new(L.T("Network"), Network), new(title, null)], () =>
         !l.Available ? [Info("Not supported by this libVLC build")]
         : l.Items.Count == 0 ? [Info("Searching…")]
-        : NetRows(l.Items, [new("Network", Network), new(title, () => DiscoveredPage(title, l))]));
+        : NetRows(l.Items, [new(L.T("Network"), Network), new(title, () => DiscoveredPage(title, l))]));
 
     /// <summary>Server folder or podcast feed, listed asynchronously.</summary>
     Page Browse(NetItem dir, Crumb[] parent) => new(Section.Network, [.. parent, new(dir.Title, null)], () =>
@@ -332,7 +332,7 @@ public partial class LibraryPanel : UserControl
             }).ToList();
     }
 
-    Page Podcasts() => new(Section.Network, [new("Network", Network), new("Podcasts", null)], () =>
+    Page Podcasts() => new(Section.Network, [new(L.T("Network"), Network), new(L.T("Podcasts"), null)], () =>
     [
         ActionRow("Add Podcast", () =>
         {
@@ -346,7 +346,7 @@ public partial class LibraryPanel : UserControl
         .. Library.Data.Podcasts.Select(f => new Row
         {
             Title = f.Name, Glyph = "rss",
-            Click = () => Navigate(Browse(new NetItem(f.Url, f.Name, true), [new("Network", Network), new("Podcasts", Podcasts)])),
+            Click = () => Navigate(Browse(new NetItem(f.Url, f.Name, true), [new(L.T("Network"), Network), new(L.T("Podcasts"), Podcasts)])),
             Menu = () => [Item("Rename…", "pencil-simple", () =>
                           {
                               if (DialogWindow.AskName(Player, "Rename Podcast", "Name", "How this feed is shown in the list.", "Podcast name", f.Name) is { } n) { f.Name = n; Library.Touch(); }
@@ -355,7 +355,7 @@ public partial class LibraryPanel : UserControl
         }),
     ]);
 
-    Page Radio() => new(Section.Network, [new("Network", Network), new("Radio", null)], () =>
+    Page Radio() => new(Section.Network, [new(L.T("Network"), Network), new(L.T("Radio"), null)], () =>
     {
         var country = Net.HomeCountry();
         if (_radioWorld == null && !_radioLoading)
@@ -364,14 +364,14 @@ public partial class LibraryPanel : UserControl
             _ = LoadRadio(country);
         }
         if (_radioWorld == null) return [Info(_radioLoading ? "Loading stations…" : "Couldn't reach the radio directory")];
-        var crumbs = new Crumb[] { new("Network", Network), new("Radio", Radio) };
+        var crumbs = new Crumb[] { new(L.T("Network"), Network), new(L.T("Radio"), Radio) };
         var rows = new List<Row>();
         if (_radioLocal is { Count: > 0 })
         {
-            rows.Add(new Row { IsHeader = true, Title = $"Popular in {new RegionInfo(country!).DisplayName}" });
+            rows.Add(new Row { IsHeader = true, Title = L.F("Popular in {0}", new RegionInfo(country!).NativeName) });
             rows.AddRange(StationRows(_radioLocal));
         }
-        rows.Add(new Row { IsHeader = true, Title = "Popular Worldwide" });
+        rows.Add(new Row { IsHeader = true, Title = L.T("Popular Worldwide") });
         rows.AddRange(StationRows(_radioWorld));
         return rows;
     }, More: () => [Item("Refresh", "arrow-clockwise", () => { _radioWorld = _radioLocal = null; Render(); })]);
@@ -398,12 +398,12 @@ public partial class LibraryPanel : UserControl
                       Item("Save to Network", "floppy-disk", () => { Library.Data.Streams.Add(new SavedStream { Name = x.Title, Url = x.Mrl }); Library.Touch(); })],
     });
 
-    static Row Info(string text) => new() { Title = text, Glyph = "info", GlyphTint = "#6B6B6B", Dim = true, Sortable = false, IsAction = true };
+    static Row Info(string text) => new() { Title = L.T(text), Glyph = "info", GlyphTint = "#6B6B6B", Dim = true, Sortable = false, IsAction = true };
 
     Page Playlists() => new(Section.Playlists, Crumbs1("Playlists"), () =>
         [ActionRow("Create playlist", () => CreatePlaylist()), .. Library.Data.Playlists.Select(PlaylistRow)]);
 
-    Page PlaylistPage(Playlist p) => new(Section.Playlists, [new("Playlists", Playlists), new(p.Name, null)], () =>
+    Page PlaylistPage(Playlist p) => new(Section.Playlists, [new(L.T("Playlists"), Playlists), new(p.Name, null)], () =>
         p.Items.Select((f, i) => MediaRow(f, p.Items, i, extra: [new Separator(), Item("Remove from Playlist", "minus-circle", () => { p.Items.RemoveAt(i); Library.Touch(); })])).ToList(),
         More: () => PlaylistMenu(p));
 
@@ -466,7 +466,7 @@ public partial class LibraryPanel : UserControl
         new() { Title = title, Glyph = glyph, Click = click, Sortable = sortable, Menu = menu };
 
     static Row ActionRow(string title, Action click) =>
-        new() { Title = title, Glyph = "plus", GlyphTint = "#6B6B6B", Dim = true, Click = click, Sortable = false, IsAction = true };
+        new() { Title = L.T(title), Glyph = "plus", GlyphTint = "#6B6B6B", Dim = true, Click = click, Sortable = false, IsAction = true };
 
     // ───────── menus & actions ─────────
 
@@ -510,7 +510,7 @@ public partial class LibraryPanel : UserControl
 
     static MenuItem Item(string header, string glyph, Action click)
     {
-        var mi = new MenuItem { Header = header, Icon = new Icon { Glyph = glyph } };
+        var mi = new MenuItem { Header = L.T(header), Icon = new Icon { Glyph = glyph } };
         mi.Click += (_, e) => { if (e.OriginalSource == mi) click(); };
         return mi;
     }

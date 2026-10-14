@@ -54,14 +54,14 @@ public class OnboardingWindow : Window
         var footer = new DockPanel { Margin = new Thickness(0, 24, 0, 0) };
         if (_step > 0)
         {
-            var back = new Button { Content = "Back", Style = St("SecondaryButton") };
+            var back = new Button { Content = L.T("Back"), Style = St("SecondaryButton") };
             back.Click += (_, _) => { _step--; Render(); };
             footer.Children.Add(back);
         }
         var dots = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         for (var i = 0; i < 3; i++)
             dots.Children.Add(new Border { Width = i == _step ? 22 : 8, Height = 8, CornerRadius = new CornerRadius(4), Margin = new Thickness(4, 0, 4, 0), Background = i == _step ? R("Accent") : R("FgA4") });
-        var next = new Button { Content = _step == 2 ? "Finish" : "Next", Style = St("PrimaryButton"), HorizontalAlignment = HorizontalAlignment.Right };
+        var next = new Button { Content = L.T(_step == 2 ? "Finish" : "Next"), Style = St("PrimaryButton"), HorizontalAlignment = HorizontalAlignment.Right };
         next.Click += (_, _) => Next();
         DockPanel.SetDock(next, Dock.Right);
         footer.Children.Insert(0, next);
@@ -97,7 +97,7 @@ public class OnboardingWindow : Window
     {
         var path = new TextBox { Style = St("Input"), Text = _folder, Height = 40, Padding = new Thickness(12, 8, 12, 8) };
         path.TextChanged += (_, _) => _folder = path.Text.Trim();
-        var browse = new Button { Content = "Browse", Style = St("SecondaryButton"), Background = R("BgRaised"), Height = 40, Margin = new Thickness(10, 0, 0, 0) };
+        var browse = new Button { Content = L.T("Browse"), Style = St("SecondaryButton"), Background = R("BgRaised"), Height = 40, Margin = new Thickness(10, 0, 0, 0) };
         browse.Click += (_, _) =>
         {
             var dlg = new OpenFolderDialog { InitialDirectory = _folder };
@@ -114,13 +114,13 @@ public class OnboardingWindow : Window
             Children =
             {
                 new Icon { Glyph = "logo", Width = 96, Height = 96, HorizontalAlignment = HorizontalAlignment.Left },
-                new TextBlock { Text = "Welcome to Pylon!", FontSize = 34, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), Margin = new Thickness(0, 28, 0, 14) },
+                new TextBlock { Text = L.T("Welcome to Pylon!"), FontSize = 34, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), Margin = new Thickness(0, 28, 0, 14) },
                 new TextBlock
                 {
-                    Text = "Pylon is a free and open source media player built on the VLC engine. It plays most multimedia files as well as DVDs, Audio CDs, VCDs, and various streaming protocols.",
+                    Text = L.T("Pylon is a free and open source media player built on the VLC engine. It plays most multimedia files as well as DVDs, Audio CDs, VCDs, and various streaming protocols."),
                     FontSize = 16, Foreground = R("FgA2"), TextWrapping = TextWrapping.Wrap, MaxWidth = 640, HorizontalAlignment = HorizontalAlignment.Left, LineHeight = 26,
                 },
-                new TextBlock { Text = "Choose a Media Folder to get started with", FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, 48, 0, 12) },
+                new TextBlock { Text = L.T("Choose a Media Folder to get started with"), FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, 48, 0, 12) },
                 pick,
             },
         };
@@ -142,7 +142,7 @@ public class OnboardingWindow : Window
             {
                 Margin = new Thickness(0, 0, 12, 0), Padding = new Thickness(10), CornerRadius = new CornerRadius(10), Cursor = Cursors.Hand,
                 Background = selected ? R("AccentBright") : R("BgRaised"), BorderBrush = selected ? R("Accent") : Brushes.Transparent, BorderThickness = new Thickness(2),
-                Child = new StackPanel { Children = { swatch, new TextBlock { Text = t, FontSize = 14, Foreground = selected ? R("Accent") : R("FgA2"), HorizontalAlignment = HorizontalAlignment.Center } } },
+                Child = new StackPanel { Children = { swatch, new TextBlock { Text = L.T(t), FontSize = 14, Foreground = selected ? R("Accent") : R("FgA2"), HorizontalAlignment = HorizontalAlignment.Center } } },
             };
             card.MouseLeftButtonUp += (_, _) => Settings.Set("general.theme", t); // ThemeManager re-renders this window
             themes.Children.Add(card);
@@ -153,7 +153,7 @@ public class OnboardingWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                new TextBlock { Text = "Select your preferred theme and color.", FontSize = 26, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), TextWrapping = TextWrapping.Wrap },
+                new TextBlock { Text = L.T("Select your preferred theme and color."), FontSize = 26, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), TextWrapping = TextWrapping.Wrap },
                 themes,
                 OptView.Row(Settings.Find("general.accent")!, 0, stacked: true),
             },
@@ -236,7 +236,7 @@ public class OnboardingWindow : Window
                 var row = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
                 DockPanel.SetDock(caps, Dock.Right);
                 row.Children.Add(caps);
-                row.Children.Add(new TextBlock { Text = name, FontSize = 15, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center });
+                row.Children.Add(new TextBlock { Text = L.T(name), FontSize = 15, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center });
                 col.Children.Add(row);
             }
             return col;
@@ -254,8 +254,8 @@ public class OnboardingWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                new TextBlock { Text = "Learn the basic keyboard shortcuts.", FontSize = 26, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0") },
-                new TextBlock { Text = "Find the full list in the menu.", FontSize = 16, Foreground = R("FgA3"), Margin = new Thickness(0, 10, 0, 0) },
+                new TextBlock { Text = L.T("Learn the basic keyboard shortcuts."), FontSize = 26, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0") },
+                new TextBlock { Text = L.T("Find the full list in the menu."), FontSize = 16, Foreground = R("FgA3"), Margin = new Thickness(0, 10, 0, 0) },
                 grid,
             },
         };

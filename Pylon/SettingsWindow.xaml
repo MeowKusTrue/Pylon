@@ -10,13 +10,13 @@
         <Border.Effect><DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/></Border.Effect>
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="232"/>
+                <ColumnDefinition Width="256"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
             <DockPanel Margin="14" MouseLeftButtonDown="Drag">
                 <Grid DockPanel.Dock="Top" Height="36" Margin="0,0,0,12">
-                    <TextBox x:Name="SearchBox" Style="{StaticResource Input}" Tag="Search" Padding="38,8,10,8" TextChanged="SearchBox_TextChanged"/>
+                    <TextBox x:Name="SearchBox" Style="{StaticResource Input}" Tag="{local:T Search}" Padding="38,8,10,8" TextChanged="SearchBox_TextChanged"/>
                     <local:Icon Glyph="magnifying-glass" Width="18" Height="18" HorizontalAlignment="Left" Margin="12,0,0,0" IsHitTestVisible="False"/>
                 </Grid>
                 <Border Background="{DynamicResource BgA4}" CornerRadius="10" Padding="6">

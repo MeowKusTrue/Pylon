@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shell;
 using System.Windows.Threading;
 using LibVLCSharp.Shared;
 using Microsoft.Win32;
@@ -74,12 +75,13 @@ public partial class MainWindow : Window
         Settings.OpenHotkeys = w => DialogWindow.EditHotkeys(w);
         Settings.ClearHistory = w =>
         {
-            if (MessageBox.Show(w, "Clear the list of recently played items?", "Pylon", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+            if (MessageBox.Show(w, L.T("Clear the list of recently played items?"), "Pylon", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
             Library.Data.History.Clear();
             Library.Touch();
         };
         Settings.OpenEqualizer = _ => { ShowEffects(video: false); Activate(); };
-        Settings.RescanPlugins = _ => { _rescan = true; ReloadEngine(); Osd("Plugins rescanned"); };
+        Settings.RescanPlugins = _ => { _rescan = true; ReloadEngine(); Osd(L.T("Plugins rescanned")); };
+        Settings.CheckUpdates = w => CheckForUpdates(manual: true, w);
         Settings.Changed += OnSettingChanged;
 
         Volume.Value = Settings.Num("audio.startvol") / MaxVolume;
@@ -88,7 +90,7 @@ public partial class MainWindow : Window
         {
             ApplyVolume();
             if (_mp.Mute) SetMute(false);
-            Osd($"Volume {_mp.Volume}%");
+            Osd(L.F("Volume {0}%", _mp.Volume));
         };
         Seek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
         MiniSeek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
@@ -124,12 +126,14 @@ public partial class MainWindow : Window
             if (SnapMode) return;
 #endif
             if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => new OnboardingWindow(this).ShowDialog(), DispatcherPriority.ApplicationIdle);
+            else if (Updater.DueForCheck()) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
         StateChanged += (_, _) =>
         {
             FitMaximized();
             MaxBtn.Tag = WindowState == WindowState.Maximized ? "copy" : "square";
+            if (_mini && WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
             if (WindowState == WindowState.Minimized && Settings.Bool("ui.pausemin") && _mp.IsPlaying && !_isAudio) _mp.SetPause(true);
         };
         PreviewKeyDown += OnKey;
@@ -177,7 +181,7 @@ public partial class MainWindow : Window
         {
             // a bad "additional command line option" must not leave the player without an engine
             Vlc = new LibVLC("--no-video-title-show", "--no-osd");
-            Osd("Some settings were rejected by libVLC");
+            Osd(L.T("Some settings were rejected by libVLC"));
         }
         HookLog();
         _mp = new MediaPlayer(Vlc);
@@ -185,7 +189,7 @@ public partial class MainWindow : Window
         _mp.EndReached += (_, _) => Dispatcher.BeginInvoke(OnEnded);
         _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnError);
         _mp.Playing += (_, _) => Dispatcher.BeginInvoke(OnPlaying);
-        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(FitToVideo); };
+        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(() => { if (_mini) SizeMini(); else FitToVideo(); }); };
 
         if (oldMp != null)
         {
@@ -260,7 +264,7 @@ public partial class MainWindow : Window
         _queue.AddRange(items);
         BuildShuffle();
         if (wasEmpty) PlayAt(0);
-        else Osd("Added to queue");
+        else Osd(L.T("Added to queue"));
         Sidebar.Render();
     }
 
@@ -356,7 +360,7 @@ public partial class MainWindow : Window
             }
         }
         ResumeBanner.Visibility = _resumeAt > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ResumeText.Text = $"You’ve watched till {Fmt(_resumeAt)} already.";
+        ResumeText.Text = L.F("You’ve watched till {0} already.", Fmt(_resumeAt));
         if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
 
         if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
@@ -374,6 +378,7 @@ public partial class MainWindow : Window
         ApplyLayout();
         UpdateControlButtons();
         Sidebar.Render();
+        if (_mini) SizeMini();
     }
 
     void OnPlaying()
@@ -414,8 +419,8 @@ public partial class MainWindow : Window
     {
         var name = CurrentPath is { } p ? Library.DisplayName(p) : "this media";
         if (Settings.Bool("general.errors"))
-            MessageBox.Show(this, $"Pylon can't open {name}.\nThe file may be damaged or in a format that isn't supported.", "Playback error", MessageBoxButton.OK, MessageBoxImage.Warning);
-        else Osd($"Can't open {name}");
+            MessageBox.Show(this, L.F("Pylon can't open {0}.\nThe file may be damaged or in a format that isn't supported.", name), L.T("Playback error"), MessageBoxButton.OK, MessageBoxImage.Warning);
+        else Osd(L.F("Can't open {0}", name));
         var next = NextIndex(+1);
         if (next >= 0 && next < _queue.Count) PlayAt(next);
     }
@@ -505,7 +510,7 @@ public partial class MainWindow : Window
         _mp.Stop();
         if (_recording) ToggleRecord();
         KeepAwake(false);
-        Osd("Stopped");
+        Osd(L.T("Stopped"));
     }
 
     public void Next() => PlayQueueAt(NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? n : (Settings.Str("playback.repeat") == "All" ? 0 : -1));
@@ -539,7 +544,7 @@ public partial class MainWindow : Window
     {
         rate = Math.Clamp(rate, 0.25f, 4f);
         _mp.SetRate(rate);
-        Osd($"Speed {rate:0.##}×");
+        Osd(L.F("Speed {0}×", rate.ToString("0.##")));
     }
 
     double MaxVolume => double.TryParse(Settings.Str("audio.maxvol").TrimEnd('%'), out var m) ? m : 125;
@@ -555,7 +560,7 @@ public partial class MainWindow : Window
         _mp.Mute = mute;
         Volume.Muted = mute;
         UpdateVolumeIcon();
-        Osd(mute ? "Muted" : $"Volume {_mp.Volume}%");
+        Osd(mute ? L.T("Muted") : L.F("Volume {0}%", _mp.Volume));
     }
 
     public void ToggleMute() => SetMute(!_mp.Mute);
@@ -565,7 +570,7 @@ public partial class MainWindow : Window
         Volume.Value = Math.Clamp(Volume.Value + sign * Settings.Num("audio.step") / MaxVolume, 0, 1);
         ApplyVolume();
         if (_mp.Mute) SetMute(false);
-        Osd($"Volume {_mp.Volume}%");
+        Osd(L.F("Volume {0}%", _mp.Volume));
     }
 
     void UpdateVolumeIcon() => MuteBtn.Tag = MiniMute.Tag = _mp.Mute ? "speaker-x" : Volume.Value <= 0 ? "speaker-none" : Volume.Value < 0.4 ? "speaker-low" : "speaker-high";
@@ -576,16 +581,16 @@ public partial class MainWindow : Window
         if (tracks.Count == 0) return;
         var next = tracks[(tracks.FindIndex(t => t.Id == _mp.AudioTrack) + 1) % tracks.Count];
         _mp.SetAudioTrack(next.Id);
-        Osd($"Audio: {next.Name}");
+        Osd(L.F("Audio: {0}", next.Name));
     }
 
     public void CycleSubtitle()
     {
         var tracks = _mp.SpuDescription.ToList();
-        if (tracks.Count == 0) { Osd("No subtitles"); return; }
+        if (tracks.Count == 0) { Osd(L.T("No subtitles")); return; }
         var next = tracks[(tracks.FindIndex(t => t.Id == _mp.Spu) + 1) % tracks.Count];
         _mp.SetSpu(next.Id);
-        Osd($"Subtitles: {next.Name}");
+        Osd(L.F("Subtitles: {0}", next.Name));
     }
 
     public void ShiftAudioDelay(double seconds) => Settings.Set("audio.delay", Math.Round(Settings.Num("audio.delay") + seconds, 2));
@@ -600,7 +605,7 @@ public partial class MainWindow : Window
         var opts = Settings.Find(key)!.Options;
         var next = opts[(Array.IndexOf(opts, Settings.Str(key)) + 1) % opts.Length];
         Settings.Set(key, next);
-        Osd($"{Settings.Find(key)!.Label}: {next}");
+        Osd($"{L.T(Settings.Find(key)!.Label)}: {L.T(next)}");
     }
 
     public void ShowPosition() => Osd($"{Fmt(_mp.Time)} / {Fmt(_mp.Length)}", 2);
@@ -623,8 +628,8 @@ public partial class MainWindow : Window
         }
         else file = Path.Combine(dir, $"{prefix}{DateTime.Now:yyyy-MM-dd-HH'h'mm'm'ss's'}.{ext}");
         var ok = _mp.TakeSnapshot(0, file, w / div, h / div);
-        if (!ok) { Osd("Couldn't take a snapshot", 2); return; }
-        if (Settings.Bool("video.snappreview")) Osd($"Snapshot saved: {Path.GetFileName(file)}", 2);
+        if (!ok) { Osd(L.T("Couldn't take a snapshot"), 2); return; }
+        if (Settings.Bool("video.snappreview")) Osd(L.F("Snapshot saved: {0}", Path.GetFileName(file)), 2);
     }
 
     /// <summary>libVLC 3 has no record API: reopen the item at the same position with a duplicating stream output.</summary>
@@ -639,9 +644,9 @@ public partial class MainWindow : Window
             Directory.CreateDirectory(dir);
             var name = string.Concat(Path.GetFileNameWithoutExtension(Library.DisplayName(CurrentPath!)).Split(Path.GetInvalidFileNameChars()));
             _recordFile = Path.Combine(dir, $"recording-{DateTime.Now:yyyy-MM-dd-HH'h'mm'm'ss's'}-{name}.ts");
-            Osd("Recording…", 2);
+            Osd(L.T("Recording…"), 2);
         }
-        else Osd($"Saved {Path.GetFileName(_recordFile)}", 3);
+        else Osd(L.F("Saved {0}", Path.GetFileName(_recordFile)), 3);
         RecordBtn.IsChecked = _recording;
         PlayAt(_index, startAt: t, autoplay: true);
     }
@@ -690,6 +695,64 @@ public partial class MainWindow : Window
         _settings.Show();
     }
 
+    /// <summary>Texts are resolved when windows are built, so a new language needs a fresh start.</summary>
+    void AskRestart()
+    {
+        Settings.Save();
+        var lang = Settings.Str("general.language");
+        var ru = lang == "Русский" || (lang == "System" && System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru");
+        var text = ru ? "Перезапустить Pylon, чтобы сменить язык?" : "Restart Pylon to change the language?";
+        if (MessageBox.Show(_settings is { IsLoaded: true } ? _settings : this, text, "Pylon", MessageBoxButton.YesNo) == MessageBoxResult.Yes) Restart();
+    }
+
+    public void Restart()
+    {
+        SingleInstance.Release();
+        Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false });
+        Close();
+    }
+
+    bool _updating;
+
+    /// <summary>Asks GitHub for a newer release. Silent on errors / no update unless the user asked.</summary>
+    public async void CheckForUpdates(bool manual, Window? owner = null)
+    {
+        if (_updating) return;
+        owner ??= this;
+        Updater.Release? r;
+        try
+        {
+            r = await Updater.CheckAsync();
+            Updater.MarkChecked();
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
+        {
+            if (manual) MessageBox.Show(owner, L.T("Couldn't check for updates. Check your internet connection."), "Pylon");
+            return;
+        }
+        if (r == null)
+        {
+            if (manual) MessageBox.Show(owner, L.F("You're up to date (version {0}).", Updater.Current.ToString(3)), "Pylon");
+            return;
+        }
+        var installed = Updater.IsInstalled;
+        if (!DialogWindow.UpdateAvailable(owner, r, installed)) return;
+        if (!installed || r.SetupUrl == null) { Updater.OpenPage(r); return; }
+        _updating = true;
+        try
+        {
+            await Updater.DownloadAndRunAsync(r, new Progress<double>(p => Osd(L.F("Downloading update… {0}%", (int)(p * 100)), 2)));
+            SaveProgress();
+            SingleInstance.Release();
+            Close(); // the installer replaces the files and starts the new version
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or IOException or System.ComponentModel.Win32Exception or TaskCanceledException)
+        {
+            _updating = false;
+            MessageBox.Show(owner, L.T("The update couldn't be downloaded. Try again later."), "Pylon");
+        }
+    }
+
     public void ShowAbout() => DialogWindow.About(this, Vlc.Version);
 
     // ───────────────────────── live settings ─────────────────────────
@@ -699,6 +762,7 @@ public partial class MainWindow : Window
         switch (key)
         {
             case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;
+            case "general.language": AskRestart(); break;
             case "general.theme" or "general.accent": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
@@ -712,7 +776,7 @@ public partial class MainWindow : Window
             case "audio.eq": ApplyEqualizer(); break;
             case "audio.maxvol": ApplyVolume(); break;
             case "audio.device" or "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
-            case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd($"Subtitle delay {Settings.Num(key):+0.0;-0.0;0} s"); break;
+            case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
             case "net.preset": ApplyNetworkPreset(); break;
             case "net.file" or "net.disc" or "net.stream" or "net.live": if (!_netPresetApplying) Settings.Set("net.preset", "Custom"); break;
             case "perf.realtime" or "perf.priority": ApplyPriority(); break;
@@ -832,6 +896,9 @@ public partial class MainWindow : Window
 
         bool chromeless = _fullscreen || _minimal || _mini || !Settings.Bool("ui.decorations");
         TopBar.Visibility = chromeless ? Visibility.Collapsed : Visibility.Visible;
+        WindowChrome.GetWindowChrome(this).CaptionHeight = chromeless ? 0 : 40;
+        IdleHint.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
+        IdleLogo.Width = IdleLogo.Height = _mini ? 64 : 96;
         Root.RowDefinitions[0].Height = new GridLength(chromeless ? 0 : 40);
         if (_fullscreen || _minimal || _mini || !Settings.Bool("library.enabled")) Sidebar.Visibility = Visibility.Collapsed;
         if (_fullscreen || _minimal || _mini) FxPanel.Visibility = Visibility.Collapsed;
@@ -940,9 +1007,8 @@ public partial class MainWindow : Window
             WindowState = WindowState.Normal;
             MinWidth = 320;
             MinHeight = 200;
-            var stageH = _isAudio || _index < 0 ? 300 : 242;
             Width = 431;
-            Height = stageH + 118;
+            SizeMini();
             var work = SystemParameters.WorkArea;
             Left = work.Right - Width - 24;
             Top = work.Bottom - Height - 24;
@@ -957,6 +1023,40 @@ public partial class MainWindow : Window
             Topmost = Settings.Bool("ui.ontop");
         }
         ApplyLayout();
+    }
+
+    /// <summary>Miniplayer height: video at its aspect ratio (16:9 until known), a square-ish cover for music. Keeps the bottom edge in place.</summary>
+    void SizeMini()
+    {
+        double stageH = 300;
+        if (_index >= 0 && !_isAudio)
+        {
+            uint w = 0, h = 0;
+            stageH = _mp.Size(0, ref w, ref h) && w > 0 && h > 0 ? Math.Clamp(Width * h / w, 160, 480) : Width * 9 / 16;
+        }
+        var bottom = Top + Height;
+        Height = stageH + MiniBarHeight;
+        if (!double.IsNaN(bottom) && IsLoaded) Top = bottom - Height;
+    }
+
+    const double MiniBarHeight = 118;
+
+    /// <summary>Without the top bar, the stage and the mini controls move the window.</summary>
+    void DragArea_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!(_mini || _minimal) || _fullscreen || e.ChangedButton != MouseButton.Left) return;
+        if (e.OriginalSource is DependencyObject d && FindAncestor<ButtonBase>(d) != null) return;
+        if (e.OriginalSource is DependencyObject d2 && FindAncestor<SeekBar>(d2) != null) return;
+        if (e.ClickCount == 2 && _mini) { ToggleMiniplayer(); e.Handled = true; return; }
+        try { DragMove(); } catch (InvalidOperationException) { }
+        e.Handled = true;
+    }
+
+    static T? FindAncestor<T>(DependencyObject d) where T : DependencyObject
+    {
+        for (var p = d; p != null; p = p is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(p) : LogicalTreeHelper.GetParent(p))
+            if (p is T t) return t;
+        return null;
     }
 
     void FitMaximized()
@@ -1085,7 +1185,7 @@ public partial class MainWindow : Window
         _castingTo = device;
         _mp.SetRenderer(device);
         if (_index >= 0) PlayAt(_index, startAt: _mp.Time, autoplay: true);
-        Osd(device == null ? "Stopped casting" : $"Casting to {device.Name}", 3);
+        Osd(device == null ? L.T("Stopped casting") : L.F("Casting to {0}", device.Name), 3);
     }
 
     // ───────── open media ─────────
@@ -1117,7 +1217,7 @@ public partial class MainWindow : Window
 
     void OpenDisc(string scheme, string? drive)
     {
-        if (drive == null) { Osd("No disc drive found", 2); return; }
+        if (drive == null) { Osd(L.T("No disc drive found"), 2); return; }
         PlayList([$"{scheme}:///{drive}/"], 0);
     }
 
@@ -1149,7 +1249,8 @@ public partial class MainWindow : Window
         if (e.ClickCount == 2)
         {
             _clickTimer.Stop();
-            if (Settings.Str("controls.dblclick") == "Toggle fullscreen") ToggleFullscreen();
+            if (_mini) ToggleMiniplayer();
+            else if (Settings.Str("controls.dblclick") == "Toggle fullscreen") ToggleFullscreen();
         }
         else if ((_minimal || _mini) && !_fullscreen)
         {
@@ -1259,7 +1360,7 @@ public partial class MainWindow : Window
 
     MenuItem Item(string header, string? glyph, string? gesture, Action onClick, bool check = false, bool enabled = true, string? tip = null)
     {
-        var mi = new MenuItem { Header = header, InputGestureText = gesture ?? "", IsChecked = check, IsEnabled = enabled, ToolTip = tip };
+        var mi = new MenuItem { Header = L.T(header), InputGestureText = gesture ?? "", IsChecked = check, IsEnabled = enabled, ToolTip = tip == null ? null : L.T(tip) };
         if (glyph != null) mi.Icon = new Icon { Glyph = glyph };
         if (tip != null) ToolTipService.SetShowOnDisabled(mi, true);
         mi.Click += (_, e) => { if (e.OriginalSource == mi) onClick(); };
@@ -1289,13 +1390,14 @@ public partial class MainWindow : Window
         Sub("Open Recent", "clock-counter-clockwise-duotone",
             Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(h.Value.Title, null, null, () => PlayList([h.Key], 0)))),
         new Separator(),
-        Sub($"Profile ({(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
+        Sub($"{L.T("Profile")} ({L.T(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
         CastMenu(),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
         Item("Customize Player", "paint-brush-duotone", null, ShowCustomize),
         Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
+        Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
 
@@ -1366,7 +1468,7 @@ public partial class MainWindow : Window
         foreach (var t in _mp.AudioTrackDescription)
         {
             var id = t.Id;
-            items.Add(Item(t.Name ?? $"Track {id}", null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
+            items.Add(Item(t.Name ?? L.F("Track {0}", id), null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
         }
         if (items.Count == 0) items.Add(Item("No audio tracks", null, null, () => { }, enabled: false));
         items.Add(new Separator());
@@ -1382,7 +1484,7 @@ public partial class MainWindow : Window
         foreach (var t in _mp.SpuDescription)
         {
             var id = t.Id;
-            items.Add(Item(t.Name ?? $"Track {id}", null, null, () => _mp.SetSpu(id), check: _mp.Spu == id));
+            items.Add(Item(t.Name ?? L.F("Track {0}", id), null, null, () => _mp.SetSpu(id), check: _mp.Spu == id));
         }
         if (items.Count > 0) items.Add(new Separator());
         items.Add(Item("Add Subtitles…", "file-duotone", null, AddSubtitles, enabled: _index >= 0 && CurrentPath?.Contains("://") == false));
@@ -1507,6 +1609,10 @@ public partial class MainWindow : Window
                         case ("about", _): ShowAbout(); break;
                         case (_, "stream"): DialogWindow.NetworkStream(this); break;
                         case (_, "subs"): DialogWindow.AddSubtitles(this, CurrentPath ?? "C:\\video.mp4"); break;
+                        case (_, "update"):
+                            DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 1, 0), "v1.1.0",
+                                "## What's Changed\n* Russian interface\n* In-app updates from GitHub\n* Miniplayer fixes", "https://github.com/x", "https://github.com/x"), true);
+                            break;
                         default: DialogWindow.NewPlaylist(this); break;
                     }
                     return;

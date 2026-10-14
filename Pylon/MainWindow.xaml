@@ -23,12 +23,12 @@
             <StackPanel Orientation="Horizontal" Margin="6,0" VerticalAlignment="Center">
                 <local:Icon Glyph="logo" Margin="7,0"/>
                 <Button x:Name="MenuBtn" Style="{StaticResource IconButton}" Tag="dots-three" Padding="2" Margin="5,0,0,0"
-                        WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Menu" Click="MenuBtn_Click"/>
+                        WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{local:T 'Menu'}" Click="MenuBtn_Click"/>
                 <ToggleButton x:Name="SidebarBtn" Style="{StaticResource IconButton}" Tag="sidebar-simple" Padding="2" Margin="6,0,0,0"
-                              WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="Library (Ctrl+L)" Click="SidebarBtn_Click"/>
+                              WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{local:T 'Library (Ctrl+L)'}" Click="SidebarBtn_Click"/>
                 <Rectangle Width="1" Height="16" Fill="{DynamicResource DividerBright}" Margin="8,0"/>
                 <Button x:Name="FolderBtn" Style="{StaticResource FlatButton}" Padding="2,0,6,0" Height="28" Click="FolderBtn_Click"
-                        WindowChrome.IsHitTestVisibleInChrome="True" Visibility="Collapsed" ToolTip="Open this folder in the library">
+                        WindowChrome.IsHitTestVisibleInChrome="True" Visibility="Collapsed" ToolTip="{local:T 'Open this folder in the library'}">
                     <StackPanel Orientation="Horizontal">
                         <local:Icon Glyph="folder" Margin="0,0,4,0"/>
                         <TextBlock x:Name="FolderText" FontSize="14" VerticalAlignment="Center"/>
@@ -42,7 +42,7 @@
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,6,0" VerticalAlignment="Center">
                 <Button Style="{StaticResource IconButton}" Tag="minus" Padding="6,2" WindowChrome.IsHitTestVisibleInChrome="True" Click="Min_Click"/>
                 <Button x:Name="MaxBtn" Style="{StaticResource IconButton}" Tag="square" Padding="6,2" WindowChrome.IsHitTestVisibleInChrome="True" Click="Max_Click"/>
-                <Button Style="{StaticResource IconButton}" Tag="corners-out" Padding="6,2" WindowChrome.IsHitTestVisibleInChrome="True" Click="Full_Click" ToolTip="Fullscreen (F)"/>
+                <Button Style="{StaticResource IconButton}" Tag="corners-out" Padding="6,2" WindowChrome.IsHitTestVisibleInChrome="True" Click="Full_Click" ToolTip="{local:T 'Fullscreen (F)'}"/>
                 <Button Style="{StaticResource IconButton}" Tag="x" Padding="6,2" WindowChrome.IsHitTestVisibleInChrome="True" Click="Close_Click"/>
             </StackPanel>
         </Grid>
@@ -58,16 +58,13 @@
             <local:LibraryPanel x:Name="Sidebar" Visibility="Collapsed"/>
             <local:EffectsPanel x:Name="FxPanel" Grid.Column="2" Visibility="Collapsed"/>
 
-            <Grid x:Name="Stage" Grid.Column="1" Margin="10,1,10,0" MouseRightButtonUp="Stage_RightClick">
+            <Grid x:Name="Stage" Grid.Column="1" Margin="10,1,10,0" MouseRightButtonUp="Stage_RightClick" MouseLeftButtonDown="DragArea_MouseDown">
                 <!-- Idle / drop target -->
                 <Border x:Name="IdleView" CornerRadius="10" Background="{DynamicResource BgB1}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <local:Icon Glyph="logo" Width="96" Height="96"/>
-                        <TextBlock Text="Drop media here" FontSize="20" Foreground="{DynamicResource FgA1}" HorizontalAlignment="Center" Margin="0,24,0,6"/>
-                        <TextBlock FontSize="14" Foreground="{DynamicResource FgA3}" HorizontalAlignment="Center">
-                            or press <Run Foreground="{DynamicResource FgA2}">Ctrl + O</Run> to open a file,
-                            <Run Foreground="{DynamicResource FgA2}">Ctrl + L</Run> for your library
-                        </TextBlock>
+                        <local:Icon x:Name="IdleLogo" Glyph="logo" Width="96" Height="96"/>
+                        <TextBlock Text="{local:T 'Drop media here'}" FontSize="20" Foreground="{DynamicResource FgA1}" HorizontalAlignment="Center" Margin="0,24,0,6"/>
+                        <TextBlock x:Name="IdleHint" Text="{local:T 'or press Ctrl + O to open a file, Ctrl + L for your library'}" FontSize="14" Foreground="{DynamicResource FgA3}" HorizontalAlignment="Center"/>
                     </StackPanel>
                 </Border>
 
@@ -110,7 +107,7 @@
                                 CornerRadius="10" Background="{DynamicResource MenuBg}" Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock x:Name="ResumeText" FontSize="16" Foreground="{DynamicResource FgA1}" VerticalAlignment="Center" Margin="0,0,40,0" FontFamily="{StaticResource Inter}"/>
-                                <Button Content="Continue Watching" Style="{StaticResource PrimaryButton}" Click="Resume_Click" FontFamily="{StaticResource Inter}"/>
+                                <Button Content="{local:T 'Continue Watching'}" Style="{StaticResource PrimaryButton}" Click="Resume_Click" FontFamily="{StaticResource Inter}"/>
                                 <Button Style="{StaticResource IconButton}" Tag="x" Margin="6,0,0,0" Click="ResumeClose_Click"/>
                             </StackPanel>
                         </Border>
@@ -124,9 +121,9 @@
         <Border x:Name="ControlsBar" Grid.Row="2" Height="54" Background="{DynamicResource BgA3}" BorderBrush="{DynamicResource DividerDim}">
             <DockPanel Margin="20,0" LastChildFill="True">
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="PrevBtn" Style="{StaticResource IconButton}" Tag="skip-back-fill" Padding="3,2" Click="Prev_Click" ToolTip="Previous (P)"/>
-                    <Button x:Name="StopBtn" Style="{StaticResource IconButton}" Tag="stop-fill" Padding="3,2" Margin="8,0,0,0" Click="Stop_Click" ToolTip="Stop (S)" Visibility="Collapsed"/>
-                    <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" ToolTip="Back 15 s" Visibility="Collapsed">
+                    <Button x:Name="PrevBtn" Style="{StaticResource IconButton}" Tag="skip-back-fill" Padding="3,2" Click="Prev_Click" ToolTip="{local:T 'Previous (P)'}"/>
+                    <Button x:Name="StopBtn" Style="{StaticResource IconButton}" Tag="stop-fill" Padding="3,2" Margin="8,0,0,0" Click="Stop_Click" ToolTip="{local:T 'Stop (S)'}" Visibility="Collapsed"/>
+                    <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" ToolTip="{local:T 'Back 15 s'}" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="3,2">
@@ -142,7 +139,7 @@
                         </Button.Template>
                     </Button>
                     <ToggleButton x:Name="PlayBtn" Style="{StaticResource PlayButton}" Margin="8,0" Click="Play_Click"/>
-                    <Button x:Name="Fwd15" Style="{StaticResource IconButton}" Margin="0,0,8,0" Click="Fwd15_Click" ToolTip="Forward 15 s" Visibility="Collapsed">
+                    <Button x:Name="Fwd15" Style="{StaticResource IconButton}" Margin="0,0,8,0" Click="Fwd15_Click" ToolTip="{local:T 'Forward 15 s'}" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="3,2">
@@ -157,26 +154,26 @@
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
-                    <Button x:Name="NextBtn" Style="{StaticResource IconButton}" Tag="skip-forward-fill" Padding="3,2" Click="Next_Click" ToolTip="Next (N)"/>
+                    <Button x:Name="NextBtn" Style="{StaticResource IconButton}" Tag="skip-forward-fill" Padding="3,2" Click="Next_Click" ToolTip="{local:T 'Next (N)'}"/>
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0">
-                    <Button x:Name="FrameBtn" Style="{StaticResource IconButton}" Tag="film-strip" Width="30" Margin="0,0,12,0" Click="Frame_Click" ToolTip="Next frame (.)" Visibility="Collapsed"/>
-                    <Button x:Name="SpeedBtn" Style="{StaticResource FlatButton}" Height="28" Padding="6,0" Margin="0,0,12,0" Click="PSettings_Click" ToolTip="Playback speed" Visibility="Collapsed">
+                    <Button x:Name="FrameBtn" Style="{StaticResource IconButton}" Tag="film-strip" Width="30" Margin="0,0,12,0" Click="Frame_Click" ToolTip="{local:T 'Next frame (.)'}" Visibility="Collapsed"/>
+                    <Button x:Name="SpeedBtn" Style="{StaticResource FlatButton}" Height="28" Padding="6,0" Margin="0,0,12,0" Click="PSettings_Click" ToolTip="{local:T 'Playback speed'}" Visibility="Collapsed">
                         <TextBlock x:Name="SpeedText" Text="1×" FontSize="14"/>
                     </Button>
-                    <Button x:Name="SnapBtn" Style="{StaticResource IconButton}" Tag="camera" Width="30" Margin="0,0,12,0" Click="Snap_Click" ToolTip="Take a snapshot (Shift+S)" Visibility="Collapsed"/>
-                    <ToggleButton x:Name="RecordBtn" Style="{StaticResource IconButton}" Tag="record" Width="30" Margin="0,0,12,0" Click="Record_Click" ToolTip="Record (Shift+R)" Visibility="Collapsed"/>
-                    <ToggleButton x:Name="LoopBtn" Style="{StaticResource IconButton}" Tag="repeat" Width="30" Margin="0,0,12,0" Click="Loop_Click" ToolTip="Repeat" Visibility="Collapsed"/>
-                    <ToggleButton x:Name="ShuffleBtn" Style="{StaticResource IconButton}" Tag="shuffle" Width="30" Margin="0,0,12,0" Click="Shuffle_Click" ToolTip="Shuffle" Visibility="Collapsed"/>
-                    <Button x:Name="MuteBtn" Style="{StaticResource IconButton}" Tag="speaker-high" Padding="0" Click="Mute_Click" ToolTip="Mute (M)"/>
+                    <Button x:Name="SnapBtn" Style="{StaticResource IconButton}" Tag="camera" Width="30" Margin="0,0,12,0" Click="Snap_Click" ToolTip="{local:T 'Take a snapshot (Shift+S)'}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="RecordBtn" Style="{StaticResource IconButton}" Tag="record" Width="30" Margin="0,0,12,0" Click="Record_Click" ToolTip="{local:T 'Record (Shift+R)'}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="LoopBtn" Style="{StaticResource IconButton}" Tag="repeat" Width="30" Margin="0,0,12,0" Click="Loop_Click" ToolTip="{local:T 'Repeat'}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="ShuffleBtn" Style="{StaticResource IconButton}" Tag="shuffle" Width="30" Margin="0,0,12,0" Click="Shuffle_Click" ToolTip="{local:T 'Shuffle'}" Visibility="Collapsed"/>
+                    <Button x:Name="MuteBtn" Style="{StaticResource IconButton}" Tag="speaker-high" Padding="0" Click="Mute_Click" ToolTip="{local:T 'Mute (M)'}"/>
                     <local:VolumeBar x:Name="Volume" Margin="8,0,0,0"/>
-                    <Button x:Name="AudioBtn" Style="{StaticResource IconButton}" Tag="waveform" Width="30" Margin="20,0,0,0" Click="Audio_Click" ToolTip="Audio"/>
-                    <Button x:Name="SubsBtn" Style="{StaticResource IconButton}" Tag="subtitles" Width="30" Margin="12,0,0,0" Click="Subs_Click" ToolTip="Subtitles"/>
-                    <Button x:Name="PSettingsBtn" Style="{StaticResource IconButton}" Tag="sliders-horizontal" Width="30" Margin="12,0,0,0" Click="PSettings_Click" ToolTip="Playback"/>
-                    <Button x:Name="FullBtn" Style="{StaticResource IconButton}" Tag="corners-out" Width="30" Margin="12,0,0,0" Click="Full_Click" ToolTip="Fullscreen (F)" Visibility="Collapsed"/>
-                    <ToggleButton x:Name="ListBtn" Style="{StaticResource IconButton}" Tag="queue" Width="30" Margin="20,0,0,0" Click="ListBtn_Click" ToolTip="Now playing"/>
-                    <Button x:Name="MiniBtn" Style="{StaticResource IconButton}" Tag="picture-in-picture" Width="30" Margin="12,0,0,0" Click="Mini_Click" ToolTip="Miniplayer (Ctrl+M)" Visibility="Collapsed"/>
+                    <Button x:Name="AudioBtn" Style="{StaticResource IconButton}" Tag="waveform" Width="30" Margin="20,0,0,0" Click="Audio_Click" ToolTip="{local:T 'Audio'}"/>
+                    <Button x:Name="SubsBtn" Style="{StaticResource IconButton}" Tag="subtitles" Width="30" Margin="12,0,0,0" Click="Subs_Click" ToolTip="{local:T 'Subtitles'}"/>
+                    <Button x:Name="PSettingsBtn" Style="{StaticResource IconButton}" Tag="sliders-horizontal" Width="30" Margin="12,0,0,0" Click="PSettings_Click" ToolTip="{local:T 'Playback'}"/>
+                    <Button x:Name="FullBtn" Style="{StaticResource IconButton}" Tag="corners-out" Width="30" Margin="12,0,0,0" Click="Full_Click" ToolTip="{local:T 'Fullscreen (F)'}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="ListBtn" Style="{StaticResource IconButton}" Tag="queue" Width="30" Margin="20,0,0,0" Click="ListBtn_Click" ToolTip="{local:T 'Now playing'}"/>
+                    <Button x:Name="MiniBtn" Style="{StaticResource IconButton}" Tag="picture-in-picture" Width="30" Margin="12,0,0,0" Click="Mini_Click" ToolTip="{local:T 'Miniplayer (Ctrl+M)'}" Visibility="Collapsed"/>
                 </StackPanel>
 
                 <Grid Margin="20,0,0,0" VerticalAlignment="Center">
@@ -190,7 +187,7 @@
                     </Button>
                     <local:SeekBar x:Name="Seek" Grid.Column="1" Margin="8,0" MouseMove="Seek_MouseMove" MouseLeave="Seek_MouseLeave"/>
                     <Button Grid.Column="2" Style="{StaticResource FlatButton}" Height="28" Padding="0" HorizontalContentAlignment="Center" Click="Duration_Click"
-                            ToolTip="Toggle remaining time">
+                            ToolTip="{local:T 'Toggle remaining time'}">
                         <TextBlock x:Name="DurationText" Text="--:--:--" FontSize="15"/>
                     </Button>
                 </Grid>
@@ -198,17 +195,17 @@
         </Border>
 
         <!-- ───── Miniplayer controls (compact window mode) ───── -->
-        <Border x:Name="MiniBar" Grid.Row="2" Background="{DynamicResource BgA3}" Padding="14,10,14,12" Visibility="Collapsed">
+        <Border x:Name="MiniBar" Grid.Row="2" Background="{DynamicResource BgA3}" Padding="14,10,14,12" Visibility="Collapsed" Height="118" MouseLeftButtonDown="DragArea_MouseDown">
             <StackPanel>
                 <DockPanel Margin="0,0,0,8">
                     <TextBlock x:Name="MiniTime" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource FgA3}" Margin="10,0,0,0" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="MiniTitle" FontSize="13" Foreground="{DynamicResource FgA1}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="MiniTitle" Text="Pylon" FontSize="13" Foreground="{DynamicResource FgA1}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                 </DockPanel>
                 <local:SeekBar x:Name="MiniSeek" Height="20"/>
                 <Grid Margin="0,10,0,0">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                        <Button Style="{StaticResource IconButton}" Tag="arrows-out-simple" Click="Mini_Click" ToolTip="Back to the full player"/>
-                        <Button Style="{StaticResource IconButton}" Tag="queue" Margin="4,0,0,0" Click="MiniQueue_Click" ToolTip="Now playing"/>
+                        <Button Style="{StaticResource IconButton}" Tag="arrows-out-simple" Click="Mini_Click" ToolTip="{local:T 'Back to the full player'}"/>
+                        <Button Style="{StaticResource IconButton}" Tag="queue" Margin="4,0,0,0" Click="MiniQueue_Click" ToolTip="{local:T 'Now playing'}"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <Button Style="{StaticResource IconButton}" Tag="skip-back-fill" Click="Prev_Click"/>
@@ -242,10 +239,10 @@
                 <Border.Effect><DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/></Border.Effect>
                 <StackPanel>
                     <DockPanel Margin="0,0,0,12">
-                        <Button DockPanel.Dock="Right" Content="Done" Style="{StaticResource PrimaryButton}" MinWidth="80" Click="CustomizeDone_Click"/>
+                        <Button DockPanel.Dock="Right" Content="{local:T 'Done'}" Style="{StaticResource PrimaryButton}" MinWidth="80" Click="CustomizeDone_Click"/>
                         <StackPanel>
-                            <TextBlock Text="Customize Player" FontSize="16" Foreground="{DynamicResource FgA0}"/>
-                            <TextBlock Text="Choose the buttons on the control bar." FontSize="13" Foreground="{DynamicResource FgA3}" Margin="0,4,0,0"/>
+                            <TextBlock Text="{local:T 'Customize Player'}" FontSize="16" Foreground="{DynamicResource FgA0}"/>
+                            <TextBlock Text="{local:T 'Choose the buttons on the control bar.'}" FontSize="13" Foreground="{DynamicResource FgA3}" Margin="0,4,0,0"/>
                         </StackPanel>
                     </DockPanel>
                     <StackPanel x:Name="CustomizeList"/>

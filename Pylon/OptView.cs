@@ -8,6 +8,12 @@ using Microsoft.Win32;
 
 namespace Pylon;
 
+/// <summary>Dropdown entry: stores the English value, shows the translation.</summary>
+public record Choice(string Value)
+{
+    public override string ToString() => L.T(Value);
+}
+
 /// <summary>Builds one settings row (label + control) bound to <see cref="Settings"/>. Shared by the settings window and the effects panel.</summary>
 public static class OptView
 {
@@ -20,9 +26,9 @@ public static class OptView
     {
         var control = Control(o, stacked ? double.NaN : controlWidth);
         var label = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        label.Children.Add(new TextBlock { Text = o.Label, FontSize = 14, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+        label.Children.Add(new TextBlock { Text = L.T(o.Label), FontSize = 14, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
         if (o.Info != null)
-            label.Children.Add(new Icon { Glyph = "info", Width = 16, Height = 16, Tint = "@FgA3", Margin = new Thickness(8, 0, 0, 0), ToolTip = o.Info, VerticalAlignment = VerticalAlignment.Center });
+            label.Children.Add(new Icon { Glyph = "info", Width = 16, Height = 16, Tint = "@FgA3", Margin = new Thickness(8, 0, 0, 0), ToolTip = L.T(o.Info), VerticalAlignment = VerticalAlignment.Center });
 
         FrameworkElement row;
         if (stacked && o.Kind is not (OptKind.Toggle or OptKind.Action))
@@ -49,7 +55,7 @@ public static class OptView
             row.IsEnabled = false;
             row.Opacity = 0.45;
             ToolTipService.SetShowOnDisabled(row, true);
-            row.ToolTip = o.Unavailable;
+            row.ToolTip = L.T(o.Unavailable);
         }
         return row;
     }
@@ -82,11 +88,13 @@ public static class OptView
                     updating = true;
                     var items = o.Choices.ToList();
                     if (Settings.Str(o.Key) is { Length: > 0 } cur && !items.Contains(cur)) items.Insert(0, cur);
-                    combo.ItemsSource = items;
-                    combo.SelectedItem = Settings.Str(o.Key) is { Length: > 0 } v ? v : items.FirstOrDefault();
+                    var choices = items.Select(v => new Choice(v)).ToList();
+                    combo.ItemsSource = choices;
+                    var selected = Settings.Str(o.Key) is { Length: > 0 } sv ? sv : items.FirstOrDefault();
+                    combo.SelectedItem = choices.FirstOrDefault(c => c.Value == selected);
                     updating = false;
                 });
-                combo.SelectionChanged += (_, _) => { if (!updating && combo.SelectedItem is string s) Settings.Set(o.Key, s); };
+                combo.SelectionChanged += (_, _) => { if (!updating && combo.SelectedItem is Choice c) Settings.Set(o.Key, c.Value); };
                 return combo;
             }
             case OptKind.Segmented:
@@ -95,11 +103,11 @@ public static class OptView
                 var group = "seg-" + o.Key + Guid.NewGuid();
                 foreach (var option in o.Options)
                 {
-                    var rb = new RadioButton { Content = option, Style = St("Segment"), GroupName = group };
+                    var rb = new RadioButton { Content = L.T(option), Tag = option, Style = St("Segment"), GroupName = group };
                     rb.Checked += (_, _) => Settings.Set(o.Key, option);
                     grid.Children.Add(rb);
                 }
-                Bind(grid, o.Key, () => { foreach (RadioButton rb in grid.Children) rb.IsChecked = (string)rb.Content == Settings.Str(o.Key); });
+                Bind(grid, o.Key, () => { foreach (RadioButton rb in grid.Children) rb.IsChecked = (string)rb.Tag == Settings.Str(o.Key); });
                 return new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(8), Padding = new Thickness(2), Child = grid };
             }
             case OptKind.Slider:
@@ -111,12 +119,12 @@ public static class OptView
                 {
                     updating = true;
                     slider.Value = Settings.Num(o.Key);
-                    value.Text = Fmt(slider.Value, o.Step) + o.Unit;
+                    value.Text = Fmt(slider.Value, o.Step) + L.T(o.Unit);
                     updating = false;
                 });
                 slider.ValueChanged += (_, e) =>
                 {
-                    value.Text = Fmt(e.NewValue, o.Step) + o.Unit;
+                    value.Text = Fmt(e.NewValue, o.Step) + L.T(o.Unit);
                     if (!updating) Settings.Set(o.Key, Math.Round(e.NewValue / o.Step) * o.Step);
                 };
                 slider.MouseDoubleClick += (_, _) => Settings.Set(o.Key, o.Default); // double click = default
@@ -141,12 +149,12 @@ public static class OptView
                 box.MouseWheel += (_, e) => { Settings.Set(o.Key, Math.Clamp(Settings.Num(o.Key) + Math.Sign(e.Delta) * o.Step, o.Min, o.Max)); e.Handled = true; };
                 var sp = new StackPanel { Orientation = Orientation.Horizontal };
                 sp.Children.Add(box);
-                if (o.Unit.Length > 0) sp.Children.Add(new TextBlock { Text = o.Unit.Trim(), Foreground = R("FgA3"), FontSize = 13, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Width = 66 });
+                if (o.Unit.Length > 0) sp.Children.Add(new TextBlock { Text = L.T(o.Unit).Trim(), Foreground = R("FgA3"), FontSize = 13, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0), Width = 66 });
                 return sp;
             }
             case OptKind.Text:
             {
-                var box = new TextBox { Style = St("Input"), Width = double.IsNaN(width) ? double.NaN : width, Height = 36, Padding = new Thickness(12, 0, 12, 0), VerticalContentAlignment = VerticalAlignment.Center, Tag = o.ButtonText ?? "" };
+                var box = new TextBox { Style = St("Input"), Width = double.IsNaN(width) ? double.NaN : width, Height = 36, Padding = new Thickness(12, 0, 12, 0), VerticalContentAlignment = VerticalAlignment.Center, Tag = L.T(o.ButtonText) };
                 Bind(box, o.Key, () => { if (!box.IsKeyboardFocused) box.Text = Settings.Str(o.Key); });
                 box.LostKeyboardFocus += (_, _) => Settings.Set(o.Key, box.Text.Trim());
                 box.KeyDown += (_, e) => { if (e.Key == Key.Enter) Settings.Set(o.Key, box.Text.Trim()); };
@@ -162,7 +170,7 @@ public static class OptView
             case OptKind.Folder or OptKind.File:
             {
                 var box = new TextBox { Style = St("Input"), Height = 36, Padding = new Thickness(12, 0, 12, 0), VerticalContentAlignment = VerticalAlignment.Center };
-                var browse = new Button { Content = "Browse", Style = St("SecondaryButton"), MinWidth = 90, Height = 36, Margin = new Thickness(10, 0, 0, 0), Background = R("BgRaised") };
+                var browse = new Button { Content = L.T("Browse"), Style = St("SecondaryButton"), MinWidth = 90, Height = 36, Margin = new Thickness(10, 0, 0, 0), Background = R("BgRaised") };
                 Bind(box, o.Key, () => { if (!box.IsKeyboardFocused) box.Text = Settings.Str(o.Key); });
                 box.LostKeyboardFocus += (_, _) => Settings.Set(o.Key, box.Text.Trim());
                 browse.Click += (_, _) =>
@@ -228,7 +236,7 @@ public static class OptView
             }
             case OptKind.Action:
             {
-                var btn = new Button { Content = o.ButtonText, Style = St("SecondaryButton"), MinWidth = 100, Height = 32, Background = R("BgRaised") };
+                var btn = new Button { Content = L.T(o.ButtonText), Style = St("SecondaryButton"), MinWidth = 100, Height = 32, Background = R("BgRaised") };
                 btn.Click += (_, _) => o.Run?.Invoke(Window.GetWindow(btn));
                 return btn;
             }

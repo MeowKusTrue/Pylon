@@ -29,6 +29,13 @@ public static class SingleInstance
         catch (Exception e) when (e is TimeoutException or IOException) { return false; }
     }
 
+    /// <summary>Lets a fresh copy of the app start while this one is still closing (language change, updates).</summary>
+    public static void Release()
+    {
+        _mutex?.Dispose();
+        _mutex = null;
+    }
+
     public static void Listen(MainWindow window)
     {
         var thread = new Thread(() =>

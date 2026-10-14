@@ -9,6 +9,7 @@ public partial class App : Application
     void App_Startup(object sender, StartupEventArgs e)
     {
         Settings.Load();
+        L.Init();
         if (Environment.GetEnvironmentVariable("PYLON_SNAP") == null && SingleInstance.ForwardToRunning(e.Args))
         {
             Shutdown();

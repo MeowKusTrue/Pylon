@@ -42,12 +42,12 @@ public class EffectsPanel : Border
         close.Click += (_, _) => CloseRequested?.Invoke();
         DockPanel.SetDock(close, Dock.Right);
         header.Children.Add(close);
-        header.Children.Add(new TextBlock { Text = "Effects & Filters", FontSize = 16, Foreground = R("FgA0"), VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(new TextBlock { Text = L.T("Effects & Filters"), FontSize = 16, Foreground = R("FgA0"), VerticalAlignment = VerticalAlignment.Center });
 
         var tabs = new UniformGrid { Rows = 1, Margin = new Thickness(0, 0, 8, 16) };
         foreach (var (name, isVideo) in new[] { ("Audio", false), ("Video", true) })
         {
-            var rb = new RadioButton { Content = name, Style = St("Segment"), GroupName = "fxtab" + GetHashCode(), IsChecked = _video == isVideo };
+            var rb = new RadioButton { Content = L.T(name), Style = St("Segment"), GroupName = "fxtab" + GetHashCode(), IsChecked = _video == isVideo };
             rb.Checked += (_, _) => { if (_video != isVideo) { _video = isVideo; Render(); } };
             tabs.Children.Add(rb);
         }
@@ -87,7 +87,7 @@ public class EffectsPanel : Border
 
     static FrameworkElement Reset(string text, params string[] keys)
     {
-        var b = new Button { Content = text, Style = St("SecondaryButton"), Background = R("BgRaised"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
+        var b = new Button { Content = L.T(text), Style = St("SecondaryButton"), Background = R("BgRaised"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
         b.Click += (_, _) => { foreach (var k in keys) Settings.Set(k, Settings.Find(k)!.Default); };
         return b;
     }
@@ -110,7 +110,7 @@ public class EffectsPanel : Border
             Children =
             {
                 new Icon { Glyph = expanded ? "caret-down" : "caret-right", Width = 18, Height = 18, Margin = new Thickness(0, 0, 8, 0) },
-                new TextBlock { Text = title, FontSize = 15, Foreground = R("FgA0"), VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = L.T(title), FontSize = 15, Foreground = R("FgA0"), VerticalAlignment = VerticalAlignment.Center },
             },
         });
         head.MouseLeftButtonUp += (_, e) =>
@@ -159,7 +159,7 @@ public class EffectsPanel : Border
             };
             slider.MouseDoubleClick += (_, _) => Settings.Set(key, 0.0);
             var col = new DockPanel();
-            var label = new TextBlock { Text = i < 0 ? "Pre" : Effects.BandLabel(i), FontSize = 10, Foreground = i < 0 ? R("Accent") : R("FgA2"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
+            var label = new TextBlock { Text = i < 0 ? L.T("Pre") : Effects.BandLabel(i), FontSize = 10, Foreground = i < 0 ? R("Accent") : R("FgA2"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
             DockPanel.SetDock(label, Dock.Bottom);
             DockPanel.SetDock(value, Dock.Top);
             col.Children.Add(label);

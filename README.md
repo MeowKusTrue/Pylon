@@ -6,6 +6,8 @@
 
 <p align="center">A Windows media player built on the VLC engine (libVLC), with a redesigned VLC interface.</p>
 
+<p align="center"><a href="README.ru.md">Читать на русском</a></p>
+
 ![Music playback with the library sidebar](docs/screenshots/music.png)
 
 Pylon brings the community **"VLC Redesign"** Figma concept to life as a real player. Under the hood it's libVLC 3, so it plays what VLC plays: almost every audio and video format, discs, network streams.
@@ -18,6 +20,8 @@ Pylon brings the community **"VLC Redesign"** Figma concept to life as a real pl
 - **Settings:** 13 categories and about 150 options. They apply instantly; when libVLC must restart, playback resumes where it was.
 - **Effects:** a 10-band equalizer with presets, compressor, spatializer, stereo widener, pitch shift, and karaoke. For video: color, crop and rotate.
 - **Themes:** dark, light, or follow Windows, plus 9 accent colors.
+- **Languages:** English and Russian (Settings → General → Interface language).
+- **Updates:** checks GitHub Releases once a day and updates itself in place.
 - **Controls:** keyboard shortcuts you can rebind (also system-wide), mouse-wheel and click actions, and a control bar you choose the buttons for.
 - **Also:** record (`Shift+R`), snapshots (`Shift+S`), Chromecast, subtitle matching across a whole season, profiles, and a single instance.
 - **Windows integration:** the installer registers audio and video file types and adds "Play with Pylon" to folders.
@@ -38,6 +42,13 @@ Windows doesn't let apps set themselves as the default player. To choose Pylon, 
 
 Requires Windows 10 or 11, x64. The .NET runtime is bundled.
 
+## Updates
+
+Pylon checks [the latest release](../../releases/latest) once a day. You can turn this off in **Settings → General → Check for updates automatically**, or check yourself with **… → Check for Updates…**.
+
+- **Installed copy:** click **Update now**. Pylon downloads the new setup, installs it silently, and restarts.
+- **Portable copy:** the update opens the release page so you can download the new zip.
+
 ## Build
 
 You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The installer also needs [Inno Setup 6](https://jrsoftware.org/isdl.php).
@@ -47,6 +58,21 @@ dotnet run --project Pylon          # run from source
 .\build.ps1                         # dist\: portable zip + installer
 .\build.ps1 -Version 1.1.0
 ```
+
+### Releasing a new version
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`). Every push to `main` is also build-checked by `ci.yml`.
+
+1. Commit your changes to `main`.
+2. Tag the version and push the tag:
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+3. The workflow builds the installer and the portable zip and publishes the GitHub release. The release notes are generated from commits since the previous tag.
+4. Installed copies see the update within a day, or right away through **Check for Updates…**.
+
+The version number comes from the tag; you don't need to edit `Pylon.csproj`.
 
 Keep the checkout in a short path, such as `D:\Projects\Pylon`. libVLC 3 can't load plugins from paths longer than 260 characters, and you would lose sound.
 

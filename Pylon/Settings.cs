@@ -285,19 +285,20 @@ public static class Settings
 
     /// <summary>Filled in by MainWindow (needs the live MediaPlayer).</summary>
     public static Func<string[]>? AudioDevices;
-    public static Action<Window>? OpenHotkeys, ClearHistory, OpenEqualizer, RescanPlugins;
+    public static Action<Window>? OpenHotkeys, ClearHistory, OpenEqualizer, RescanPlugins, CheckUpdates;
 
     public static readonly List<Category> Categories =
     [
         new("General", "sliders-horizontal", "Global Settings", "App",
         [
             Sec("Appearance",
-                C("general.language", "Interface language", "English", ["English"], "More languages are coming."),
+                C("general.language", "Interface language", "System", ["System", "English", "Русский"], "Pylon restarts to switch the language."),
                 Seg("general.theme", "Theme", "Dark", "Dark", "Light", "System"),
                 new Opt { Kind = OptKind.Accent, Key = "general.accent", Label = "Accent color", Default = AccentColors[0] }),
             Sec("Startup",
                 T("general.errors", "Show confirmation and error dialogs", false, "Pop up a message when a file can't be played."),
-                T("general.updates", "Check for updates automatically", false).Off()),
+                T("general.updates", "Check for updates automatically", true, "Checks GitHub releases once a day."),
+                Act("Check for updates", "Check now", w => CheckUpdates?.Invoke(w))),
             Sec("Diagnostics",
                 T("general.dev", "Developer mode", false, "Shows developer options under Advanced."),
                 T("general.log", "Save a log", false, "Write libVLC messages to a text file."),

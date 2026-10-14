@@ -43,10 +43,10 @@ public partial class SettingsWindow : Window
         Nav.Children.Clear();
         foreach (var group in Settings.Categories.GroupBy(c => c.Group))
         {
-            Nav.Children.Add(new TextBlock { Text = group.Key, FontSize = 13, Foreground = (Brush)FindResource("FgA3"), Margin = new Thickness(10, Nav.Children.Count == 0 ? 6 : 14, 0, 6) });
+            Nav.Children.Add(new TextBlock { Text = L.T(group.Key), FontSize = 13, Foreground = (Brush)FindResource("FgA3"), Margin = new Thickness(10, Nav.Children.Count == 0 ? 6 : 14, 0, 6) });
             foreach (var c in group)
             {
-                var rb = new RadioButton { Content = c.Name, Tag = c.Glyph, Style = (Style)FindResource("NavItem"), GroupName = "nav", IsChecked = c == _current };
+                var rb = new RadioButton { Content = L.T(c.Name), Tag = c.Glyph, Style = (Style)FindResource("NavItem"), GroupName = "nav", IsChecked = c == _current };
                 rb.Checked += (_, _) =>
                 {
                     _current = c;
@@ -65,7 +65,7 @@ public partial class SettingsWindow : Window
         var q = SearchBox.Text.Trim();
         if (q.Length > 0) { RenderSearch(q); return; }
 
-        PageTitle.Text = _current.Title;
+        PageTitle.Text = L.T(_current.Title);
         foreach (var s in _current.Sections.Where(s => s.Visible?.Invoke() != false)) AddSection(s);
         if (_current.Advanced.Count > 0)
         {
@@ -75,7 +75,7 @@ public partial class SettingsWindow : Window
                 Orientation = Orientation.Horizontal,
                 Children =
                 {
-                    new TextBlock { Text = "Advanced Options", FontWeight = FontWeights.Normal, Foreground = (Brush)FindResource("FgA2"), VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = L.T("Advanced Options"), FontWeight = FontWeights.Normal, Foreground = (Brush)FindResource("FgA2"), VerticalAlignment = VerticalAlignment.Center },
                     new Icon { Glyph = _advanced ? "caret-down" : "caret-right", Width = 18, Height = 18, Margin = new Thickness(8, 0, 0, 0) },
                 },
             };
@@ -90,7 +90,7 @@ public partial class SettingsWindow : Window
         if (s.Heading.Length > 0 || prefix != null)
             Page.Children.Add(new TextBlock
             {
-                Text = prefix != null ? $"{prefix}{(s.Heading.Length > 0 ? " › " + s.Heading : "")}" : s.Heading,
+                Text = prefix != null ? $"{L.T(prefix)}{(s.Heading.Length > 0 ? " › " + L.T(s.Heading) : "")}" : L.T(s.Heading),
                 FontSize = 16, Foreground = (Brush)FindResource("FgA0"), Margin = new Thickness(0, Page.Children.Count == 0 ? 0 : 14, 0, 14),
             });
         foreach (var o in s.Opts) Page.Children.Add(OptView.Row(o));
@@ -98,18 +98,21 @@ public partial class SettingsWindow : Window
 
     void RenderSearch(string q)
     {
-        PageTitle.Text = $"Search: {q}";
+        PageTitle.Text = $"{L.T("Search")}: {q}";
         var any = false;
         foreach (var c in Settings.Categories)
             foreach (var s in c.Sections.Concat(c.Advanced))
             {
-                var hits = s.Opts.Where(o => o.Label.Contains(q, StringComparison.OrdinalIgnoreCase) || s.Heading.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+                var hits = s.Opts.Where(o => Match(o.Label) || Match(s.Heading)).ToList();
                 if (hits.Count == 0) continue;
                 any = true;
                 AddSection(s with { Opts = hits }, c.Name);
             }
-        if (!any) Page.Children.Add(new TextBlock { Text = "Nothing matches your search.", FontSize = 14, Foreground = (Brush)FindResource("FgA3") });
+        if (!any) Page.Children.Add(new TextBlock { Text = L.T("Nothing matches your search."), FontSize = 14, Foreground = (Brush)FindResource("FgA3") });
     }
+
+    /// <summary>Search finds both the English and the translated label.</summary>
+    bool Match(string text) => text.Contains(SearchBox.Text.Trim(), StringComparison.OrdinalIgnoreCase) || L.T(text).Contains(SearchBox.Text.Trim(), StringComparison.OrdinalIgnoreCase);
 
     void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
     void Drag(object sender, MouseButtonEventArgs e) { if (e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is not TextBox) DragMove(); }
