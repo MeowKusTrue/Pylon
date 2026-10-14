@@ -191,6 +191,7 @@ public partial class MainWindow : Window
         {
             _tick.Stop();
             _preview.Dispose();
+            _cast?.Dispose();
             _renderers?.Stop();
             Video.MediaPlayer = null;
             _mp.Stop();
@@ -400,6 +401,7 @@ public partial class MainWindow : Window
         _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
         _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
         _tags = string.Join("\n", Enum.GetValues<MetadataType>().Select(t => media.Meta(t)).Where(v => !string.IsNullOrEmpty(v)));
+        if (_cast != null) _cast.Title = title;
         _session?.SetTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
         TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
@@ -455,8 +457,15 @@ public partial class MainWindow : Window
         if (!autoplay) media.AddOption(":start-paused");
         foreach (var sub in Library.Data.Subtitles.GetValueOrDefault(src) ?? [])
             if (File.Exists(sub)) media.AddSlave(MediaSlaveType.Subtitle, 4, new Uri(sub).AbsoluteUri);
-        if (_recording && _recordFile != null)
-            media.AddOption($":sout=#duplicate{{dst=display,dst=std{{access=file,mux=ts,dst='{_recordFile.Replace("'", "")}'}}}}");
+        // recording and network streaming both duplicate what's playing; local playback stays on the display branch
+        var branches = new List<string>();
+        if (_recording && _recordFile != null) branches.Add($"std{{access=file,mux=ts,dst='{_recordFile.Replace("'", "")}'}}");
+        if (_cast != null) branches.Add(_cast.SoutBranch);
+        if (branches.Count > 0)
+        {
+            media.AddOption($":sout=#duplicate{{dst=display,{string.Join(",", branches.Select(b => "dst=" + b))}}}");
+            media.AddOption(":sout-keep"); // the network stream stays open from one item to the next
+        }
 
         _rateApplied = false;
         if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
@@ -1812,13 +1821,14 @@ public partial class MainWindow : Window
         Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
         Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream),
         DiscMenu(),
-        Item("Convert", "arrows-left-right-duotone", "Ctrl + R", () => { }, enabled: false, tip: "Not available in this player yet"),
+        Item("Convert", "arrows-left-right-duotone", KeyOf("convert"), OpenConverter),
         Sub("Open Recent", "clock-counter-clockwise-duotone",
             Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(Library.TitleOf(h.Key), null, null, () => PlayList([h.Key], 0)))),
         new Separator(),
         Sub($"{L.T("Profile")} ({L.T(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
         CastMenu(),
+        Item(_cast != null ? "Streaming to TV / Phone…" : "Stream to TV / Phone…", "broadcast-duotone", null, StreamToNetwork, check: _cast != null, enabled: _index >= 0 || _cast != null),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
@@ -2042,6 +2052,38 @@ public partial class MainWindow : Window
 
     void Ab_Click(object sender, RoutedEventArgs e) => ToggleAbLoop();
 
+    CastServer? _cast;
+
+    /// <summary>Starts streaming the current item to the local network (or shows the running stream) with a QR code to join.</summary>
+    public void StreamToNetwork()
+    {
+        if (_cast == null)
+        {
+            if (_index < 0) return;
+            _cast = new CastServer { Title = _title };
+            PlayAt(_index, startAt: _mp.Time, autoplay: true); // reopen with the stream branch
+        }
+        if (!DialogWindow.Cast(this, _cast)) return;
+        StopStreaming();
+    }
+
+    void StopStreaming()
+    {
+        if (_cast == null) return;
+        _cast.Dispose();
+        _cast = null;
+        if (_index >= 0) PlayAt(_index, startAt: _mp.Time, autoplay: _mp.IsPlaying);
+        Osd(L.T("Stopped streaming"));
+    }
+
+    public void OpenConverter() => DialogWindow.Convert(this, CurrentPath is { } p && !p.Contains("://") ? [p] : []);
+
+    /// <summary>The A-B range of the current file as a file of its own (or a GIF).</summary>
+    void SaveClip()
+    {
+        if (CurrentPath is { } p && _loopB > _loopA && _loopA >= 0) DialogWindow.Convert(this, [p], _loopA, _loopB);
+    }
+
     async void LoadWaveform(string src)
     {
         var peaks = await Waveform.GetAsync(src);
@@ -2066,7 +2108,7 @@ public partial class MainWindow : Window
         var items = _castDevices.Select(d => (object)Item(d.Name, "television", null, () => CastTo(d), check: _castingTo == d)).ToList();
         if (_castingTo != null) items.Add(Item("Stop Casting", null, null, () => CastTo(null)));
         if (items.Count == 0) items.Add(Item(Settings.Bool("rec.cast") ? "Searching for devices…" : "Device discovery is off", null, null, () => { }, enabled: false));
-        return Sub("Cast", "screencast-duotone", items);
+        return Sub("Chromecast", "screencast-duotone", items); // libVLC renderers; "Stream to TV / Phone" is the LAN stream
     }
 
     void Stage_RightClick(object sender, MouseButtonEventArgs e)
@@ -2090,6 +2132,7 @@ public partial class MainWindow : Window
                 Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
                 Item("Next Frame", null, KeyOf("frame"), NextFrame),
                 Item("A-B Loop", null, KeyOf("abloop"), ToggleAbLoop, check: _loopA >= 0, enabled: _index >= 0),
+                Item("Save A-B Clip…", null, null, SaveClip, enabled: _loopB > _loopA && _loopA >= 0 && CurrentPath is { } cp && !cp.Contains("://")),
                 ChaptersMenu(),
                 BookmarksMenu(),
                 SleepMenu(null),
@@ -2322,6 +2365,29 @@ public partial class MainWindow : Window
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"Next() returned after {started} ms; {SwitchTiming}{Environment.NewLine}");
                         break;
                     }
+                case "encodetest": // every preset on a 4 s clip of the playing file, into PYLON_ENC_OUT
+                    foreach (var preset in Converter.Presets)
+                    {
+                        var dst = Path.Combine(Environment.GetEnvironmentVariable("PYLON_ENC_OUT")!, "out" + Array.IndexOf(Converter.Presets, preset) + (preset.Extension.Length > 0 ? preset.Extension : Path.GetExtension(CurrentPath!)));
+                        var sw = Stopwatch.StartNew();
+                        var ok = await Converter.RunAsync(CurrentPath!, dst, preset, 1000, 5000);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"{preset.Name}: ok={ok} {(File.Exists(dst) ? new FileInfo(dst).Length : -1)} bytes {sw.ElapsedMilliseconds} ms{Environment.NewLine}");
+                    }
+                    break;
+                case "cast": // start streaming, then fetch the page and the first bytes of the stream like a phone would
+                    {
+                        _cast = new CastServer { Title = _title };
+                        PlayAt(_index, startAt: _mp.Time, autoplay: true);
+                        await Task.Delay(2500);
+                        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                        var page = await http.GetStringAsync(_cast.PageUrl);
+                        using var res = await http.GetAsync(_cast.StreamUrl, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                        var buf = new byte[188 * 20];
+                        var n = await (await res.Content.ReadAsStreamAsync()).ReadAtLeastAsync(buf, buf.Length, throwOnEndOfStream: false);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"),
+                            $"page {page.Length} chars, vlc link {page.Contains("vlc://")}; stream {(int)res.StatusCode} {res.Content.Headers.ContentType}, {n} bytes, TS sync {buf[0] == 0x47 && buf[188] == 0x47}; still playing {_mp.IsPlaying}{Environment.NewLine}");
+                        break;
+                    }
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;
@@ -2330,7 +2396,7 @@ public partial class MainWindow : Window
                     _ = Dispatcher.BeginInvoke(async () =>
                     {
                         await Task.Delay(1500);
-                        var dlg = Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible);
+                        var dlg = Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible && w != _overlayWindow);
                         Snap(dlg, outFile);
                         Application.Current.Shutdown();
                     });
@@ -2340,6 +2406,9 @@ public partial class MainWindow : Window
                         case ("onboarding", _): new OnboardingWindow(this, arg.Length > 0 ? int.Parse(arg) : 0).ShowDialog(); break;
                         case ("about", _): ShowAbout(); break;
                         case (_, "stream"): DialogWindow.NetworkStream(this); break;
+                        case (_, "convert"): DialogWindow.Convert(this, [CurrentPath!]); break;
+                        case (_, "cast"): DialogWindow.Cast(this, _cast ??= new CastServer { Title = _title }); break;
+                        case (_, "clip"): DialogWindow.Convert(this, [CurrentPath!], 12_000, 27_500); break;
                         case (_, "subs"): DialogWindow.AddSubtitles(this, CurrentPath ?? "C:\\video.mp4"); break;
                         case (_, "update"):
                             DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 1, 0), "v1.1.0",

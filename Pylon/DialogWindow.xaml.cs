@@ -29,7 +29,12 @@ public partial class DialogWindow : Window
     void Revalidate() => SaveBtn.IsEnabled = _canSave();
     void Header_MouseDown(object sender, MouseButtonEventArgs e) => DragMove();
     void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
-    void Save_Click(object sender, RoutedEventArgs e) { if (_canSave()) DialogResult = true; }
+    async void Save_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_canSave()) return;
+        if (_work != null) await _work(); // dialogs that do their job in place (Convert) and close themselves
+        else DialogResult = true;
+    }
 
     bool Run(Func<bool> canSave, params TextBox[] watch)
     {
