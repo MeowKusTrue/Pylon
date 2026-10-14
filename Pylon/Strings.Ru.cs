@@ -77,6 +77,7 @@ public static partial class Strings
         ["Real waveform on the music seek bar"] = "Настоящая волна на шкале музыки",
         ["Each track is scanned once in the background; the result is cached."] = "Каждый трек один раз анализируется в фоне, результат сохраняется.",
         ["Sleep Timer"] = "Таймер сна",
+        ["Previous"] = "Предыдущий",
         ["Sleep Timer ({0} min left)"] = "Таймер сна (осталось {0} мин)",
         ["Sleep Timer (end of item)"] = "Таймер сна (до конца файла)",
         ["{0} min"] = "{0} мин",

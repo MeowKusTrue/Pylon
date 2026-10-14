@@ -125,6 +125,7 @@ public partial class MainWindow : Window
             HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WndProc);
         };
         ContentRendered += (_, _) => Perf.Mark("first frame");
+        SetupThumbButtons();
         Loaded += (_, _) =>
         {
             Perf.Mark("loaded");
@@ -513,6 +514,7 @@ public partial class MainWindow : Window
             MiniTime.Text = len > 0 ? $"{Fmt(t)} / {Fmt(len)}" : Fmt(t);
         }
         PlayBtn.IsChecked = MiniPlay.IsChecked = _mp.IsPlaying;
+        UpdateThumbPlay();
         var spectrum = Settings.Str("ui.spectrum");
         AudioTap.Volume = _mp.Volume / 100.0;
         MusicSpectrum.Active = _mp.IsPlaying && spectrum != "Off";
@@ -1458,6 +1460,36 @@ public partial class MainWindow : Window
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
+
+    // ───────── taskbar thumbnail toolbar (open / previous / play / next under the window preview) ─────────
+
+    ThumbButtonInfo? _thumbPlay;
+    bool? _thumbPlaying;
+
+    static ImageSource? ThumbIcon(string glyph) => Pylon.Icon.Load(glyph, ThemeManager.SystemUsesLight() ? "#202020" : "#FFFFFF"); // the preview follows the Windows theme, not ours
+
+    void SetupThumbButtons()
+    {
+        ThumbButtonInfo Button(string glyph, string tip, Action click)
+        {
+            var b = new ThumbButtonInfo { ImageSource = ThumbIcon(glyph), Description = L.T(tip) };
+            b.Click += (_, _) => click();
+            return b;
+        }
+        _thumbPlay = Button("play-fill", "Play", TogglePlay);
+        TaskbarItemInfo = new TaskbarItemInfo
+        {
+            ThumbButtonInfos = { Button("plus", "Open media", OpenFiles), Button("skip-back-fill", "Previous", Previous), _thumbPlay, Button("skip-forward-fill", "Next", Next) },
+        };
+    }
+
+    void UpdateThumbPlay()
+    {
+        if (_thumbPlay == null || _thumbPlaying == _mp.IsPlaying) return;
+        _thumbPlaying = _mp.IsPlaying;
+        _thumbPlay.ImageSource = ThumbIcon(_mp.IsPlaying ? "pause-fill" : "play-fill");
+        _thumbPlay.Description = L.T(_mp.IsPlaying ? "Pause" : "Play");
+    }
 
     // ───────── sleep timer ─────────
 

@@ -80,7 +80,7 @@ public static class ThemeManager
         }
     }
 
-    static bool SystemUsesLight() =>
+    public static bool SystemUsesLight() =>
         Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 0) is int v && v == 1;
 
     static SolidColorBrush Frozen(Color c)
