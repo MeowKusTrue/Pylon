@@ -4,13 +4,20 @@
 
 <h1 align="center">Pylon</h1>
 
-<p align="center">A Windows media player built on the VLC engine (libVLC), with a redesigned VLC interface.</p>
+<p align="center">A modern, open-source media player for Windows built on the VLC engine (libVLC), with a redesigned VLC interface,
+synced lyrics, an equalizer and effects, a converter and streaming to TV.</p>
+
+<p align="center">
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=download" alt="Latest release"></a>
+  <a href="https://github.com/MeowKusTrue/Pylon/releases"><img src="https://img.shields.io/github/downloads/MeowKusTrue/Pylon/total" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MeowKusTrue/Pylon" alt="License: GPL-3.0"></a>
+</p>
 
 <p align="center"><a href="README.ru.md">Читать на русском</a></p>
 
 ![Music playback with the library sidebar](docs/screenshots/music.png)
 
-Pylon brings the community **"VLC Redesign"** Figma concept to life as a real player. Under the hood it's libVLC 3, so it plays what VLC plays: almost every audio and video format, discs, network streams.
+Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC Redesign"** to life as a real player. Under the hood it's libVLC 3, so it plays what VLC plays: almost every audio and video format, discs, network streams.
 
 ## Features
 
@@ -87,10 +94,16 @@ Icons come from [Phosphor](https://phosphoricons.com). To add one, use its name 
 ## Credits
 
 - [VLC / libVLC](https://www.videolan.org) and [LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) by VideoLAN and contributors.
-- The interface follows the community **VLC Redesign** Figma file.
+- The interface follows the **VLC Redesign** Figma file by Juxtopposed (see below).
 - [Phosphor Icons](https://phosphoricons.com), [SharpVectors](https://github.com/ElinamLLC/SharpVectors), and [radio-browser.info](https://www.radio-browser.info).
 
 See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Thanks to Juxtopposed
+
+Pylon exists because **Juxtopposed** redesigned VLC and shared the whole design openly.
+Watch how it was made — **[I Redesigned VLC After 25 Years](https://youtu.be/ERFeOgqk324)** — and see the original
+**[VLC Redesign Figma file](https://www.figma.com/community/file/1691465999134370980/vlc-redesign)**. Thank you, Juxtopposed, for the thoughtful design and for making it free to build on! 💛
 
 ## License
 

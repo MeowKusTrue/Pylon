@@ -340,8 +340,8 @@ public static partial class Strings
         ["Press keys… (Backspace clears)"] = "Нажмите клавиши… (Backspace — очистить)",
         ["A VLC redesign built on libVLC"] = "Редизайн VLC на движке libVLC",
         ["Player"] = "Версия",
-        ["Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on the community \"VLC Redesign\" Figma file. Icons: Phosphor (MIT). Radio directory: radio-browser.info."] =
-            "Свободная программа под лицензией GPL-3.0. Воспроизведение — libVLC от VideoLAN (LGPL-2.1); VLC — товарный знак VideoLAN, Pylon с ней не связан. Интерфейс основан на открытом макете «VLC Redesign» из Figma Community. Иконки: Phosphor (MIT). Каталог радио: radio-browser.info.",
+        ["Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on Juxtopposed's \"VLC Redesign\" (Figma Community) — thank you! Icons: Phosphor (MIT). Radio directory: radio-browser.info."] =
+            "Свободная программа под лицензией GPL-3.0. Воспроизведение — libVLC от VideoLAN (LGPL-2.1); VLC — товарный знак VideoLAN, Pylon с ней не связан. Интерфейс основан на «VLC Redesign» от Juxtopposed (Figma Community) — спасибо! Иконки: Phosphor (MIT). Каталог радио: radio-browser.info.",
         ["Add Subtitles"] = "Добавить субтитры",
         ["To this file"] = "К этому файлу",
         ["To this folder"] = "Ко всей папке",

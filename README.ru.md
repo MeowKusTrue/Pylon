@@ -4,13 +4,20 @@
 
 <h1 align="center">Pylon</h1>
 
-<p align="center">Медиаплеер для Windows на движке VLC (libVLC) с переосмысленным интерфейсом VLC.</p>
+<p align="center">Современный открытый медиаплеер для Windows на движке VLC (libVLC): переосмысленный интерфейс VLC,
+синхронизированные тексты песен, эквалайзер и эффекты, конвертер и трансляция на телевизор.</p>
+
+<p align="center">
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=скачать" alt="Последняя версия"></a>
+  <a href="https://github.com/MeowKusTrue/Pylon/releases"><img src="https://img.shields.io/github/downloads/MeowKusTrue/Pylon/total?label=загрузки" alt="Загрузки"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MeowKusTrue/Pylon?label=лицензия" alt="Лицензия GPL-3.0"></a>
+</p>
 
 <p align="center"><a href="README.md">Read in English</a></p>
 
 ![Воспроизведение музыки с библиотекой](docs/screenshots/music.png)
 
-Pylon воплощает в настоящий плеер открытый макет **«VLC Redesign»** из Figma Community. Внутри у него libVLC 3, поэтому он играет всё, что играет VLC: почти любые аудио- и видеоформаты, диски и сетевые потоки.
+Pylon воплощает в настоящий плеер открытый редизайн **«VLC Redesign»** от **[Juxtopposed](https://www.youtube.com/@juxtopposed)**. Внутри у него libVLC 3, поэтому он играет всё, что играет VLC: почти любые аудио- и видеоформаты, диски и сетевые потоки.
 
 ## Возможности
 
@@ -89,10 +96,16 @@ dotnet run --project Pylon          # запуск из исходников
 ## Благодарности
 
 - [VLC / libVLC](https://www.videolan.org) и [LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) — VideoLAN и сообщество.
-- Интерфейс основан на открытом макете **VLC Redesign** из Figma Community.
+- Интерфейс основан на макете **VLC Redesign** от Juxtopposed (см. ниже).
 - [Phosphor Icons](https://phosphoricons.com), [SharpVectors](https://github.com/ElinamLLC/SharpVectors), [radio-browser.info](https://www.radio-browser.info).
 
 Подробнее — в [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+## Спасибо Juxtopposed
+
+Pylon появился благодаря **Juxtopposed**: она переосмыслила VLC и открыто выложила весь макет.
+Посмотрите, как это делалось, — **[I Redesigned VLC After 25 Years](https://youtu.be/ERFeOgqk324)**, и загляните в оригинальный
+**[макет VLC Redesign в Figma](https://www.figma.com/community/file/1691465999134370980/vlc-redesign)**. Спасибо, Juxtopposed, за продуманный дизайн и за то, что им можно свободно пользоваться! 💛
 
 ## Лицензия
 

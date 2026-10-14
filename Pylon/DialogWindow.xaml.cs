@@ -290,7 +290,7 @@ public partial class DialogWindow : Window
             new TextBlock { Text = $"{L.T("Player")} {typeof(DialogWindow).Assembly.GetName().Version?.ToString(3)}  ·  libVLC {libVlcVersion.Split(' ')[0]}", FontSize = 14, Foreground = R("FgA2") },
             new TextBlock
             {
-                Text = L.T("Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on the community \"VLC Redesign\" Figma file. Icons: Phosphor (MIT). Radio directory: radio-browser.info."),
+                Text = L.T("Free software under the GPL-3.0. Playback by libVLC from VideoLAN (LGPL-2.1); VLC is a trademark of VideoLAN and Pylon is not affiliated with it. Interface based on Juxtopposed's \"VLC Redesign\" (Figma Community) — thank you! Icons: Phosphor (MIT). Radio directory: radio-browser.info."),
                 FontSize = 13, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), LineHeight = 21,
             });
         var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
