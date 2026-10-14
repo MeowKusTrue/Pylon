@@ -1,0 +1,42 @@
+<Window x:Class="Pylon.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Pylon"
+        Title="Settings" WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        Width="1080" Height="897" ShowInTaskbar="False" WindowStartupLocation="CenterOwner"
+        FontFamily="{StaticResource Inter}" Foreground="{DynamicResource FgA2}" UseLayoutRounding="True">
+    <!-- Mockup "Settings - …" (1048x865): nav column with search on the left, page on the right -->
+    <Border Margin="16,8,16,24" Background="{DynamicResource MenuBg}" CornerRadius="14" ClipToBounds="True">
+        <Border.Effect><DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/></Border.Effect>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="232"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Margin="14" MouseLeftButtonDown="Drag">
+                <Grid DockPanel.Dock="Top" Height="36" Margin="0,0,0,12">
+                    <TextBox x:Name="SearchBox" Style="{StaticResource Input}" Tag="Search" Padding="38,8,10,8" TextChanged="SearchBox_TextChanged"/>
+                    <local:Icon Glyph="magnifying-glass" Width="18" Height="18" HorizontalAlignment="Left" Margin="12,0,0,0" IsHitTestVisible="False"/>
+                </Grid>
+                <Border Background="{DynamicResource BgA4}" CornerRadius="10" Padding="6">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="Nav"/>
+                    </ScrollViewer>
+                </Border>
+            </DockPanel>
+
+            <DockPanel Grid.Column="1">
+                <Border DockPanel.Dock="Top" Background="{DynamicResource BgB1}" CornerRadius="0,14,0,0" Padding="24,0,10,0" Height="56" MouseLeftButtonDown="Drag">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Tag="x" Width="32" VerticalAlignment="Center" Click="Close_Click"/>
+                        <TextBlock x:Name="PageTitle" FontSize="16" Foreground="{DynamicResource FgA0}" VerticalAlignment="Center"/>
+                    </DockPanel>
+                </Border>
+                <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" Padding="24,20,24,24">
+                    <StackPanel x:Name="Page"/>
+                </ScrollViewer>
+            </DockPanel>
+        </Grid>
+    </Border>
+</Window>

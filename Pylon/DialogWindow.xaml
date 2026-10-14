@@ -1,0 +1,26 @@
+<Window x:Class="Pylon.DialogWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent" ResizeMode="NoResize"
+        SizeToContent="Height" Width="760" ShowInTaskbar="False" WindowStartupLocation="CenterOwner"
+        FontFamily="{StaticResource Inter}" Foreground="{DynamicResource FgA2}" UseLayoutRounding="True">
+    <!-- Card: rgba(25,25,25,.95), r14, shadow 0 8 15 #00000075; header #090909 -->
+    <Border Margin="16,8,16,24" Background="{DynamicResource MenuBg}" CornerRadius="14">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Opacity="0.46"/>
+        </Border.Effect>
+        <DockPanel>
+            <Border DockPanel.Dock="Top" Background="{DynamicResource BgB2}" CornerRadius="14,14,0,0" Padding="9" MouseLeftButtonDown="Header_MouseDown">
+                <DockPanel Margin="10,0,0,0">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Tag="x" Width="32" IsCancel="True" Click="Cancel_Click"/>
+                    <TextBlock x:Name="TitleText" FontSize="14" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+            <DockPanel DockPanel.Dock="Bottom" Margin="20">
+                <Button x:Name="CancelBtn" Content="Cancel" Style="{StaticResource SecondaryButton}" Click="Cancel_Click"/>
+                <Button x:Name="SaveBtn" Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" IsDefault="True" Click="Save_Click"/>
+            </DockPanel>
+            <ContentPresenter x:Name="Body" Margin="20,22,20,0"/>
+        </DockPanel>
+    </Border>
+</Window>

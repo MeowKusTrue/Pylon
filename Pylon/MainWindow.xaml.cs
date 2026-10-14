@@ -1,0 +1,1551 @@
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using LibVLCSharp.Shared;
+using Microsoft.Win32;
+using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
+
+namespace Pylon;
+
+public partial class MainWindow : Window
+{
+    public static readonly HashSet<string> AudioExt = new(StringComparer.OrdinalIgnoreCase)
+        { ".mp3", ".flac", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".wma", ".alac", ".ape", ".aiff", ".aif", ".mka", ".mpc", ".wv" };
+    public static readonly HashSet<string> VideoExt = new(StringComparer.OrdinalIgnoreCase)
+        { ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm", ".flv", ".m4v", ".mpg", ".mpeg", ".ts", ".m2ts", ".mts", ".3gp", ".vob", ".ogv", ".divx", ".rmvb" };
+    public static readonly string MediaFilter =
+        $"Media files|{string.Join(";", AudioExt.Concat(VideoExt).Select(x => "*" + x))}|All files|*.*";
+
+    static readonly bool SnapMode = Environment.GetEnvironmentVariable("PYLON_SNAP") != null;
+
+    MediaPlayer _mp = null!;
+    readonly List<string> _queue = [];
+    List<int> _shuffle = [];
+    int _index = -1;
+    bool _showRemaining, _fullscreen, _minimal, _mini, _isAudio, _rateApplied, _rescan, _recording, _netPresetApplying;
+    long _resumeAt;
+    string? _recordFile;
+    WindowState _restoreState;
+    Rect _restoreBounds;
+    readonly DispatcherTimer _tick, _hideTimer, _osdTimer, _clickTimer, _resumeTimer, _engineTimer;
+    int _ticks;
+    SettingsWindow? _settings;
+    readonly SeekPreviewer _preview;
+    RendererDiscoverer? _renderers;
+    readonly List<RendererItem> _castDevices = [];
+    RendererItem? _castingTo;
+    StreamWriter? _log;
+
+    public LibVLC Vlc { get; private set; } = null!;
+    public IReadOnlyList<string> Queue => _queue;
+    public int QueueIndex => _index;
+    public string? CurrentPath => _index >= 0 && _index < _queue.Count ? _queue[_index] : null;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+#if DEBUG
+        if (SnapMode)
+        {
+            // UI test run: stay off-screen and never take focus from whoever is using the PC
+            ShowActivated = false;
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = -20000;
+            Top = 0;
+        }
+#endif
+        Settings.Load();
+        Library.Load();
+        ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent"));
+        Core.Initialize();
+        CreateEngine(resume: false);
+        _preview = new SeekPreviewer(Dispatcher);
+        PreviewImage.Source = _preview.Bitmap;
+
+        Settings.AudioDevices = () => ["System default", .. _mp.AudioOutputDeviceEnum.Select(d => d.Description)];
+        Settings.OpenHotkeys = w => DialogWindow.EditHotkeys(w);
+        Settings.ClearHistory = w =>
+        {
+            if (MessageBox.Show(w, "Clear the list of recently played items?", "Pylon", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+            Library.Data.History.Clear();
+            Library.Touch();
+        };
+        Settings.OpenEqualizer = _ => { ShowEffects(video: false); Activate(); };
+        Settings.RescanPlugins = _ => { _rescan = true; ReloadEngine(); Osd("Plugins rescanned"); };
+        Settings.Changed += OnSettingChanged;
+
+        Volume.Value = Settings.Num("audio.startvol") / MaxVolume;
+        ApplyVolume();
+        Volume.Changed += _ =>
+        {
+            ApplyVolume();
+            if (_mp.Mute) SetMute(false);
+            Osd($"Volume {_mp.Volume}%");
+        };
+        Seek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
+        MiniSeek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
+        FxPanel.CloseRequested += () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); };
+
+        _tick = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => Refresh(), Dispatcher);
+        _hideTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num("ui.hideafter"))), DispatcherPriority.Normal, (_, _) => HideControls(), Dispatcher) { IsEnabled = false };
+        _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { OsdBorder.Opacity = 0; _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); TogglePlay(); }, Dispatcher) { IsEnabled = false };
+        _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { ResumeBanner.Visibility = Visibility.Collapsed; _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
+
+        SourceInitialized += (_, _) =>
+        {
+            RestoreSavedBounds();
+            HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WndProc);
+        };
+        Loaded += (_, _) =>
+        {
+            Video.MediaPlayer = _mp;
+            Topmost = Settings.Bool("ui.ontop");
+            Library.IndexMusic(Dispatcher);
+            Hotkeys.RegisterGlobal(this);
+            StartCastDiscovery();
+            ApplyPriority();
+            UpdateControlButtons();
+            SingleInstance.Listen(this);
+            var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+            if (args.Length > 0) Open(args);
+            if (Settings.Bool("ui.compact")) ToggleMiniplayer();
+#if DEBUG
+            DebugSnapshot();
+            if (SnapMode) return;
+#endif
+            if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => new OnboardingWindow(this).ShowDialog(), DispatcherPriority.ApplicationIdle);
+        };
+        Overlay.SizeChanged += (_, _) => UpdateCornerMask();
+        StateChanged += (_, _) =>
+        {
+            FitMaximized();
+            MaxBtn.Tag = WindowState == WindowState.Maximized ? "copy" : "square";
+            if (WindowState == WindowState.Minimized && Settings.Bool("ui.pausemin") && _mp.IsPlaying && !_isAudio) _mp.SetPause(true);
+        };
+        PreviewKeyDown += OnKey;
+        Drop += (_, e) =>
+        {
+            if (e.Data.GetData(DataFormats.FileDrop) is string[] files) Open(files, append: Settings.Bool("library.enqueue"));
+        };
+        Closing += (_, _) =>
+        {
+            if (!_mini && !_fullscreen) SaveBounds();
+            Sidebar.Shutdown();
+            SaveProgress();
+            Library.Save();
+            Settings.Save();
+        };
+        Closed += (_, _) =>
+        {
+            _tick.Stop();
+            _preview.Dispose();
+            _renderers?.Stop();
+            Video.MediaPlayer = null;
+            _mp.Stop();
+            _mp.Dispose();
+            Vlc.Dispose();
+            _log?.Dispose();
+            KeepAwake(false);
+        };
+    }
+
+    // ───────────────────────── engine ─────────────────────────
+
+    /// <summary>(Re)creates libVLC with the arguments the settings ask for. With resume, the current item continues where it was.</summary>
+    void CreateEngine(bool resume)
+    {
+        var args = Settings.EngineArgs();
+        if (_rescan) { args.Add("--reset-plugins-cache"); _rescan = false; }
+        if (SnapMode) args.Add("--aout=dummy"); // silent UI test runs
+        var oldMp = _mp;
+        var oldVlc = Vlc;
+        var time = oldMp?.Time ?? 0;
+        var playing = oldMp?.IsPlaying ?? false;
+
+        try { Vlc = new LibVLC(args.ToArray()); }
+        catch (VLCException)
+        {
+            // a bad "additional command line option" must not leave the player without an engine
+            Vlc = new LibVLC("--no-video-title-show", "--no-osd");
+            Osd("Some settings were rejected by libVLC");
+        }
+        HookLog();
+        _mp = new MediaPlayer(Vlc);
+        // libVLC raises events on its own thread; never call back into libVLC from there.
+        _mp.EndReached += (_, _) => Dispatcher.BeginInvoke(OnEnded);
+        _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnError);
+        _mp.Playing += (_, _) => Dispatcher.BeginInvoke(OnPlaying);
+        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(FitToVideo); };
+
+        if (oldMp != null)
+        {
+            Video.MediaPlayer = null;
+            oldMp.Stop();
+            oldMp.Dispose();
+            Task.Delay(4000).ContinueWith(_ => oldVlc.Dispose()); // after deferred Media disposals
+            Video.MediaPlayer = _mp;
+            Sidebar.Shutdown();
+            StartCastDiscovery();
+        }
+        ApplyVolume();
+        if (resume && _index >= 0) PlayAt(_index, startAt: time, autoplay: playing);
+    }
+
+    void ReloadEngine() => CreateEngine(resume: true);
+
+    void HookLog()
+    {
+        _log?.Dispose();
+        _log = null;
+        if (!Settings.Bool("general.log")) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Settings.Str("general.logfile"))!);
+            _log = new StreamWriter(Settings.Str("general.logfile"), append: true) { AutoFlush = true };
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return; }
+        var min = Settings.Str("general.loglevel") switch
+        {
+            "Everything" => LogLevel.Debug,
+            "Warnings" => Settings.Bool("general.minor") ? LogLevel.Notice : LogLevel.Warning,
+            _ => LogLevel.Error,
+        };
+        var html = Settings.Str("general.logformat") == "HTML";
+        var log = _log;
+        Vlc.Log += (_, e) =>
+        {
+            if (e.Level < min) return;
+            var line = $"{DateTime.Now:HH:mm:ss.fff} [{e.Level}] {e.Module}: {e.Message}";
+            lock (log) log.WriteLine(html ? $"<div>{System.Net.WebUtility.HtmlEncode(line)}</div>" : line);
+        };
+    }
+
+    // ───────────────────────── queue / playback API ─────────────────────────
+
+    public void Open(IEnumerable<string> items, bool append = false)
+    {
+        var deep = Settings.Str("library.subfolders") != "Only this folder";
+        // libVLC on Windows rejects "C:/x/y" — normalize every local path.
+        var expanded = items.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
+            .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList();
+        if (expanded.Count == 0) return;
+        if (append && _index >= 0) Enqueue(expanded);
+        else PlayList(expanded, 0);
+        if (Settings.Bool("ui.front")) { Activate(); Topmost = true; Topmost = Settings.Bool("ui.ontop"); }
+    }
+
+    public void PlayList(IList<string> items, int start)
+    {
+        if (items.Count == 0) return;
+        SaveProgress();
+        _queue.Clear();
+        _queue.AddRange(items);
+        BuildShuffle();
+        PlayAt(start);
+    }
+
+    public void Enqueue(IEnumerable<string> items)
+    {
+        var wasEmpty = _index < 0;
+        _queue.AddRange(items);
+        BuildShuffle();
+        if (wasEmpty) PlayAt(0);
+        else Osd("Added to queue");
+        Sidebar.Render();
+    }
+
+    public void PlayQueueAt(int i)
+    {
+        SaveProgress();
+        PlayAt(i);
+    }
+
+    public void RemoveFromQueue(int i)
+    {
+        if (i < 0 || i >= _queue.Count) return;
+        _queue.RemoveAt(i);
+        BuildShuffle();
+        if (i < _index) _index--;
+        else if (i == _index) PlayAt(Math.Min(i, _queue.Count - 1), stopAtEnd: true);
+    }
+
+    public void ClearQueue()
+    {
+        SaveProgress();
+        _mp.Stop();
+        _queue.Clear();
+        ShowIdle();
+    }
+
+    void BuildShuffle()
+    {
+        _shuffle = Enumerable.Range(0, _queue.Count).OrderBy(_ => Random.Shared.Next()).ToList();
+    }
+
+    int NextIndex(int dir)
+    {
+        if (_queue.Count == 0) return -1;
+        if (!Settings.Bool("playback.shuffle")) return _index + dir;
+        var pos = _shuffle.IndexOf(_index) + dir;
+        return pos >= 0 && pos < _shuffle.Count ? _shuffle[pos] : -1;
+    }
+
+    async void PlayAt(int i, bool stopAtEnd = false, long startAt = -1, bool? autoplay = null)
+    {
+        if (i < 0 || i >= _queue.Count)
+        {
+            if (stopAtEnd) { _mp.Stop(); ShowIdle(); }
+            return;
+        }
+        _index = i;
+        var src = _queue[i];
+        var isUrl = src.Contains("://");
+        var media = isUrl ? new Media(Vlc, new Uri(src)) : new Media(Vlc, src, FromType.FromPath);
+        try
+        {
+            var parse = isUrl ? MediaParseOptions.ParseNetwork : MediaParseOptions.ParseLocal | MediaParseOptions.FetchLocal;
+            if (Settings.Bool("library.netmeta")) parse |= MediaParseOptions.FetchNetwork;
+            await media.Parse(parse, 3000);
+            if (_index != i || _queue.ElementAtOrDefault(i) != src) return; // user moved on while we were parsing
+            StartMedia(media, src, isUrl, startAt, autoplay ?? Settings.Bool("playback.autoplay"));
+        }
+        finally { Library.DisposeLater(media); }
+    }
+
+    void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay)
+    {
+        var ext = isUrl ? "" : Path.GetExtension(src);
+        _isAudio = AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video));
+        var title = media.Meta(MetadataType.Title);
+        if (string.IsNullOrWhiteSpace(title)) title = Library.DisplayName(src);
+        var artist = media.Meta(MetadataType.Artist);
+
+        TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
+        MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
+        Title = $"{title} - Pylon";
+        var folder = isUrl ? null : Path.GetFileName(Path.GetDirectoryName(src));
+        FolderText.Text = folder;
+        FolderBtn.Visibility = string.IsNullOrEmpty(folder) ? Visibility.Collapsed : Visibility.Visible;
+
+        Seek.Waveform = MiniSeek.Waveform = _isAudio;
+        Seek.SetWaveSeed(src);
+        MiniSeek.SetWaveSeed(src);
+        MusicCaption.Text = MiniTitle.Text;
+        SetArtwork(media.Meta(MetadataType.ArtworkURL));
+
+        // continue where you left off: Never / Ask (mockup banner) / Always
+        var h = Library.HistoryOf(src);
+        var resumable = h is { Time: > 10_000, Progress: < 0.95 } && !_isAudio && Settings.Bool("privacy.position");
+        _resumeAt = 0;
+        if (startAt < 0 && resumable)
+        {
+            switch (Settings.Str("playback.resume"))
+            {
+                case "Always": startAt = h!.Time; break;
+                case "Ask": _resumeAt = h!.Time; break;
+            }
+        }
+        ResumeBanner.Visibility = _resumeAt > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ResumeText.Text = $"You’ve watched till {Fmt(_resumeAt)} already.";
+        if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
+
+        if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
+        if (!autoplay) media.AddOption(":start-paused");
+        foreach (var sub in Library.Data.Subtitles.GetValueOrDefault(src) ?? [])
+            if (File.Exists(sub)) media.AddSlave(MediaSlaveType.Subtitle, 4, new Uri(sub).AbsoluteUri);
+        if (_recording && _recordFile != null)
+            media.AddOption($":sout=#duplicate{{dst=display,dst=std{{access=file,mux=ts,dst='{_recordFile.Replace("'", "")}'}}}}");
+
+        _rateApplied = false;
+        _mp.Play(media);
+        Library.Remember(src, title, h?.Time ?? 0, media.Duration, _isAudio);
+        _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
+        if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
+        ApplyLayout();
+        UpdateControlButtons();
+        Sidebar.Render();
+    }
+
+    void OnPlaying()
+    {
+        if (!_rateApplied)
+        {
+            _rateApplied = true;
+            if (Math.Abs(Settings.Num("playback.speed") - 1) > 0.01) _mp.SetRate((float)Settings.Num("playback.speed"));
+            ApplyVideoSettings();
+            ApplyAudioSettings();
+            if (!_isAudio && Settings.Bool("video.fullscreen") && !_fullscreen && !_mini) ToggleFullscreen();
+        }
+        KeepAwake(!_isAudio && Settings.Bool("video.screensaver"));
+    }
+
+    void OnEnded()
+    {
+        SaveProgress(finished: true);
+        KeepAwake(false);
+        if (Settings.Str("playback.repeat") == "One") { PlayAt(_index, startAt: 0); return; }
+        if (Settings.Bool("playback.stopeach")) { Refresh(); return; }
+        var next = NextIndex(+1);
+        if (next < 0 && Settings.Str("playback.repeat") == "All" && _queue.Count > 0)
+        {
+            BuildShuffle();
+            next = Settings.Bool("playback.shuffle") ? _shuffle[0] : 0;
+        }
+        if (next >= 0 && next < _queue.Count) { PlayAt(next); return; }
+        switch (Settings.Str("playback.finish"))
+        {
+            case "Clear the queue": ClearQueue(); break;
+            case "Close Pylon": Close(); break;
+            default: _mp.Stop(); ShowIdle(); break;
+        }
+    }
+
+    void OnError()
+    {
+        var name = CurrentPath is { } p ? Library.DisplayName(p) : "this media";
+        if (Settings.Bool("general.errors"))
+            MessageBox.Show(this, $"Pylon can't open {name}.\nThe file may be damaged or in a format that isn't supported.", "Playback error", MessageBoxButton.OK, MessageBoxImage.Warning);
+        else Osd($"Can't open {name}");
+        var next = NextIndex(+1);
+        if (next >= 0 && next < _queue.Count) PlayAt(next);
+    }
+
+    /// <summary>Stores position for history / "Continue Watching".</summary>
+    void SaveProgress(bool finished = false)
+    {
+        if (CurrentPath is not { } path || _mp.Length <= 0) return;
+        var t = finished ? _mp.Length : _mp.Time;
+        if (t <= 0) return;
+        Library.Remember(path, TitleText.Text, t, _mp.Length, _isAudio);
+    }
+
+    void SetArtwork(string? url)
+    {
+        var bmp = url == null ? null : LoadFull(url);
+        ArtImage.Source = ArtBackdrop.Source = bmp;
+        ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    static BitmapImage? LoadFull(string url)
+    {
+        try
+        {
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.UriSource = new Uri(url);
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.DecodePixelWidth = 900;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch { return null; } // unreadable art just falls back to the placeholder
+    }
+
+    void ShowIdle()
+    {
+        _index = -1;
+        TitleText.Text = MiniTitle.Text = "Pylon";
+        Title = "Pylon";
+        FolderBtn.Visibility = Visibility.Collapsed;
+        ResumeBanner.Visibility = Visibility.Collapsed;
+        TimeText.Text = DurationText.Text = "--:--:--";
+        Seek.Value = MiniSeek.Value = 0;
+        _preview.Open(null);
+        KeepAwake(false);
+        ApplyLayout();
+        Sidebar.Render();
+    }
+
+    void Refresh()
+    {
+        long len = _mp.Length, t = Math.Max(0, _mp.Time);
+        if (len > 0)
+        {
+            if (!Seek.IsDragging) Seek.Value = (double)t / len;
+            if (!MiniSeek.IsDragging) MiniSeek.Value = (double)t / len;
+        }
+        if (_index >= 0)
+        {
+            TimeText.Text = Fmt(t);
+            DurationText.Text = len <= 0 ? "--:--:--" : _showRemaining ? "-" + Fmt(len - t) : Fmt(len);
+            MiniTime.Text = len > 0 ? $"{Fmt(t)} / {Fmt(len)}" : Fmt(t);
+        }
+        PlayBtn.IsChecked = MiniPlay.IsChecked = _mp.IsPlaying;
+        SpeedText.Text = $"{_mp.Rate:0.##}×";
+        if (++_ticks % 25 == 0 && _mp.IsPlaying) SaveProgress(); // every ~5 s
+    }
+
+    static string Fmt(long ms) => TimeSpan.FromMilliseconds(Math.Max(0, ms)).ToString(@"hh\:mm\:ss");
+
+    // ───────────────────────── actions (buttons, hotkeys, menus) ─────────────────────────
+
+    public void TogglePlay()
+    {
+        if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
+        if (_mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
+        else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
+        else _mp.SetPause(false);
+        PlayBtn.IsChecked = !_mp.IsPlaying; // optimistic; Refresh() corrects it
+    }
+
+    public void Stop()
+    {
+        SaveProgress();
+        _mp.Stop();
+        if (_recording) ToggleRecord();
+        KeepAwake(false);
+        Osd("Stopped");
+    }
+
+    public void Next() => PlayQueueAt(NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? n : (Settings.Str("playback.repeat") == "All" ? 0 : -1));
+
+    public void Previous()
+    {
+        if (_mp.Time > 3000) _mp.Time = 0; // restart first, previous on a second press
+        else PlayQueueAt(NextIndex(-1));
+    }
+
+    public void NextFrame() => _mp.NextFrame();
+
+    public void Jump(long deltaMs)
+    {
+        if (!_mp.IsSeekable) return;
+        _mp.Time = Math.Clamp(_mp.Time + deltaMs, 0, Math.Max(0, _mp.Length - 500));
+        Osd($"{Fmt(_mp.Time)} / {Fmt(_mp.Length)}");
+    }
+
+    /// <summary>Skip amounts from Settings → Controls (very short / short / medium / long).</summary>
+    public void Skip(int level, int dir) => Jump(dir * (long)(Settings.Num($"controls.skip{level}") * 1000));
+
+    public void ChangeRate(int dir)
+    {
+        var rates = new[] { 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 3f, 4f };
+        var cur = Array.FindIndex(rates, r => r >= _mp.Rate - 0.01f);
+        SetRate(dir == 0 ? 1f : rates[Math.Clamp((cur < 0 ? 3 : cur) + dir, 0, rates.Length - 1)]);
+    }
+
+    void SetRate(float rate)
+    {
+        rate = Math.Clamp(rate, 0.25f, 4f);
+        _mp.SetRate(rate);
+        Osd($"Speed {rate:0.##}×");
+    }
+
+    double MaxVolume => double.TryParse(Settings.Str("audio.maxvol").TrimEnd('%'), out var m) ? m : 125;
+
+    void ApplyVolume()
+    {
+        _mp.Volume = (int)Math.Round(Volume.Value * MaxVolume);
+        UpdateVolumeIcon();
+    }
+
+    void SetMute(bool mute)
+    {
+        _mp.Mute = mute;
+        Volume.Muted = mute;
+        UpdateVolumeIcon();
+        Osd(mute ? "Muted" : $"Volume {_mp.Volume}%");
+    }
+
+    public void ToggleMute() => SetMute(!_mp.Mute);
+
+    public void NudgeVolume(int sign)
+    {
+        Volume.Value = Math.Clamp(Volume.Value + sign * Settings.Num("audio.step") / MaxVolume, 0, 1);
+        ApplyVolume();
+        if (_mp.Mute) SetMute(false);
+        Osd($"Volume {_mp.Volume}%");
+    }
+
+    void UpdateVolumeIcon() => MuteBtn.Tag = MiniMute.Tag = _mp.Mute ? "speaker-x" : Volume.Value <= 0 ? "speaker-none" : Volume.Value < 0.4 ? "speaker-low" : "speaker-high";
+
+    public void CycleAudioTrack()
+    {
+        var tracks = _mp.AudioTrackDescription.Where(t => t.Id >= 0).ToList();
+        if (tracks.Count == 0) return;
+        var next = tracks[(tracks.FindIndex(t => t.Id == _mp.AudioTrack) + 1) % tracks.Count];
+        _mp.SetAudioTrack(next.Id);
+        Osd($"Audio: {next.Name}");
+    }
+
+    public void CycleSubtitle()
+    {
+        var tracks = _mp.SpuDescription.ToList();
+        if (tracks.Count == 0) { Osd("No subtitles"); return; }
+        var next = tracks[(tracks.FindIndex(t => t.Id == _mp.Spu) + 1) % tracks.Count];
+        _mp.SetSpu(next.Id);
+        Osd($"Subtitles: {next.Name}");
+    }
+
+    public void ShiftAudioDelay(double seconds) => Settings.Set("audio.delay", Math.Round(Settings.Num("audio.delay") + seconds, 2));
+    public void ShiftSubtitleDelay(double seconds) => Settings.Set("subs.delay", Math.Round(Settings.Num("subs.delay") + seconds, 1));
+
+    public void CycleAspect() => CycleSetting("video.aspect");
+    public void CycleCrop() => CycleSetting("video.crop");
+    public void ToggleDeinterlace() => Settings.Set("video.deint", Settings.Str("video.deint") == "On" ? "Off" : "On");
+
+    void CycleSetting(string key)
+    {
+        var opts = Settings.Find(key)!.Options;
+        var next = opts[(Array.IndexOf(opts, Settings.Str(key)) + 1) % opts.Length];
+        Settings.Set(key, next);
+        Osd($"{Settings.Find(key)!.Label}: {next}");
+    }
+
+    public void ShowPosition() => Osd($"{Fmt(_mp.Time)} / {Fmt(_mp.Length)}", 2);
+
+    public void Snapshot()
+    {
+        if (_index < 0 || _isAudio) return;
+        uint w = 0, h = 0;
+        _mp.Size(0, ref w, ref h);
+        var div = Settings.Str("video.snapsize") switch { "Half" => 2u, "Quarter" => 4u, _ => 1u };
+        var dir = Settings.Str("video.snapdir");
+        Directory.CreateDirectory(dir);
+        var ext = Settings.Str("video.snapformat").ToLowerInvariant();
+        var prefix = Settings.Str("video.snapprefix");
+        string file;
+        if (Settings.Bool("video.snapseq"))
+        {
+            var n = 1;
+            while (File.Exists(file = Path.Combine(dir, $"{prefix}{n:00000}.{ext}"))) n++;
+        }
+        else file = Path.Combine(dir, $"{prefix}{DateTime.Now:yyyy-MM-dd-HH'h'mm'm'ss's'}.{ext}");
+        var ok = _mp.TakeSnapshot(0, file, w / div, h / div);
+        if (!ok) { Osd("Couldn't take a snapshot", 2); return; }
+        if (Settings.Bool("video.snappreview")) Osd($"Snapshot saved: {Path.GetFileName(file)}", 2);
+    }
+
+    /// <summary>libVLC 3 has no record API: reopen the item at the same position with a duplicating stream output.</summary>
+    public void ToggleRecord()
+    {
+        if (_index < 0) { RecordBtn.IsChecked = false; return; }
+        var t = _mp.Time;
+        _recording = !_recording;
+        if (_recording)
+        {
+            var dir = Settings.Str("rec.dir");
+            Directory.CreateDirectory(dir);
+            var name = string.Concat(Path.GetFileNameWithoutExtension(Library.DisplayName(CurrentPath!)).Split(Path.GetInvalidFileNameChars()));
+            _recordFile = Path.Combine(dir, $"recording-{DateTime.Now:yyyy-MM-dd-HH'h'mm'm'ss's'}-{name}.ts");
+            Osd("Recording…", 2);
+        }
+        else Osd($"Saved {Path.GetFileName(_recordFile)}", 3);
+        RecordBtn.IsChecked = _recording;
+        PlayAt(_index, startAt: t, autoplay: true);
+    }
+
+    public void Escape()
+    {
+        if (_fullscreen) ToggleFullscreen();
+        else if (_minimal) ToggleMinimal();
+        else if (_mini) ToggleMiniplayer();
+        else if (FxPanel.Visibility == Visibility.Visible) { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }
+    }
+
+    public void ToggleMinimal() { _minimal = !_minimal; ApplyLayout(); }
+    public void ToggleLibrary() => ToggleSidebar();
+    public void ToggleQueue() => ToggleSidebar(LibraryPanel.Section.Queue);
+
+    public void FocusSearch()
+    {
+        if (Sidebar.Visibility != Visibility.Visible) ToggleSidebar();
+        Sidebar.OpenSearch();
+    }
+
+    public void ShowControlsNow() { if (_fullscreen) ShowControls(); }
+
+    public void ToggleEffects()
+    {
+        if (FxPanel.Visibility == Visibility.Visible) { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }
+        else ShowEffects(video: !_isAudio && _index >= 0);
+    }
+
+    void ShowEffects(bool video)
+    {
+        if (_fullscreen) ToggleFullscreen();
+        if (_mini) ToggleMiniplayer();
+        FxPanel.ShowTab(video);
+        FxPanel.Visibility = Visibility.Visible;
+        ApplyLayout();
+    }
+
+    public void OpenSettings() => OpenSettings(null);
+
+    public void OpenSettings(string? category)
+    {
+        if (_settings is { IsLoaded: true }) { if (category != null) _settings.Show(category); _settings.Activate(); return; }
+        _settings = new SettingsWindow(this, category);
+        _settings.Show();
+    }
+
+    public void ShowAbout() => DialogWindow.About(this, Vlc.Version);
+
+    // ───────────────────────── live settings ─────────────────────────
+
+    void OnSettingChanged(string key)
+    {
+        switch (key)
+        {
+            case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;
+            case "general.theme" or "general.accent": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); break;
+            case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
+            case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? Title.Replace(" - Pylon", "") : "Pylon"; break;
+            case "playback.speed": SetRate((float)Settings.Num(key)); break;
+            case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
+            case "playback.repeat": UpdateControlButtons(); break;
+            case "playback.thumbs": _preview.Open(Settings.Bool(key) && !_isAudio && CurrentPath is { } p && !p.Contains("://") ? p : null); break;
+            case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(); break;
+            case "audio.eq": ApplyEqualizer(); break;
+            case "audio.maxvol": ApplyVolume(); break;
+            case "audio.device" or "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
+            case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd($"Subtitle delay {Settings.Num(key):+0.0;-0.0;0} s"); break;
+            case "net.preset": ApplyNetworkPreset(); break;
+            case "net.file" or "net.disc" or "net.stream" or "net.live": if (!_netPresetApplying) Settings.Set("net.preset", "Custom"); break;
+            case "perf.realtime" or "perf.priority": ApplyPriority(); break;
+            case "rec.cast": StartCastDiscovery(); break;
+            case "ui.hideafter": _hideTimer.Interval = TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num(key))); break;
+        }
+        if (key.StartsWith("fx.eq.")) ApplyEqualizer();
+        if (key.StartsWith("fxv.") || key.StartsWith("video.")) ApplyVideoSettings();
+        if (key.StartsWith("ui.btn.")) UpdateControlButtons();
+        if (key.StartsWith("hotkey.") || key.StartsWith("ghotkey.")) Hotkeys.RegisterGlobal(this);
+        if (Settings.IsEngineKey(key)) { _engineTimer.Stop(); _engineTimer.Start(); } // debounce slider drags
+    }
+
+    void ApplyVideoSettings()
+    {
+        if (_index < 0 || _isAudio) return;
+        var adjust = new[] { ("fxv.hue", VideoAdjustOption.Hue), ("fxv.brightness", VideoAdjustOption.Brightness), ("fxv.contrast", VideoAdjustOption.Contrast), ("fxv.saturation", VideoAdjustOption.Saturation), ("fxv.gamma", VideoAdjustOption.Gamma) };
+        var custom = adjust.Any(a => Math.Abs(Settings.Num(a.Item1) - double.Parse(Settings.Find(a.Item1)!.Default, System.Globalization.CultureInfo.InvariantCulture)) > 0.001);
+        _mp.SetAdjustInt(VideoAdjustOption.Enable, custom ? 1 : 0);
+        if (custom) foreach (var (key, opt) in adjust) _mp.SetAdjustFloat(opt, (float)Settings.Num(key));
+
+        _mp.AspectRatio = Settings.Str("video.aspect") is var ar && ar != "Automatic" ? ar : null;
+        uint w = 0, h = 0;
+        _mp.Size(0, ref w, ref h);
+        int t = Settings.Int("fxv.crop.t"), b = Settings.Int("fxv.crop.b"), l = Settings.Int("fxv.crop.l"), r = Settings.Int("fxv.crop.r");
+        if (t + b + l + r > 0 && w > l + r && h > t + b) _mp.CropGeometry = $"{w - l - r}x{h - t - b}+{l}+{t}";
+        else _mp.CropGeometry = Settings.Str("video.crop") is var crop && crop != "None" ? crop : null;
+
+        _mp.Scale = Settings.Str("video.zoom") switch { "1:4" => 0.25f, "1:2" => 0.5f, "1:1" => 1f, "2:1" => 2f, _ => Settings.Bool("video.scale") ? 0f : 1f };
+        var mode = Settings.Str("video.deintmode") switch { "Automatic" => "blend", "Yadif (2x)" => "yadif2x", var m => m.ToLowerInvariant() };
+        switch (Settings.Str("video.deint"))
+        {
+            case "On": _mp.SetDeinterlace(mode); break;
+            case "Off": _mp.SetDeinterlace(null); break;
+        }
+    }
+
+    void ApplyAudioSettings()
+    {
+        var device = Settings.Str("audio.device");
+        if (device != "System default" && _mp.AudioOutputDeviceEnum.FirstOrDefault(d => d.Description == device) is { } dev) _mp.SetOutputDevice(dev.DeviceIdentifier);
+        var channel = Settings.Str("audio.speakers") switch
+        {
+            "Stereo" => AudioOutputChannel.Stereo, "Reverse stereo" => AudioOutputChannel.RStereo, "Left" => AudioOutputChannel.Left,
+            "Right" => AudioOutputChannel.Right, "Dolby Surround" => AudioOutputChannel.Dolbys, _ => (AudioOutputChannel?)null,
+        };
+        if (channel is { } c) _mp.SetChannel(c);
+        _mp.SetAudioDelay((long)(Settings.Num("audio.delay") * 1_000_000));
+        _mp.SetSpuDelay((long)(Settings.Num("subs.delay") * 1_000_000));
+        ApplyEqualizer();
+    }
+
+    void ApplyEqualizer()
+    {
+        using var eq = Effects.Build();
+        if (eq != null) _mp.SetEqualizer(eq);
+        else _mp.UnsetEqualizer();
+    }
+
+    void ApplyNetworkPreset()
+    {
+        var v = Settings.Str("net.preset") switch
+        {
+            "Low latency" => new[] { 100, 300, 300, 100 },
+            "Smooth" => [1000, 1000, 3000, 1000],
+            "Normal" => [300, 300, 1000, 300],
+            _ => null,
+        };
+        if (v == null) return;
+        _netPresetApplying = true;
+        Settings.Set("net.file", v[0]); Settings.Set("net.disc", v[1]); Settings.Set("net.stream", v[2]); Settings.Set("net.live", v[3]);
+        _netPresetApplying = false;
+    }
+
+    static void ApplyPriority()
+    {
+        var p = Process.GetCurrentProcess();
+        p.PriorityClass = Settings.Bool("perf.realtime") ? ProcessPriorityClass.High : Settings.Str("perf.priority") switch
+        {
+            "Below normal" => ProcessPriorityClass.BelowNormal, "Above normal" => ProcessPriorityClass.AboveNormal, "High" => ProcessPriorityClass.High, _ => ProcessPriorityClass.Normal,
+        };
+    }
+
+    /// <summary>"Resize window to fit video": Never / On first video / Always.</summary>
+    bool _fittedOnce;
+    void FitToVideo()
+    {
+        var mode = Settings.Str("ui.fit");
+        if (mode == "Never" || (mode == "On first video" && _fittedOnce) || _fullscreen || _mini || WindowState != WindowState.Normal) return;
+        uint w = 0, h = 0;
+        if (!_mp.Size(0, ref w, ref h) || w == 0 || h == 0) return;
+        _fittedOnce = true;
+        var work = SystemParameters.WorkArea;
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        double vw = Math.Min(w / dpi, work.Width * 0.9), vh = vw * h / w;
+        if (vh > work.Height * 0.85) { vh = work.Height * 0.85; vw = vh * w / h; }
+        var chromeW = ActualWidth - Stage.ActualWidth;
+        var chromeH = ActualHeight - Stage.ActualHeight;
+        Width = Math.Max(MinWidth, vw + chromeW);
+        Height = Math.Max(MinHeight, vh + chromeH);
+    }
+
+    // ───────────────────────── layout / chrome ─────────────────────────
+
+    void ApplyLayout()
+    {
+        var hasMedia = _index >= 0;
+        var visualizer = Settings.Str("audio.visualizer") != "Off";
+        bool video = hasMedia && (!_isAudio || visualizer);
+        IdleView.Visibility = hasMedia ? Visibility.Collapsed : Visibility.Visible;
+        MusicView.Visibility = hasMedia && _isAudio && !visualizer ? Visibility.Visible : Visibility.Collapsed;
+        ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
+        MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
+        MusicLayout.Margin = _mini ? new Thickness(16) : new Thickness(40, 72, 40, 24);
+        Video.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
+        ControlsBar.BorderThickness = new Thickness(0, _isAudio && hasMedia ? 1 : 0, 0, 0);
+
+        bool chromeless = _fullscreen || _minimal || _mini || !Settings.Bool("ui.decorations");
+        TopBar.Visibility = chromeless ? Visibility.Collapsed : Visibility.Visible;
+        Root.RowDefinitions[0].Height = new GridLength(chromeless ? 0 : 40);
+        if (_fullscreen || _minimal || _mini || !Settings.Bool("library.enabled")) Sidebar.Visibility = Visibility.Collapsed;
+        if (_fullscreen || _minimal || _mini) FxPanel.Visibility = Visibility.Collapsed;
+        SidebarBtn.Visibility = Settings.Bool("library.enabled") ? Visibility.Visible : Visibility.Collapsed;
+        var sidebar = Sidebar.Visibility == Visibility.Visible;
+        var fx = FxPanel.Visibility == Visibility.Visible;
+        // Video sits in a rounded 10px frame; music artwork bleeds to the window edges (per mockup).
+        Stage.Margin = _fullscreen || _mini || (hasMedia && _isAudio && !_minimal) ? new Thickness(0)
+            : _minimal ? new Thickness(10) : new Thickness(sidebar ? 0 : 10, 1, fx ? 0 : 10, 0);
+
+        // Fullscreen video: controls float over the picture inside the VideoView overlay window.
+        bool floating = _fullscreen && video && Settings.Bool("ui.fscontrols");
+        if (floating && ControlsBar.Parent == Root)
+        {
+            Root.Children.Remove(ControlsBar);
+            OverlayControlsHost.Content = ControlsBar;
+            ShowControls();
+        }
+        else if (!floating && ControlsBar.Parent != Root)
+        {
+            OverlayControlsHost.Content = null;
+            Root.Children.Add(ControlsBar);
+            OverlayControlsHost.Visibility = Visibility.Visible;
+            Overlay.Cursor = null;
+            _hideTimer.Stop();
+        }
+        OverlayControlsHost.Opacity = _fullscreen ? Settings.Num("ui.fsopacity") / 100 : 1;
+        var hideBar = (_minimal && !_fullscreen) || _mini || (_fullscreen && !Settings.Bool("ui.fscontrols"));
+        ControlsBar.Visibility = hideBar ? Visibility.Collapsed : Visibility.Visible;
+        MiniBar.Visibility = _mini ? Visibility.Visible : Visibility.Collapsed;
+        UpdateCornerMask();
+    }
+
+    void ToggleSidebar(LibraryPanel.Section? section = null)
+    {
+        if (!Settings.Bool("library.enabled")) return;
+        var show = Sidebar.Visibility != Visibility.Visible || (section != null && Sidebar.Current != section);
+        if (show && (_fullscreen || _minimal || _mini)) { _minimal = false; if (_fullscreen) ToggleFullscreen(); if (_mini) ToggleMiniplayer(); }
+        Sidebar.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show && section != null) Sidebar.Show(section.Value);
+        SidebarBtn.IsChecked = show;
+        ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
+        ApplyLayout();
+    }
+
+    void UpdateCornerMask()
+    {
+        var r = new Rect(0, 0, Overlay.ActualWidth, Overlay.ActualHeight);
+        CornerMask.Data = _fullscreen || _mini || r.IsEmpty
+            ? null
+            : new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(r), new RectangleGeometry(r, 10, 10));
+    }
+
+    void ShowControls()
+    {
+        OverlayControlsHost.Visibility = Visibility.Visible;
+        Overlay.Cursor = null;
+        _hideTimer.Stop();
+        if (Settings.Str("ui.autohide") != "Never") _hideTimer.Start();
+    }
+
+    void HideControls()
+    {
+        _hideTimer.Stop();
+        if (!_fullscreen || ControlsBar.IsMouseOver) return;
+        OverlayControlsHost.Visibility = Visibility.Hidden;
+        Overlay.Cursor = Cursors.None;
+    }
+
+    public void ToggleFullscreen()
+    {
+        if (_mini) ToggleMiniplayer();
+        _fullscreen = !_fullscreen;
+        if (_fullscreen)
+        {
+            _restoreState = WindowState;
+            _restoreBounds = RestoreBounds;
+            var b = MonitorBounds(Settings.Str("ui.fsscreen") == "Primary screen");
+            ResizeMode = ResizeMode.NoResize;
+            WindowState = WindowState.Normal;
+            Root.Margin = new Thickness(0);
+            Left = b.Left; Top = b.Top; Width = b.Width; Height = b.Height;
+        }
+        else
+        {
+            ResizeMode = ResizeMode.CanResize;
+            Left = _restoreBounds.Left; Top = _restoreBounds.Top; Width = _restoreBounds.Width; Height = _restoreBounds.Height;
+            WindowState = _restoreState;
+        }
+        ApplyLayout();
+    }
+
+    // ───────── miniplayer (mockup "Miniplayer", 431px wide) ─────────
+
+    Rect _miniRestore;
+    WindowState _miniRestoreState;
+
+    public void ToggleMiniplayer()
+    {
+        if (_fullscreen) ToggleFullscreen();
+        _mini = !_mini;
+        if (_mini)
+        {
+            _miniRestoreState = WindowState;
+            _miniRestore = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            WindowState = WindowState.Normal;
+            MinWidth = 320;
+            MinHeight = 200;
+            var stageH = _isAudio || _index < 0 ? 300 : 242;
+            Width = 431;
+            Height = stageH + 118;
+            var work = SystemParameters.WorkArea;
+            Left = work.Right - Width - 24;
+            Top = work.Bottom - Height - 24;
+            Topmost = true;
+        }
+        else
+        {
+            MinWidth = 820;
+            MinHeight = 460;
+            Left = _miniRestore.Left; Top = _miniRestore.Top; Width = _miniRestore.Width; Height = _miniRestore.Height;
+            WindowState = _miniRestoreState;
+            Topmost = Settings.Bool("ui.ontop");
+        }
+        ApplyLayout();
+    }
+
+    void FitMaximized()
+    {
+        // WindowChrome lets a maximized borderless window spill past the screen edge by the resize frame.
+        if (_fullscreen) return;
+        if (WindowState != WindowState.Maximized) { Root.Margin = new Thickness(0); return; }
+        var dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        var px = GetSystemMetrics(32 /*SM_CXFRAME*/) + GetSystemMetrics(92 /*SM_CXPADDEDBORDER*/);
+        Root.Margin = new Thickness(px / dpi);
+    }
+
+    Rect MonitorBounds(bool primary)
+    {
+        var mon = primary ? MonitorFromPoint(default, 1 /*PRIMARY*/) : MonitorFromWindow(new WindowInteropHelper(this).Handle, 2 /*NEAREST*/);
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        GetMonitorInfo(mon, ref info);
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var r = info.rcMonitor;
+        return new Rect(r.left / dpi.DpiScaleX, r.top / dpi.DpiScaleY, (r.right - r.left) / dpi.DpiScaleX, (r.bottom - r.top) / dpi.DpiScaleY);
+    }
+
+    void SaveBounds()
+    {
+        if (!Settings.Bool("ui.remember")) return;
+        var b = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        Settings.Set("app.bounds", FormattableString.Invariant($"{b.Left},{b.Top},{b.Width},{b.Height},{(WindowState == WindowState.Maximized ? 1 : 0)}"));
+    }
+
+    void RestoreSavedBounds()
+    {
+        if (SnapMode || !Settings.Bool("ui.remember")) return;
+        var p = Settings.Str("app.bounds").Split(',');
+        if (p.Length != 5 || !p.Take(4).All(x => double.TryParse(x, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))) return;
+        var v = p.Take(4).Select(x => double.Parse(x, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        var r = new Rect(v[0], v[1], v[2], v[3]);
+        if (!r.IntersectsWith(new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight))) return;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = r.Left; Top = r.Top; Width = r.Width; Height = r.Height;
+        if (p[4] == "1") WindowState = WindowState.Maximized;
+    }
+
+    void MusicLayout_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var size = Math.Max(80, Math.Min(738, Math.Min(MusicLayout.ActualWidth, MusicLayout.ActualHeight - (_mini ? 0 : 70))));
+        ArtFrame.Width = ArtFrame.Height = size;
+        ArtClip.Rect = new Rect(0, 0, size, size);
+    }
+
+    // ───────── customize player ─────────
+
+    static readonly (string Id, string Label, bool Default)[] ControlButtons =
+    [
+        ("stop", "Stop", false), ("skip15", "Skip ±15 s (music)", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
+        ("frame", "Next frame", false), ("speed", "Playback speed", false), ("snapshot", "Snapshot", false), ("record", "Record", false),
+        ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
+        ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
+    ];
+
+    static MainWindow()
+    {
+        foreach (var (id, label, def) in ControlButtons)
+            Settings.Register(new Opt { Kind = OptKind.Toggle, Key = "ui.btn." + id, Label = label, Default = def ? "true" : "false" });
+    }
+
+    static bool ButtonOn(string id) => Settings.Bool("ui.btn." + id);
+
+    void UpdateControlButtons()
+    {
+        static Visibility V(bool on) => on ? Visibility.Visible : Visibility.Collapsed;
+        StopBtn.Visibility = V(ButtonOn("stop"));
+        Back15.Visibility = Fwd15.Visibility = V(ButtonOn("skip15") && _isAudio && _index >= 0);
+        TimeText.Visibility = V(ButtonOn("time"));
+        DurationText.Visibility = V(ButtonOn("duration"));
+        FrameBtn.Visibility = V(ButtonOn("frame"));
+        SpeedBtn.Visibility = V(ButtonOn("speed"));
+        SnapBtn.Visibility = V(ButtonOn("snapshot"));
+        RecordBtn.Visibility = V(ButtonOn("record"));
+        LoopBtn.Visibility = V(ButtonOn("loop"));
+        ShuffleBtn.Visibility = V(ButtonOn("shuffle"));
+        MuteBtn.Visibility = Volume.Visibility = V(ButtonOn("volume"));
+        AudioBtn.Visibility = V(ButtonOn("audio"));
+        SubsBtn.Visibility = V(ButtonOn("subs"));
+        PSettingsBtn.Visibility = V(ButtonOn("psettings"));
+        FullBtn.Visibility = V(ButtonOn("fullscreen"));
+        ListBtn.Visibility = V(ButtonOn("queue"));
+        MiniBtn.Visibility = V(ButtonOn("mini"));
+        LoopBtn.IsChecked = Settings.Str("playback.repeat") != "Off";
+        LoopBtn.Tag = Settings.Str("playback.repeat") == "One" ? "repeat-once" : "repeat";
+        ShuffleBtn.IsChecked = Settings.Bool("playback.shuffle");
+    }
+
+    public void ShowCustomize()
+    {
+        CustomizeList.Children.Clear();
+        foreach (var (id, label, def) in ControlButtons)
+        {
+            var row = OptView.Row(Settings.Find("ui.btn." + id)!, 0);
+            row.Margin = new Thickness(0, 0, 0, 4);
+            CustomizeList.Children.Add(row);
+        }
+        CustomizePopup.IsOpen = true;
+    }
+
+    void CustomizeDone_Click(object sender, RoutedEventArgs e) => CustomizePopup.IsOpen = false;
+
+    // ───────── casting (Chromecast via libVLC renderers) ─────────
+
+    void StartCastDiscovery()
+    {
+        _renderers?.Stop();
+        _renderers?.Dispose();
+        _renderers = null;
+        _castDevices.Clear();
+        if (!Settings.Bool("rec.cast") || SnapMode) return;
+        var desc = Vlc.RendererList.FirstOrDefault();
+        if (desc.Name == null) return;
+        _renderers = new RendererDiscoverer(Vlc, desc.Name);
+        _renderers.ItemAdded += (_, e) => Dispatcher.BeginInvoke(() => _castDevices.Add(e.RendererItem));
+        _renderers.ItemDeleted += (_, e) => Dispatcher.BeginInvoke(() => _castDevices.RemoveAll(d => d.Name == e.RendererItem.Name));
+        _renderers.Start();
+    }
+
+    void CastTo(RendererItem? device)
+    {
+        _castingTo = device;
+        _mp.SetRenderer(device);
+        if (_index >= 0) PlayAt(_index, startAt: _mp.Time, autoplay: true);
+        Osd(device == null ? "Stopped casting" : $"Casting to {device.Name}", 3);
+    }
+
+    // ───────── open media ─────────
+
+    public void OpenFiles()
+    {
+        var dlg = new OpenFileDialog { Multiselect = true, Filter = MediaFilter };
+        if (dlg.ShowDialog(this) == true) Open(dlg.FileNames, append: Settings.Bool("library.enqueue"));
+    }
+
+    public void OpenFolder()
+    {
+        var dlg = new OpenFolderDialog();
+        if (dlg.ShowDialog(this) == true) Open([dlg.FolderName], append: Settings.Bool("library.enqueue"));
+    }
+
+    public void OpenStream()
+    {
+        if (DialogWindow.NetworkStream(this) is not { } r) return;
+        if (r.Playlist != null)
+        {
+            Library.Data.Playlists.Add(new Playlist { Name = r.Playlist, Items = r.Urls });
+            Library.Touch();
+        }
+        PlayList(r.Urls, 0);
+    }
+
+    public void OpenDisc() => OpenDisc("dvd", Settings.Str("playback.drive") is { Length: > 0 } d ? d : Settings.Drives().FirstOrDefault());
+
+    void OpenDisc(string scheme, string? drive)
+    {
+        if (drive == null) { Osd("No disc drive found", 2); return; }
+        PlayList([$"{scheme}:///{drive}/"], 0);
+    }
+
+    public void OpenCapture() => PlayList(["dshow://"], 0);
+
+    // ───────────────────────── input ─────────────────────────
+
+    void OnKey(object sender, KeyEventArgs e)
+    {
+        var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+        if (Keyboard.FocusedElement is TextBox && !ctrl && e.Key != Key.Escape) return; // typing in search etc.
+        switch (e.Key)
+        {
+            case Key.MediaPlayPause: TogglePlay(); e.Handled = true; return;
+            case Key.MediaNextTrack: Next(); e.Handled = true; return;
+            case Key.MediaPreviousTrack: Previous(); e.Handled = true; return;
+            case Key.MediaStop: Stop(); e.Handled = true; return;
+        }
+        var gesture = Hotkeys.FromEvent(e);
+        if (gesture is "Alt+Return" or "F11") { ToggleFullscreen(); e.Handled = true; return; }
+        if (Hotkeys.Match(gesture) is not { } action) return;
+        action.Run(this);
+        e.Handled = true;
+    }
+
+    void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        Activate(); // the overlay is a separate window; keep keyboard focus on the player
+        if (e.ClickCount == 2)
+        {
+            _clickTimer.Stop();
+            if (Settings.Str("controls.dblclick") == "Toggle fullscreen") ToggleFullscreen();
+        }
+        else if ((_minimal || _mini) && !_fullscreen)
+        {
+            try { DragMove(); } catch (InvalidOperationException) { }
+        }
+        else if (Settings.Str("controls.click") == "Play / Pause")
+        {
+            _clickTimer.Stop();
+            _clickTimer.Start(); // single click pauses, unless it turns into a double click
+        }
+    }
+
+    Point _lastMouse;
+
+    void Overlay_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_fullscreen) return;
+        // sensitivity: ignore jitter of a few pixels on Low
+        var p = e.GetPosition(Overlay);
+        var threshold = Settings.Str("ui.sensitivity") switch { "Low" => 12, "High" => 0, _ => 4 };
+        if (Math.Abs(p.X - _lastMouse.X) + Math.Abs(p.Y - _lastMouse.Y) < threshold) return;
+        _lastMouse = p;
+        ShowControls();
+    }
+
+    void Overlay_MouseWheel(object sender, MouseWheelEventArgs e) => Wheel(e.Delta, horizontal: false);
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        if (!e.Handled && Stage.IsMouseOver) Wheel(e.Delta, horizontal: false);
+        base.OnMouseWheel(e);
+    }
+
+    void Wheel(int delta, bool horizontal)
+    {
+        var sign = Math.Sign(delta) * (Settings.Bool("controls.reverse") ? -1 : 1);
+        switch (Settings.Str(horizontal ? "controls.hwheel" : "controls.wheel"))
+        {
+            case "Volume": NudgeVolume(sign); break;
+            case "Seek": Skip(0, sign); break;
+        }
+    }
+
+    IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == 0x020E /*WM_MOUSEHWHEEL*/ && Stage.IsMouseOver)
+        {
+            Wheel((short)((wParam.ToInt64() >> 16) & 0xFFFF), horizontal: true);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    // ───────────────────────── buttons ─────────────────────────
+
+    void Play_Click(object sender, RoutedEventArgs e) => TogglePlay();
+    void Prev_Click(object sender, RoutedEventArgs e) => Previous();
+    void Next_Click(object sender, RoutedEventArgs e) => Next();
+    void Stop_Click(object sender, RoutedEventArgs e) => Stop();
+    void Back15_Click(object sender, RoutedEventArgs e) => Jump(-15_000);
+    void Fwd15_Click(object sender, RoutedEventArgs e) => Jump(15_000);
+    void Frame_Click(object sender, RoutedEventArgs e) => NextFrame();
+    void Snap_Click(object sender, RoutedEventArgs e) => Snapshot();
+    void Record_Click(object sender, RoutedEventArgs e) => ToggleRecord();
+    void Loop_Click(object sender, RoutedEventArgs e) => Settings.Set("playback.repeat", Settings.Str("playback.repeat") switch { "Off" => "All", "All" => "One", _ => "Off" });
+    void Shuffle_Click(object sender, RoutedEventArgs e) => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle"));
+    void Mute_Click(object sender, RoutedEventArgs e) => ToggleMute();
+    void Mini_Click(object sender, RoutedEventArgs e) => ToggleMiniplayer();
+    void MiniQueue_Click(object sender, RoutedEventArgs e) { ToggleMiniplayer(); ToggleQueue(); }
+    void Duration_Click(object sender, RoutedEventArgs e) { _showRemaining = !_showRemaining; Refresh(); }
+    void Min_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    void Max_Click(object sender, RoutedEventArgs e) => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+    void Full_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();
+    void Close_Click(object sender, RoutedEventArgs e) => Close();
+    void SidebarBtn_Click(object sender, RoutedEventArgs e) => ToggleSidebar();
+    void ListBtn_Click(object sender, RoutedEventArgs e) => ToggleQueue();
+
+    void FolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentPath is not { } p || Path.GetDirectoryName(p) is not { } dir) return;
+        if (Sidebar.Visibility != Visibility.Visible) ToggleSidebar();
+        Sidebar.ShowFolder(dir);
+    }
+
+    void Resume_Click(object sender, RoutedEventArgs e)
+    {
+        if (_resumeAt > 0) _mp.Time = _resumeAt;
+        ResumeBanner.Visibility = Visibility.Collapsed;
+    }
+
+    void ResumeClose_Click(object sender, RoutedEventArgs e) => ResumeBanner.Visibility = Visibility.Collapsed;
+
+    void Seek_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_index < 0 || _mp.Length <= 0) return;
+        var pos = Math.Clamp(e.GetPosition(Seek).X / Math.Max(1, Seek.ActualWidth), 0, 1);
+        PreviewTime.Text = Fmt((long)(pos * _mp.Length));
+        PreviewFrame.Visibility = _preview.HasMedia ? Visibility.Visible : Visibility.Collapsed;
+        if (_preview.HasMedia) _preview.Request(pos);
+        SeekPreview.HorizontalOffset = e.GetPosition(Seek).X - (_preview.HasMedia ? 132 : 40);
+        SeekPreview.IsOpen = true;
+    }
+
+    void Seek_MouseLeave(object sender, MouseEventArgs e) => SeekPreview.IsOpen = false;
+
+    // ───────── menus (texts from the mockup's "menu" and "right-click menu") ─────────
+
+    MenuItem Item(string header, string? glyph, string? gesture, Action onClick, bool check = false, bool enabled = true, string? tip = null)
+    {
+        var mi = new MenuItem { Header = header, InputGestureText = gesture ?? "", IsChecked = check, IsEnabled = enabled, ToolTip = tip };
+        if (glyph != null) mi.Icon = new Icon { Glyph = glyph };
+        if (tip != null) ToolTipService.SetShowOnDisabled(mi, true);
+        mi.Click += (_, e) => { if (e.OriginalSource == mi) onClick(); };
+        return mi;
+    }
+
+    MenuItem Sub(string header, string? glyph, IEnumerable<object> items)
+    {
+        var mi = Item(header, glyph, null, () => { });
+        foreach (var i in items) mi.Items.Add(i);
+        if (mi.Items.Count == 0) mi.Items.Add(Item("Nothing here", null, null, () => { }, enabled: false));
+        return mi;
+    }
+
+    static string KeyOf(string id) => Hotkeys.Display(Hotkeys.Gesture(id));
+
+    void MenuBtn_Click(object sender, RoutedEventArgs e) => ShowMenu(MenuBtn, MainMenu());
+
+    object[] MainMenu() =>
+    [
+        Item("Open File(s)", "file-duotone", KeyOf("open"), OpenFiles),
+        Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
+        Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream),
+        DiscMenu(),
+        Item("Open Capture Device", "webcam-duotone", KeyOf("opencapture"), OpenCapture),
+        Item("Convert", "arrows-left-right-duotone", "Ctrl + R", () => { }, enabled: false, tip: "Not available in this player yet"),
+        Sub("Open Recent", "clock-counter-clockwise-duotone",
+            Library.Data.History.OrderByDescending(h => h.Value.LastPlayed).Take(12).Select(h => (object)Item(h.Value.Title, null, null, () => PlayList([h.Key], 0)))),
+        new Separator(),
+        Sub($"Profile ({(Settings.Str("general.profile") is { Length: > 0 } pr ? pr : "Default")})", "user-duotone",
+            Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
+        CastMenu(),
+        Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
+        Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
+        Item("Customize Player", "paint-brush-duotone", null, ShowCustomize),
+        Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
+        Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
+    ];
+
+    MenuItem DiscMenu()
+    {
+        var drives = Settings.Drives();
+        return Sub("Open Disc", "disc-duotone", drives.SelectMany(d => new object[]
+        {
+            Item($"DVD ({d})", null, null, () => OpenDisc("dvd", d)),
+            Item($"Blu-ray ({d})", null, null, () => OpenDisc("bluray", d)),
+            Item($"Audio CD ({d})", null, null, () => OpenDisc("cdda", d)),
+        }));
+    }
+
+    MenuItem CastMenu()
+    {
+        var items = _castDevices.Select(d => (object)Item(d.Name, "television", null, () => CastTo(d), check: _castingTo == d)).ToList();
+        if (_castingTo != null) items.Add(Item("Stop Casting", null, null, () => CastTo(null)));
+        if (items.Count == 0) items.Add(Item(Settings.Bool("rec.cast") ? "Searching for devices…" : "Device discovery is off", null, null, () => { }, enabled: false));
+        return Sub("Cast", "screencast-duotone", items);
+    }
+
+    void Stage_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        Activate();
+        var speeds = new[] { 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f };
+        var items = new object[]
+        {
+            Item(_mp.IsPlaying ? "Pause" : "Play", _mp.IsPlaying ? "pause" : "play", KeyOf("play"), TogglePlay),
+            Item("Stop", "stop", KeyOf("stop"), Stop, enabled: _index >= 0),
+            Item("Previous Item", "skip-back", KeyOf("prev"), Previous, enabled: _index > 0),
+            Item("Next Item", "skip-forward", KeyOf("next"), Next, enabled: _index >= 0 && _index < _queue.Count - 1),
+            Item(_recording ? "Stop Recording" : "Record", "record", KeyOf("record"), ToggleRecord, check: _recording, enabled: _index >= 0),
+            Item(_minimal ? "Show UI" : "Hide UI", "eye-slash", KeyOf("hideui"), ToggleMinimal, check: _minimal),
+            new Separator(),
+            Sub("Playback", "play-circle", [
+                .. speeds.Select(s => (object)Item(s == 1f ? "Normal speed" : $"{s:0.##}×", null, null, () => SetRate(s), check: Math.Abs(_mp.Rate - s) < 0.01)),
+                new Separator(),
+                Item("Repeat One", null, null, () => Settings.Set("playback.repeat", Settings.Str("playback.repeat") == "One" ? "Off" : "One"), check: Settings.Str("playback.repeat") == "One"),
+                Item("Repeat All", null, null, () => Settings.Set("playback.repeat", Settings.Str("playback.repeat") == "All" ? "Off" : "All"), check: Settings.Str("playback.repeat") == "All"),
+                Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
+                Item("Next Frame", null, KeyOf("frame"), NextFrame),
+            ]),
+            Sub("Video", "monitor", [
+                Item("Fullscreen", null, KeyOf("fullscreen"), ToggleFullscreen, check: _fullscreen),
+                Item("Take Snapshot", null, KeyOf("snapshot"), Snapshot, enabled: _index >= 0 && !_isAudio),
+                Sub("Aspect Ratio", null, Settings.Find("video.aspect")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.aspect", o), check: Settings.Str("video.aspect") == o))),
+                Sub("Crop", null, Settings.Find("video.crop")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.crop", o), check: Settings.Str("video.crop") == o))),
+                Sub("Deinterlace", null, new[] { "Automatic", "On", "Off" }.Select(o => (object)Item(o, null, null, () => Settings.Set("video.deint", o), check: Settings.Str("video.deint") == o))),
+            ]),
+            Sub("Audio", "speaker-high", AudioMenuItems()),
+            Sub("Subtitle", "subtitles", SubtitleMenuItems()),
+            Item("More Settings", "sliders-horizontal", KeyOf("effects"), ToggleEffects),
+            Item("Playlist", "queue", KeyOf("queue"), ToggleQueue),
+            Sub("Open Media", "folder-open", [Item("Open File(s)", null, KeyOf("open"), OpenFiles), Item("Open Folder", null, KeyOf("openfolder"), OpenFolder), Item("Open Network Stream", null, KeyOf("openstream"), OpenStream)]),
+            new Separator(),
+            Item("Quit Pylon", "sign-out", KeyOf("quit"), Close),
+        };
+        var cm = new ContextMenu { Placement = PlacementMode.MousePoint };
+        foreach (var i in items) cm.Items.Add(i);
+        cm.IsOpen = true;
+        e.Handled = true;
+    }
+
+    List<object> AudioMenuItems()
+    {
+        var items = new List<object>();
+        foreach (var t in _mp.AudioTrackDescription)
+        {
+            var id = t.Id;
+            items.Add(Item(t.Name ?? $"Track {id}", null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
+        }
+        if (items.Count == 0) items.Add(Item("No audio tracks", null, null, () => { }, enabled: false));
+        items.Add(new Separator());
+        items.Add(Sub("Output Device", null, (Settings.AudioDevices?.Invoke() ?? []).Select(d => (object)Item(d, null, null, () => Settings.Set("audio.device", d), check: Settings.Str("audio.device") == d))));
+        items.Add(Item("Mute", null, KeyOf("mute"), ToggleMute, check: _mp.Mute));
+        items.Add(Item("Audio Effects…", null, null, () => ShowEffects(video: false)));
+        return items;
+    }
+
+    List<object> SubtitleMenuItems()
+    {
+        var items = new List<object>();
+        foreach (var t in _mp.SpuDescription)
+        {
+            var id = t.Id;
+            items.Add(Item(t.Name ?? $"Track {id}", null, null, () => _mp.SetSpu(id), check: _mp.Spu == id));
+        }
+        if (items.Count > 0) items.Add(new Separator());
+        items.Add(Item("Add Subtitles…", "file-duotone", null, AddSubtitles, enabled: _index >= 0 && CurrentPath?.Contains("://") == false));
+        items.Add(Item("Subtitle Settings…", null, null, () => OpenSettings("Subtitles")));
+        return items;
+    }
+
+    void AddSubtitles()
+    {
+        if (CurrentPath is not { } video) return;
+        if (DialogWindow.AddSubtitles(this, video) is not { } map) return;
+        foreach (var (v, subs) in map) Library.Data.Subtitles[v] = subs;
+        Library.Touch();
+        foreach (var sub in map.GetValueOrDefault(video) ?? []) _mp.AddSlave(MediaSlaveType.Subtitle, new Uri(sub).AbsoluteUri, true);
+    }
+
+    void Audio_Click(object sender, RoutedEventArgs e) => ShowMenu(AudioBtn, AudioMenuItems().ToArray());
+    void Subs_Click(object sender, RoutedEventArgs e) => ShowMenu(SubsBtn, SubtitleMenuItems().ToArray());
+
+    void PSettings_Click(object sender, RoutedEventArgs e)
+    {
+        var speeds = new[] { 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f };
+        ShowMenu(PSettingsBtn, [
+            .. speeds.Select(s => (object)Item(s == 1f ? "Normal speed" : $"{s:0.##}×", null, null, () => SetRate(s), check: Math.Abs(_mp.Rate - s) < 0.01)),
+            new Separator(),
+            Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
+            Item("Playback Settings…", "gear-six-duotone", null, () => OpenSettings("Playback")),
+        ]);
+    }
+
+    /// <summary>The rail's "+" button.</summary>
+    public void ShowOpenMenu(FrameworkElement anchor) => ShowMenu(anchor,
+        Item("Open File(s)", "file-duotone", KeyOf("open"), OpenFiles),
+        Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
+        Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream));
+
+    /// <summary>Opens a styled menu above the anchor (or below / beside it when the anchor sits in the top bar / rail).</summary>
+    void ShowMenu(FrameworkElement anchor, params object[] items)
+    {
+        var below = !anchor.IsDescendantOf(ControlsBar);
+        var cm = new ContextMenu
+        {
+            PlacementTarget = anchor,
+            Placement = below ? (anchor.IsDescendantOf(Sidebar) ? PlacementMode.Right : PlacementMode.Bottom) : PlacementMode.Top,
+            VerticalOffset = below ? 6 : -4,
+        };
+        foreach (var i in items) cm.Items.Add(i);
+        cm.IsOpen = true;
+    }
+
+    void Osd(string text, double seconds = 0)
+    {
+        if (!Settings.Bool("osd.enable")) return;
+        OsdText.Text = text;
+        OsdBorder.Opacity = 1;
+        _osdTimer.Stop();
+        _osdTimer.Interval = TimeSpan.FromSeconds(seconds > 0 ? seconds : Settings.Num("osd.time"));
+        _osdTimer.Start();
+    }
+
+    static void KeepAwake(bool on) => SetThreadExecutionState(on ? 0x80000000u | 0x00000002u /*CONTINUOUS|DISPLAY_REQUIRED*/ : 0x80000000u);
+
+#if DEBUG
+    /// <summary>
+    /// Debug-only UI test hook: PYLON_SNAP=out.png renders the window to a PNG (no input injection, no focus needed) and exits.
+    /// PYLON_SNAP_DO is a ';'-separated script: library:Videos | folder:&lt;dir&gt; | row:&lt;title&gt; | menu | ctx | search:&lt;text&gt; |
+    /// set:key=value | settings:Category | fx:audio|video | mini | minimal | customize | hotkeys | onboarding | about | wait:&lt;sec&gt; | dialog:playlist|stream|subs
+    /// </summary>
+    async void DebugSnapshot()
+    {
+        if (Environment.GetEnvironmentVariable("PYLON_SNAP") is not { } outFile) return;
+        await Task.Delay(3000);
+        Window? shot = null;
+        foreach (var step in (Environment.GetEnvironmentVariable("PYLON_SNAP_DO") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var (cmd, arg) = step.IndexOf(':') is var i and > 0 ? (step[..i], step[(i + 1)..]) : (step, "");
+            switch (cmd)
+            {
+                case "library": ToggleSidebar(Enum.Parse<LibraryPanel.Section>(arg)); break;
+                case "folder": if (Sidebar.Visibility != Visibility.Visible) ToggleSidebar(); Sidebar.ShowFolder(arg); break;
+                case "search": Sidebar.OpenSearch(); ((TextBox)Sidebar.FindName("SearchBox")).Text = arg; break;
+                case "menu": MenuBtn_Click(MenuBtn, new RoutedEventArgs()); break;
+                case "ctx": Stage_RightClick(Stage, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = MouseRightButtonUpEvent }); break;
+                case "minimal": _minimal = true; ApplyLayout(); break;
+                case "mini": ToggleMiniplayer(); break;
+                case "row": Sidebar.DebugClick(arg); break;
+                case "set": Settings.Set(arg[..arg.IndexOf('=')], arg[(arg.IndexOf('=') + 1)..]); break;
+                case "fx": ShowEffects(arg == "video"); break;
+                case "customize": ShowCustomize(); break;
+                case "do": Hotkeys.Actions.First(x => x.Id == arg).Run(this); break;
+                case "preview":
+                    _preview.Request(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture));
+                    await Task.Delay(1500);
+                    PreviewTime.Text = Fmt((long)(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * _mp.Length));
+                    SeekPreview.IsOpen = true;
+                    break;
+                case "state":
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile}");
+                    break;
+                case "settings":
+                    OpenSettings(arg.Length > 0 ? arg : null);
+                    shot = _settings;
+                    break;
+                case "listsd":
+                    File.WriteAllLines(Path.ChangeExtension(outFile, ".txt"), Enum.GetValues<MediaDiscovererCategory>()
+                        .SelectMany(c => Vlc.MediaDiscoverers(c).Select(d => $"{c}: {d.Name} | {d.LongName}"))
+                        .Concat(Vlc.RendererList.Select(r => $"Renderer: {r.Name} | {r.LongName}")));
+                    break;
+                case "wait": await Task.Delay(TimeSpan.FromSeconds(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture))); break;
+                case "hotkeys" or "onboarding" or "about" or "dialog":
+                    _ = Dispatcher.BeginInvoke(async () =>
+                    {
+                        await Task.Delay(1500);
+                        var dlg = Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible);
+                        Snap(dlg, outFile);
+                        Application.Current.Shutdown();
+                    });
+                    switch (cmd, arg)
+                    {
+                        case ("hotkeys", _): DialogWindow.EditHotkeys(this); break;
+                        case ("onboarding", _): new OnboardingWindow(this, arg.Length > 0 ? int.Parse(arg) : 0).ShowDialog(); break;
+                        case ("about", _): ShowAbout(); break;
+                        case (_, "stream"): DialogWindow.NetworkStream(this); break;
+                        case (_, "subs"): DialogWindow.AddSubtitles(this, CurrentPath ?? "C:\\video.mp4"); break;
+                        default: DialogWindow.NewPlaylist(this); break;
+                    }
+                    return;
+            }
+            await Task.Delay(400);
+        }
+        await Task.Delay(1500);
+        Snap(shot ?? this, outFile);
+        // menus and popups live in their own windows: save each one next to the main shot
+        var popups = FindPopups();
+        for (int k = 0; k < popups.Count; k++) Snap(popups[k], Path.ChangeExtension(outFile, $".popup{k}.png"));
+        Application.Current.Shutdown();
+    }
+
+    static List<FrameworkElement> FindPopups() =>
+        PresentationSource.CurrentSources.OfType<HwndSource>().Select(s => s.RootVisual).OfType<FrameworkElement>()
+            .Where(v => v.GetType().Name == "PopupRoot" && v.ActualWidth > 0).ToList();
+
+    static void Snap(FrameworkElement v, string file)
+    {
+        var dpi = VisualTreeHelper.GetDpi(v);
+        var rtb = new RenderTargetBitmap((int)(v.ActualWidth * dpi.DpiScaleX), (int)(v.ActualHeight * dpi.DpiScaleY), 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+        rtb.Render(v);
+        var enc = new PngBitmapEncoder();
+        enc.Frames.Add(BitmapFrame.Create(rtb));
+        using var fs = File.Create(file);
+        enc.Save(fs);
+    }
+#endif
+
+    // ───────────────────────── native ─────────────────────────
+
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] static extern uint GetDoubleClickTime();
+    [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint flags);
+}

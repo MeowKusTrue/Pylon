@@ -1,0 +1,17 @@
+<Application x:Class="Pylon.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Startup="App_Startup">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- [0] is swapped by ThemeManager -->
+                <ResourceDictionary Source="Colors.Dark.xaml"/>
+                <ResourceDictionary Source="Theme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <SolidColorBrush x:Key="Accent" Color="#D37918"/>
+            <SolidColorBrush x:Key="AccentDim" Color="#AB6314"/>
+            <SolidColorBrush x:Key="AccentBright" Color="#371F06"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
