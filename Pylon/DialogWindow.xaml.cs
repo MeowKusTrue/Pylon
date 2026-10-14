@@ -227,7 +227,7 @@ public partial class DialogWindow : Window
     {
         var notes = new TextBox
         {
-            Text = string.IsNullOrWhiteSpace(r.Notes) ? L.T("No release notes.") : PlainNotes(r.Notes),
+            Text = string.IsNullOrWhiteSpace(r.Notes) ? L.T("No release notes.") : PlainNotes(LocalNotes(r.Notes)),
             IsReadOnly = true, TextWrapping = TextWrapping.Wrap, BorderThickness = new Thickness(0), Background = Brushes.Transparent,
             Foreground = R("FgA2"), FontSize = 14, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 320,
         };
@@ -239,6 +239,33 @@ public partial class DialogWindow : Window
         dlg.CancelBtn.Content = L.T("Later");
         dlg.SaveBtn.Content = L.T(installed && r.SetupUrl != null ? "Update now" : "Download");
         return dlg.Run(() => true);
+    }
+
+    public static void WhatsNew(Window owner, Version v, string notes)
+    {
+        var text = new TextBox
+        {
+            Text = PlainNotes(LocalNotes(notes)), IsReadOnly = true, TextWrapping = TextWrapping.Wrap, BorderThickness = new Thickness(0), Background = Brushes.Transparent,
+            Foreground = R("FgA2"), FontSize = 14, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 380,
+        };
+        var body = Stack(
+            Section(L.F("Pylon updated to {0}", v.ToString(3)), L.T("Here's what's new.")),
+            new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 10, 14, 10), Child = text },
+            Spacer(10));
+        var dlg = new DialogWindow(owner, "What's new", body) { Width = 640 };
+        dlg.CancelBtn.Visibility = Visibility.Collapsed;
+        dlg.SaveBtn.Content = L.T("Got it");
+        dlg.Run(() => true);
+    }
+
+    /// <summary>Release notes carry both languages, marked "&lt;!-- ru --&gt;" and "&lt;!-- en --&gt;": keep the one the interface uses.</summary>
+    static string LocalNotes(string md)
+    {
+        var ru = md.IndexOf("<!-- ru -->", StringComparison.Ordinal);
+        var en = md.IndexOf("<!-- en -->", StringComparison.Ordinal);
+        if (ru < 0 || en < 0) return md;
+        var (from, to) = L.Ru ? (ru, en > ru ? en : md.Length) : (en, ru > en ? ru : md.Length);
+        return md[(from + 11)..to].Trim();
     }
 
     /// <summary>GitHub release notes are Markdown: drop heading marks and emphasis, turn list items into bullets.</summary>

@@ -57,6 +57,7 @@ public static class SingleInstance
                     });
                 }
                 catch (IOException) { Thread.Sleep(200); }
+                catch (UnauthorizedAccessException) { return; } // another Pylon owns the pipe (single window turned off): this copy just doesn't listen
             }
         }) { IsBackground = true, Name = "single-instance pipe" };
         thread.Start();

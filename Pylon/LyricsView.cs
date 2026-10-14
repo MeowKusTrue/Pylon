@@ -32,7 +32,7 @@ public class LyricsView : Grid
         public readonly List<WordView> Words = [];
         public TextBlock? Plain;
         public int State = -1; // 0 future, 1 active, 2 past
-        public double GapBefore;
+        public double GapBefore, Top;
     }
 
     readonly StackPanel _stack = new();
@@ -56,19 +56,20 @@ public class LyricsView : Grid
     {
         ClipToBounds = true;
         _stack.RenderTransform = _scroll;
-        _stack.VerticalAlignment = VerticalAlignment.Top;
-        _stack.Margin = new Thickness(8, 0, 8, 0);
-        Children.Add(_stack);
+        // on a Canvas the stack keeps its full height; arranged by a Grid it was cut to the visible 550 px *before*
+        // scrolling, so every line further down came out empty
+        var canvas = new Canvas();
+        canvas.Children.Add(_stack);
+        Children.Add(canvas);
         Children.Add(_message);
         _message.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
         IsVisibleChanged += (_, _) => Hook();
         ThemeManager.Changed += () => { if (_doc != null) Show(_doc); };
-        SizeChanged += (_, _) => { _focus = -2; };
-        // a fade at the top and bottom edges instead of a hard cut (Apple's "scroll edge effect")
-        OpacityMask = new LinearGradientBrush(new GradientStopCollection
-        {
-            new(Colors.Transparent, 0), new(Colors.Black, 0.12), new(Colors.Black, 0.82), new(Colors.Transparent, 1),
-        }, 90);
+        Background = Brushes.Transparent; // the wheel works over the gaps between lines too
+        // No OpacityMask for the edge fade: WPF maps it over the content's bounds, which scroll, so it slid along and
+        // hid most lines. Each line fades by its own on-screen position instead (see Update).
+        SizeChanged += (_, _) => { _stack.Width = Math.Max(0, ActualWidth - 16); Canvas.SetLeft(_stack, 8); _focus = -2; };
+        _stack.SizeChanged += (_, _) => { foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y; _focus = -2; };
     }
 
     public void ShowMessage(string text)
@@ -103,8 +104,21 @@ public class LyricsView : Grid
             _stack.Children.Add(lv.Root);
             prev = line;
         }
-        var credit = new TextBlock { Text = L.F("Lyrics: {0}", doc.Source), FontSize = 13, Margin = new Thickness(12, 28, 12, 0) };
-        credit.SetResourceReference(TextBlock.ForegroundProperty, "FgA4");
+        var credit = new TextBlock { FontSize = 13, Margin = new Thickness(12, 28, 12, 0), TextWrapping = TextWrapping.Wrap };
+        credit.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
+        credit.Inlines.Add(new System.Windows.Documents.Run(L.T("Lyrics:") + " "));
+        var parts = doc.Credits ?? [(doc.Source, null)];
+        for (var k = 0; k < parts.Count; k++)
+        {
+            if (k > 0) credit.Inlines.Add(new System.Windows.Documents.Run("  ·  "));
+            var (text, url) = parts[k];
+            if (url == null) { credit.Inlines.Add(new System.Windows.Documents.Run(text)); continue; }
+            // the provider asks for its name and the uploader / maker to be shown and linked wherever the lyrics are
+            var link = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run(text)) { NavigateUri = new Uri(url), Cursor = Cursors.Hand };
+            link.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "FgA2");
+            link.RequestNavigate += (_, e) => { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); e.Handled = true; };
+            credit.Inlines.Add(link);
+        }
         _stack.Children.Add(credit);
         _stack.Children.Add(new Border { Height = 400 }); // room to scroll the last line up
         Motion.Set(_scroll, TranslateTransform.YProperty, 0);
@@ -199,6 +213,9 @@ public class LyricsView : Grid
 
     void Tick(object? sender, EventArgs e) => Update();
 
+    public string DebugState() => $"focus={_focus} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
+        string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{l.Top:0}/{l.Root.TranslatePoint(new Point(0, 0), _stack).Y:0} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00}"));
+
     void Update()
     {
         if (_doc == null || Clock == null) return;
@@ -227,6 +244,11 @@ public class LyricsView : Grid
             var blur = active ? 0 : Math.Min(1 + dist * 1.1, 4.5);
             if (Math.Abs(lv.Blur.Radius - blur) > 0.05) Motion.Animate(lv.Blur, BlurEffect.RadiusProperty, blur, Spring.Smooth);
             lv.Root.Effect = dist > 7 ? null : lv.Blur; // far away lines are faint anyway; skip their blur pass
+
+            // soft fade near the top and bottom edges ("scroll edge effect")
+            var y = lv.Top + _scroll.Y;
+            var edge = Math.Clamp(Math.Min(y + lv.Root.ActualHeight, ActualHeight - y) / 70, 0, 1);
+            lv.Root.Child.Opacity = edge * edge * (3 - 2 * edge);
 
             // instrumental gap before this line: breathing dots
             var inGap = lv.GapBefore >= 6 && t < l.Start && (i == 0 ? t >= 0 : t >= _lines[i - 1].Line.End) && t >= l.Start - lv.GapBefore;
@@ -258,7 +280,7 @@ public class LyricsView : Grid
             if (target != null && target.IsArrangeValid)
             {
                 var top = target.TranslatePoint(new Point(0, 0), _stack).Y;
-                Motion.Animate(_scroll, TranslateTransform.YProperty, -(top - ActualHeight * 0.3), Spring.Smooth);
+                Motion.Animate(_scroll, TranslateTransform.YProperty, -(top - ActualHeight * 0.4), Spring.Smooth); // current line a bit above the middle
             }
         }
         else if (DateTime.Now >= _manualUntil && _manualUntil != DateTime.MinValue)

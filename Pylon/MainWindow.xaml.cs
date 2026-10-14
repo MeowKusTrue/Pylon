@@ -116,7 +116,7 @@ public partial class MainWindow : Window
         _tick = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => Refresh(), Dispatcher);
         _hideTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num("ui.hideafter"))), DispatcherPriority.Normal, (_, _) => HideControls(), Dispatcher) { IsEnabled = false };
         _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { Motion.FadeOut(OsdBorder); Motion.FadeOut(StageOsd); _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
-        _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); TogglePlay(); }, Dispatcher) { IsEnabled = false };
+        _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); var wasPlaying = _mp.IsPlaying; TogglePlay(); FlashPlayState(!wasPlaying); }, Dispatcher) { IsEnabled = false };
         _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
 
@@ -159,7 +159,11 @@ public partial class MainWindow : Window
             if (SnapMode) return;
 #endif
             if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => new OnboardingWindow(this).ShowDialog(), DispatcherPriority.ApplicationIdle);
-            else if (Updater.DueForCheck()) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
+            else
+            {
+                ShowWhatsNewIfUpdated();
+                if (Settings.Bool("general.updates")) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
+            }
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
         StateChanged += (_, _) =>
@@ -219,6 +223,7 @@ public partial class MainWindow : Window
         }
         HookLog();
         _mp = new MediaPlayer(Vlc);
+        AudioChain.Apply(_mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
         // libVLC raises events on its own thread; never call back into libVLC from there.
         _mp.EndReached += (_, _) => Dispatcher.BeginInvoke(OnEnded);
         _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnError);
@@ -346,6 +351,7 @@ public partial class MainWindow : Window
             return;
         }
         _index = i;
+        _switch = Stopwatch.StartNew();
         var src = _queue[i];
         var isUrl = src.Contains("://");
         var media = isUrl ? new Media(Vlc, new Uri(src)) : new Media(Vlc, src, FromType.FromPath);
@@ -353,29 +359,67 @@ public partial class MainWindow : Window
         {
             var parse = isUrl ? MediaParseOptions.ParseNetwork : MediaParseOptions.ParseLocal | MediaParseOptions.FetchLocal;
             if (Settings.Bool("library.netmeta")) parse |= MediaParseOptions.FetchNetwork;
-            await media.Parse(parse, 3000);
+            var parsing = media.Parse(parse, 3000);
+            var ext = isUrl ? "" : Path.GetExtension(src);
+            if (!isUrl && (AudioExt.Contains(ext) || VideoExt.Contains(ext)))
+            {
+                // a known local file starts playing at once; its tags and cover fill in when parsing is done (~0.1 s)
+                _metaPending = true;
+                StartMedia(media, src, isUrl, startAt, autoplay ?? Settings.Bool("playback.autoplay"));
+                await parsing;
+                _switchParsed = _switch?.ElapsedMilliseconds ?? 0;
+                _metaPending = false;
+                if (_index != i || CurrentPath != src) return;
+                ApplyMeta(media, src, isUrl, parsed: true);
+                return;
+            }
+            await parsing;
+            _switchParsed = _switch?.ElapsedMilliseconds ?? 0;
             if (_index != i || _queue.ElementAtOrDefault(i) != src) return; // user moved on while we were parsing
             StartMedia(media, src, isUrl, startAt, autoplay ?? Settings.Bool("playback.autoplay"));
         }
         finally { Library.DisposeLater(media); }
     }
 
+    bool _metaPending;
+
+    /// <summary>Title, artist, cover and everything derived from the tags; run again once a quick-started file is parsed.</summary>
+    void ApplyMeta(Media media, string src, bool isUrl, bool parsed)
+    {
+        if (parsed && !isUrl && VideoExt.Contains(Path.GetExtension(src)) && media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video))
+        {
+            _isAudio = true; // e.g. an .mp4 that only holds music
+            Seek.Waveform = MiniSeek.Waveform = true;
+            ApplyLayout();
+            UpdateControlButtons();
+        }
+        var title = media.Meta(MetadataType.Title);
+        if (string.IsNullOrWhiteSpace(title)) title = Library.DisplayName(src);
+        var artist = media.Meta(MetadataType.Artist);
+        _title = title;
+        _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
+        _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
+        _tags = string.Join("\n", Enum.GetValues<MetadataType>().Select(t => media.Meta(t)).Where(v => !string.IsNullOrEmpty(v)));
+        _session?.SetTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
+        TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
+        MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
+        Title = $"{title} - Pylon";
+        MusicCaption.Text = MiniTitle.Text;
+        SetArtwork(media.Meta(MetadataType.ArtworkURL));
+        if (!parsed) return;
+        if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
+        _lyricsFor = null;
+        ApplyLyricsLayout(); // now with the real title and artist
+        Sidebar.Render();
+    }
+
     void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay)
     {
         var ext = isUrl ? "" : Path.GetExtension(src);
         _isAudio = AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video));
-        var title = media.Meta(MetadataType.Title);
-        if (string.IsNullOrWhiteSpace(title)) title = Library.DisplayName(src);
-        var artist = media.Meta(MetadataType.Artist);
-
-        _title = title;
-        _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
-        _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
-        _session?.SetTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
         _lyricsFor = null;
-        TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
-        MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
-        Title = $"{title} - Pylon";
+        ApplyMeta(media, src, isUrl, parsed: false);
+        var title = _title;
         var folder = isUrl ? null : Path.GetFileName(Path.GetDirectoryName(src));
         FolderText.Text = folder;
         FolderBtn.Visibility = string.IsNullOrEmpty(folder) ? Visibility.Collapsed : Visibility.Visible;
@@ -389,8 +433,6 @@ public partial class MainWindow : Window
         _view.Reset(animate: false);
         _chapters = [];
         UpdateMarks();
-        MusicCaption.Text = MiniTitle.Text;
-        SetArtwork(media.Meta(MetadataType.ArtworkURL));
 
         // continue where you left off: Never / Ask (mockup banner) / Always
         var h = Library.HistoryOf(src);
@@ -429,8 +471,13 @@ public partial class MainWindow : Window
         if (_mini) SizeMini();
     }
 
+    Stopwatch? _switch;
+    long _switchParsed, _switchStartMedia;
+    public string SwitchTiming = "";
+
     void OnPlaying()
     {
+        if (_switch != null) { SwitchTiming = $"parsed {_switchParsed} ms, StartMedia blocked the UI {_switchStartMedia} ms, playing {_switch.ElapsedMilliseconds} ms"; _switch = null; }
         LoadChapters();
         Detect360();
         if (!_rateApplied)
@@ -741,14 +788,28 @@ public partial class MainWindow : Window
         else ShowEffects(video: !_isAudio && _index >= 0);
     }
 
-    void HideEffects() => Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 32, animate: Motion.ByPointer);
+    void HideEffects()
+    {
+        SlideHost(FxHost, 0);
+        Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 24, spring: Spring.Smooth, animate: Motion.ByPointer);
+    }
+
+    /// <summary>Opens or closes a side panel's column on a spring (instant from the keyboard, like the panel itself).</summary>
+    static void SlideHost(Border host, double width)
+    {
+        if (Motion.ByPointer) Motion.Animate(host, WidthProperty, width, Spring.Smooth);
+        else Motion.Set(host, WidthProperty, width);
+    }
+
+    void PanelHost_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyStageMargin();
 
     void ShowEffects(bool video)
     {
         if (_fullscreen) ToggleFullscreen();
         if (_mini) ToggleMiniplayer();
         FxPanel.ShowTab(video);
-        Motion.In(FxPanel, dx: 32, animate: Motion.ByPointer);
+        Motion.In(FxPanel, dx: 24, animate: Motion.ByPointer);
+        SlideHost(FxHost, FxPanel.Width);
         ApplyLayout();
     }
 
@@ -819,6 +880,19 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>First start after an update: show what this version brought (the release notes on GitHub).</summary>
+    async void ShowWhatsNewIfUpdated()
+    {
+        var current = Updater.Current;
+        var last = Settings.Str("app.lastversion");
+        Settings.Set("app.lastversion", current.ToString(3));
+        if (!Version.TryParse(last, out var previous) || previous >= current) return;
+        string? notes;
+        try { notes = await Updater.NotesForAsync(current); }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException) { return; }
+        if (notes != null) DialogWindow.WhatsNew(this, current, notes);
+    }
+
     public void ShowAbout() => DialogWindow.About(this, Vlc.Version);
 
     // ───────────────────────── live settings ─────────────────────────
@@ -839,8 +913,8 @@ public partial class MainWindow : Window
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
             case "playback.repeat" or "controls.skipbtn": UpdateControlButtons(); break;
             case "playback.thumbs": _preview.Open(Settings.Bool(key) && !_isAudio && CurrentPath is { } p && !p.Contains("://") ? p : null); break;
-            case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(); break;
-            case "audio.eq": ApplyEqualizer(); break;
+            case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(edited: true); break;
+            case "audio.eq": ApplyEqualizer(edited: true); break;
             case "audio.maxvol": ApplyVolume(); break;
             case "audio.device" or "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
             case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
@@ -850,7 +924,7 @@ public partial class MainWindow : Window
             case "rec.cast": StartCastDiscovery(); break;
             case "ui.hideafter": _hideTimer.Interval = TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num(key))); break;
         }
-        if (key.StartsWith("fx.eq.")) ApplyEqualizer();
+        if (key.StartsWith("fx.eq.")) ApplyEqualizer(edited: true);
         if (key.StartsWith("fxv.") || key.StartsWith("video.")) ApplyVideoSettings();
         if (key.StartsWith("ui.btn.")) UpdateControlButtons();
         if (key.StartsWith("hotkey.") || key.StartsWith("ghotkey.")) Hotkeys.RegisterGlobal(this);
@@ -897,8 +971,17 @@ public partial class MainWindow : Window
         ApplyEqualizer();
     }
 
-    void ApplyEqualizer()
+    /// <summary>
+    /// Live equalizer through libVLC's API, unless other effects are on: that API would replace the whole filter chain
+    /// with just the equalizer, so then the chain is rebuilt with the engine instead (debounced restart, resumes in place).
+    /// </summary>
+    void ApplyEqualizer(bool edited = false)
     {
+        if (AudioChain.HasOthers)
+        {
+            if (edited) { _engineTimer.Stop(); _engineTimer.Start(); }
+            return;
+        }
         using var eq = Effects.Build();
         if (eq != null) _mp.SetEqualizer(eq);
         else _mp.UnsetEqualizer();
@@ -972,12 +1055,12 @@ public partial class MainWindow : Window
         Root.RowDefinitions[0].Height = new GridLength(chromeless ? 0 : 40);
         if (_fullscreen || _minimal || _mini || !Settings.Bool("library.enabled")) Sidebar.Visibility = Visibility.Collapsed;
         if (_fullscreen || _minimal || _mini) FxPanel.Visibility = Visibility.Collapsed;
+        if (Sidebar.Visibility != Visibility.Visible) Motion.Set(SidebarHost, WidthProperty, 0);
+        if (FxPanel.Visibility != Visibility.Visible) Motion.Set(FxHost, WidthProperty, 0);
         SidebarBtn.Visibility = Settings.Bool("library.enabled") ? Visibility.Visible : Visibility.Collapsed;
         var sidebar = Sidebar.Visibility == Visibility.Visible;
         var fx = FxPanel.Visibility == Visibility.Visible;
-        // Video sits in a rounded 10px frame; music artwork bleeds to the window edges (per mockup).
-        Stage.Margin = _fullscreen || _mini || (hasMedia && _isAudio && !_minimal) ? new Thickness(0)
-            : _minimal ? new Thickness(10) : new Thickness(sidebar ? 0 : 10, 1, fx ? 0 : 10, 0);
+        ApplyStageMargin();
 
         // Fullscreen video: controls float over the picture inside the VideoView overlay window.
         bool floating = _fullscreen && video && Settings.Bool("ui.fscontrols");
@@ -1037,6 +1120,7 @@ public partial class MainWindow : Window
 
     string? _lyricsFor;
     (string Title, string? Artist, string? Album, double Duration) _track;
+    string _tags = "";
     long _clockMs, _clockStamp;
 
     void Lyrics_Click(object sender, RoutedEventArgs e) => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics"));
@@ -1052,7 +1136,7 @@ public partial class MainWindow : Window
             else LyricsPane.Visibility = Visibility.Collapsed;
             Dispatcher.BeginInvoke(() => MusicLayout_SizeChanged(MusicLayout, null!), DispatcherPriority.Loaded);
         }
-        if (on && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks
+        if (on && !_metaPending && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks, with real tags
     }
 
     async void LoadLyrics(string path)
@@ -1065,7 +1149,7 @@ public partial class MainWindow : Window
             LyricsPane.Seek += s => { if (_mp.IsSeekable) _mp.Time = (long)(s * 1000); };
         }
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
-        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration);
+        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration, _tags);
         if (CurrentPath != path) return;
         if (doc != null) LyricsPane.Show(doc);
         else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
@@ -1154,12 +1238,25 @@ public partial class MainWindow : Window
         if (!Settings.Bool("library.enabled")) return;
         var show = !Motion.IsShown(Sidebar) || (section != null && Sidebar.Current != section);
         if (show && (_fullscreen || _minimal || _mini)) { _minimal = false; if (_fullscreen) ToggleFullscreen(); if (_mini) ToggleMiniplayer(); }
-        if (show) Motion.In(Sidebar, dx: -32, animate: Motion.ByPointer);
+        if (show) Motion.In(Sidebar, dx: -24, animate: Motion.ByPointer);
         if (show && section != null) Sidebar.Show(section.Value);
         SidebarBtn.IsChecked = show;
         ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
+        SlideHost(SidebarHost, show ? Sidebar.Width : 0);
         if (show) ApplyLayout();
-        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -32, animate: Motion.ByPointer);
+        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -24, spring: Spring.Smooth, animate: Motion.ByPointer);
+    }
+
+    /// <summary>
+    /// Video sits in a rounded 10px frame; music artwork bleeds to the window edges (per mockup). The 10px gap shrinks as a
+    /// side panel's column grows, so opening one glides instead of jumping by 10px.
+    /// </summary>
+    void ApplyStageMargin()
+    {
+        var hasMedia = _index >= 0;
+        double Edge(Border host) => Math.Max(0, 10 - (double.IsNaN(host.Width) ? 0 : host.Width));
+        Stage.Margin = _fullscreen || _mini || (hasMedia && _isAudio && !_minimal) ? new Thickness(0)
+            : _minimal ? new Thickness(10) : new Thickness(Edge(SidebarHost), 1, Edge(FxHost), 0);
     }
 
     double _radius = 10;
@@ -1278,6 +1375,13 @@ public partial class MainWindow : Window
     /// <summary>Without the top bar, the stage and the mini controls move the window.</summary>
     void DragArea_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        // a click on the music view plays / pauses like a click on video does (not on lyrics lines, which seek)
+        if (MusicView.IsVisible && !_mini && !_minimal && e.ChangedButton == MouseButton.Left && Settings.Str("controls.click") == "Play / Pause"
+            && !(e.OriginalSource is DependencyObject src && (FindAncestor<LyricsView>(src) != null || FindAncestor<ButtonBase>(src) != null)))
+        {
+            _clickTimer.Stop();
+            if (e.ClickCount == 1) _clickTimer.Start();
+        }
         if (e.ClickCount == 2 && Video.IsVisible && !_mini && e.ChangedButton == MouseButton.Left && Settings.Str("controls.dblclick") == "Toggle fullscreen")
         {
             ToggleFullscreen(); // double click on the blurred area around the video
@@ -2098,6 +2202,23 @@ public partial class MainWindow : Window
         _osdTimer.Start();
     }
 
+    int _flashGen;
+
+    /// <summary>A round play / pause badge pops in the middle of the picture and dissolves while growing a little (YouTube / iOS).</summary>
+    async void FlashPlayState(bool playing)
+    {
+        var (flash, icon) = Video.IsVisible ? (VideoFlash, VideoFlashIcon) : (StageFlash, StageFlashIcon);
+        icon.Glyph = playing ? "play-fill" : "pause-fill";
+        icon.Margin = new Thickness(playing ? 4 : 0, 0, 0, 0); // optical center of the triangle
+        var gen = ++_flashGen;
+        Motion.Pop(flash, scale: 0.72, spring: Spring.Snappy);
+        await Task.Delay(420);
+        if (gen != _flashGen || flash.RenderTransform is not TransformGroup { Children: [ScaleTransform s, ..] }) return;
+        Motion.Animate(flash, OpacityProperty, 0, Spring.Smooth);
+        Motion.Animate(s, ScaleTransform.ScaleXProperty, 1.25, Spring.Smooth);
+        Motion.Animate(s, ScaleTransform.ScaleYProperty, 1.25, Spring.Smooth);
+    }
+
     Window? _overlayWindow;
 
     /// <summary>
@@ -2183,6 +2304,27 @@ public partial class MainWindow : Window
                             $"backwards={steps.Count(d => d < -0.5)} zeroSteps={steps.Count(d => Math.Abs(d) < 0.5)} min={steps.Min():0.0}ms max={steps.Max():0.0}ms avg={steps.Average():0.0}ms{Environment.NewLine}");
                         break;
                     }
+                case "spicytest":
+                    try
+                    {
+                        var json = await SpicyLyrics.FetchAsync(CurrentPath!, _track.Title, _track.Artist ?? "", _track.Duration, _tags);
+                        var parsed = json == null ? null : SpicyLyrics.Parse(json);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"tags={_tags.Replace('\n', '|')} json={(json == null ? "null" : json.Length.ToString())} lines={parsed?.Lines.Length} credits={string.Join(", ", parsed?.Credits?.Select(c => c.Text) ?? [])}{Environment.NewLine}");
+                    }
+                    catch (Exception ex) { File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), "spicy failed: " + ex + Environment.NewLine); }
+                    break;
+                case "switch":
+                    {
+                        var t0 = Stopwatch.StartNew();
+                        Next();
+                        var started = t0.ElapsedMilliseconds;
+                        await Task.Delay(2500);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"Next() returned after {started} ms; {SwitchTiming}{Environment.NewLine}");
+                        break;
+                    }
+                case "lyricsstate":
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
+                    break;
                 case "wait": await Task.Delay(TimeSpan.FromSeconds(double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture))); break;
                 case "hotkeys" or "onboarding" or "about" or "dialog":
                     _ = Dispatcher.BeginInvoke(async () =>

@@ -123,6 +123,20 @@ public static class Settings
     static string Inv(double d) => d.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>Everything the settings need from libVLC at creation time.</summary>
+    /// <summary>The audio filters the settings ask for (equalizer excluded), in chain order. Applied by <see cref="AudioChain"/>.</summary>
+    public static List<string> AudioFilterNames()
+    {
+        var f = new List<string>();
+        if (Bool("audio.normalize")) f.Add("normvol");
+        if (Bool("audio.compressor") || Bool("audio.night")) f.Add("compressor");
+        if (Bool("audio.spatial")) f.Add(Str("audio.spatialmode") == "Room spatializer" ? "spatializer" : "headphone");
+        if (Bool("audio.widen")) f.Add("stereo_widen");
+        if (Num("audio.pitch") != 0) f.Add("scaletempo_pitch");
+        if (Bool("audio.chorus")) f.Add("chorus_flanger");
+        if (Bool("audio.karaoke")) f.Add("karaoke");
+        return f;
+    }
+
     public static List<string> EngineArgs()
     {
         var a = new List<string> { "--no-video-title-show", "--no-osd", "--no-snapshot-preview" };
@@ -184,7 +198,7 @@ public static class Settings
             Add($"--stereowiden-delay={Inv(Num("fx.widen.delay"))}"); Add($"--stereowiden-feedback={Inv(Num("fx.widen.feedback"))}");
             Add($"--stereowiden-crossfeed={Inv(Num("fx.widen.crossfeed"))}"); Add($"--stereowiden-dry-mix={Inv(Num("fx.widen.dry"))}");
         }
-        if (Num("audio.pitch") != 0) { filters.Add("scaletempo_pitch"); Add($"--pitch-shift={Inv(Num("audio.pitch"))}"); }
+        if (Num("audio.pitch") != 0) { filters.Add("scaletempo_pitch"); Add($"--pitch-shift={Inv(Num("audio.pitch"))}"); Add("--no-audio-time-stretch"); } // the pitch filter stretches time itself
         if (Bool("audio.chorus")) filters.Add("chorus_flanger");
         if (Bool("audio.karaoke")) filters.Add("karaoke");
         if (filters.Count > 0) Add("--audio-filter=" + string.Join(":", filters));
@@ -366,6 +380,11 @@ public static class Settings
                 Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
                 T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
                 T("lyrics.online", "Find lyrics online", true, "Searches lrclib.net by artist and title when a track has no .ttml or .lrc file next to it."),
+                new Opt { Kind = OptKind.Text, Key = "lyrics.spicykey", Label = "Spicy Lyrics API key", ButtonText = "sl_pk_… / sl_sk_…",
+                          Info = "Word-synced lyrics from Spicy Lyrics. Create a key at developers.spicylyrics.org. Stored only on this computer." },
+                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifyid", Label = "Spotify client ID", ButtonText = "developer.spotify.com",
+                          Info = "Spicy Lyrics finds songs by their Spotify id. Create a free app at developer.spotify.com to let Pylon look it up (not needed when the file's tags carry a Spotify link)." },
+                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" },
                 T("ui.browser", "Show the file browser inside the open dialog", true).Off(),
                 T("ui.appicon", "Allow the app icon to change", true).Off(),
                 S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),

@@ -47,6 +47,13 @@ public static class Updater
             root.GetProperty("html_url").GetString() ?? $"https://github.com/{Repo}/releases");
     }
 
+    /// <summary>Release notes of a published version (null when it has none).</summary>
+    public static async Task<string?> NotesForAsync(Version v)
+    {
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/tags/v{v.ToString(3)}"));
+        return doc.RootElement.TryGetProperty("body", out var b) && b.GetString() is { Length: > 0 } s ? s : null;
+    }
+
     static Version Normalize(Version v) => new(v.Major, Math.Max(0, v.Minor), Math.Max(0, v.Build));
 
     /// <summary>Daily background check, when enabled in settings.</summary>

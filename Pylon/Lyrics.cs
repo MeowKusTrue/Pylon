@@ -15,15 +15,17 @@ public record Syllable(double Start, double End, string Text, bool Joined);
 /// <summary>One lyric line; <see cref="Words"/> is empty for line-synced lyrics. <see cref="Opposite"/>: second singer (right-aligned).</summary>
 public record LyricLine(double Start, double End, string Text, Syllable[] Words, bool Opposite, Syllable[] Background);
 
-public record LyricsDoc(LyricLine[] Lines, bool Synced, string Source);
+/// <summary><see cref="Credits"/>: attribution to show with the lyrics (text, optional link).</summary>
+public record LyricsDoc(LyricLine[] Lines, bool Synced, string Source, IReadOnlyList<(string Text, string? Url)>? Credits = null);
 
-/// <summary>Finds lyrics for a track: a .ttml / .lrc next to the file, then the cache, then LRCLIB (if allowed).</summary>
+/// <summary>Finds lyrics for a track: a .ttml / .lrc next to the file, then the cache, then Spicy Lyrics (with a key), then LRCLIB.</summary>
 public static class Lyrics
 {
     static readonly string CacheDir = Path.Combine(Library.Dir, "lyrics");
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10), DefaultRequestHeaders = { { "User-Agent", "Pylon (https://github.com/MeowKusTrue/Pylon)" } } };
 
-    public static async Task<LyricsDoc?> FindAsync(string path, string title, string? artist, string? album, double duration)
+    /// <param name="tags">All of the file's text tags joined, searched for a Spotify link.</param>
+    public static async Task<LyricsDoc?> FindAsync(string path, string title, string? artist, string? album, double duration, string tags = "")
     {
         if (!path.Contains("://"))
         {
@@ -37,6 +39,22 @@ public static class Lyrics
         if (string.IsNullOrWhiteSpace(title)) return null;
         var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{artist}|{title}|{album}|{Math.Round(duration)}".ToLowerInvariant())))[..20];
         var cached = Path.Combine(CacheDir, key + ".lrc");
+        var spicyCache = Path.Combine(CacheDir, key + ".spicy.json");
+        var spicyMiss = Path.Combine(CacheDir, key + ".spicy.none"); // Spicy has nothing for it: don't ask again
+        if (File.Exists(spicyCache) && SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy;
+        // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
+        if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !string.IsNullOrWhiteSpace(artist) && !File.Exists(spicyMiss))
+            try
+            {
+                Directory.CreateDirectory(CacheDir);
+                if (await SpicyLyrics.FetchAsync(path, title, artist!, duration, tags) is { } json && SpicyLyrics.Parse(json) is { } doc)
+                {
+                    await File.WriteAllTextAsync(spicyCache, json);
+                    return doc;
+                }
+                await File.WriteAllTextAsync(spicyMiss, "");
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or KeyNotFoundException or InvalidOperationException) { } // offline etc.: LRCLIB below, retry next time
         if (File.Exists(cached)) return Parse(await File.ReadAllTextAsync(cached), "LRCLIB");
         if (!Settings.Bool("lyrics.online") || string.IsNullOrWhiteSpace(artist)) return null;
         try

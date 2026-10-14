@@ -34,4 +34,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = Get-ChildItem dist -File | ForEach-Object FullName
-          gh release create $env:GITHUB_REF_NAME @files --title "Pylon $($env:GITHUB_REF_NAME -replace '^v', '')" --generate-notes
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          # notes = this version's section of CHANGELOG.md (both languages; the app picks one), else GitHub's generated list
+          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $([regex]::Escape($version))\s*\r?\n(.*?)(?=^## |\z)")
+          if ($section.Success) {
+            Set-Content notes.md $section.Groups[1].Value.Trim() -Encoding utf8
+            gh release create $env:GITHUB_REF_NAME @files --title "Pylon $version" --notes-file notes.md
+          } else {
+            gh release create $env:GITHUB_REF_NAME @files --title "Pylon $version" --generate-notes
+          }

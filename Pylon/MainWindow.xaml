@@ -55,8 +55,13 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <local:LibraryPanel x:Name="Sidebar" Visibility="Collapsed"/>
-            <local:EffectsPanel x:Name="FxPanel" Grid.Column="2" Visibility="Collapsed"/>
+            <!-- the panels sit in clipping hosts whose width springs open and shut, so the stage glides instead of jumping -->
+            <Border x:Name="SidebarHost" ClipToBounds="True" Width="0" SizeChanged="PanelHost_SizeChanged">
+                <local:LibraryPanel x:Name="Sidebar" Visibility="Collapsed" HorizontalAlignment="Right"/>
+            </Border>
+            <Border x:Name="FxHost" Grid.Column="2" ClipToBounds="True" Width="0" SizeChanged="PanelHost_SizeChanged">
+                <local:EffectsPanel x:Name="FxPanel" Visibility="Collapsed" HorizontalAlignment="Left"/>
+            </Border>
 
             <Grid x:Name="Stage" Grid.Column="1" Margin="10,1,10,0" MouseRightButtonUp="Stage_RightClick" MouseLeftButtonDown="DragArea_MouseDown" SizeChanged="Stage_SizeChanged">
                 <!-- Idle / drop target -->
@@ -103,6 +108,12 @@
                     <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
                 </Border>
 
+                <!-- play / pause flash after a click on the music view -->
+                <Border x:Name="StageFlash" Width="88" Height="88" CornerRadius="44" Background="{DynamicResource MenuBg}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Opacity="0" IsHitTestVisible="False" Panel.ZIndex="5">
+                    <local:Icon x:Name="StageFlashIcon" Glyph="play-fill" Width="38" Height="38" Tint="@FgA0"/>
+                </Border>
+
                 <!-- Around the video: its own frames, blurred (sized to the picture, the video sits on top) -->
                 <Grid x:Name="VideoBackdrop" Visibility="Collapsed">
                     <Rectangle Fill="{DynamicResource StageBg}"/>
@@ -115,6 +126,11 @@
                           MouseLeftButtonDown="Overlay_MouseDown" MouseLeftButtonUp="Overlay_MouseUp" MouseMove="Overlay_MouseMove" MouseWheel="Overlay_MouseWheel" MouseRightButtonUp="Stage_RightClick">
                         <local:Spectrum x:Name="VideoSpectrum" Height="90" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.45"/>
                         <Path x:Name="CornerMask" Fill="{DynamicResource BgA3}" IsHitTestVisible="False"/>
+                        <!-- play / pause flash after a click on the picture -->
+                        <Border x:Name="VideoFlash" Width="88" Height="88" CornerRadius="44" Background="{DynamicResource MenuBg}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Opacity="0" IsHitTestVisible="False">
+                    <local:Icon x:Name="VideoFlashIcon" Glyph="play-fill" Width="38" Height="38" Tint="@FgA0"/>
+                </Border>
                         <Border x:Name="OsdBorder" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6"
                                 CornerRadius="6" Background="{DynamicResource MenuBg}" Opacity="0" IsHitTestVisible="False">
                             <TextBlock x:Name="OsdText" FontSize="16" Foreground="{DynamicResource FgA1}" FontFamily="{StaticResource Inter}"/>

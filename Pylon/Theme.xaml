@@ -65,7 +65,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ToggleButton">
                     <Border x:Name="bd" Background="{DynamicResource Accent}" CornerRadius="6">
-                        <local:Icon x:Name="ic" Glyph="play-fill" Tint="@OnAccent" Width="20" Height="20" Margin="1,0,0,0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <local:Icon x:Name="ic" Glyph="play-fill" Tint="@OnAccent" Width="20" Height="20" Margin="-1,0,0,0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">
