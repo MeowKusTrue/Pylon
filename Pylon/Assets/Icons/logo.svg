@@ -1,12 +1,2 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <defs>
-    <linearGradient id="cone" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#F0A04B"/>
-      <stop offset="1" stop-color="#D37918"/>
-    </linearGradient>
-  </defs>
-  <!-- pylon (traffic cone) with a play glyph cut into it -->
-  <path d="M10.55 3.1 Q12 0.9 13.45 3.1 L19.3 18.4 Q19.6 19.4 18.6 19.4 H5.4 Q4.4 19.4 4.7 18.4 Z" fill="url(#cone)"/>
-  <rect x="2.6" y="19.6" width="18.8" height="2.6" rx="1.3" fill="#AB6314"/>
-  <path d="M10.2 10.6 Q10.2 9.7 11 10.15 L14.6 12.35 Q15.3 12.8 14.6 13.25 L11 15.45 Q10.2 15.9 10.2 15 Z" fill="#FFFFFF"/>
-</svg>
+<!-- Pylon mark: stem and leg take the icon tint, the play triangle takes the accent color (see Icon.Load) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><g transform="translate(-7 0)"><path fill="currentColor" d="M68 46 C68 34 76 28 86 28 L96 28 C106 28 112 35 110 46 L88 212 C86 222 78 228 68 228 L58 228 C48 228 42 220 44 210 Z"/><path fill="currentColor" d="M148 158 L188 134 L212 210 C214 220 208 228 198 228 L186 228 C176 228 168 222 166 212 Z"/><path fill="accentColor" d="M126 38 C128 28 138 24 147 29 L216 74 C226 80 226 94 216 100 L118 158 C108 164 98 156 100 145 Z"/></g></svg>

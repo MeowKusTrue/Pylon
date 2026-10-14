@@ -21,7 +21,7 @@
         <!-- ───── Top bar ───── -->
         <Grid x:Name="TopBar" Background="{DynamicResource BgA3}">
             <StackPanel Orientation="Horizontal" Margin="6,0" VerticalAlignment="Center">
-                <local:Icon Glyph="logo" Margin="7,0"/>
+                <local:Icon Glyph="logo" Tint="@FgA0" Margin="7,0"/>
                 <Button x:Name="MenuBtn" Style="{StaticResource IconButton}" Tag="dots-three" Padding="2" Margin="5,0,0,0"
                         WindowChrome.IsHitTestVisibleInChrome="True" ToolTip="{local:T 'Menu'}" Click="MenuBtn_Click"/>
                 <ToggleButton x:Name="SidebarBtn" Style="{StaticResource IconButton}" Tag="sidebar-simple" Padding="2" Margin="6,0,0,0"
@@ -62,7 +62,7 @@
                 <!-- Idle / drop target -->
                 <Border x:Name="IdleView" CornerRadius="10" Background="{DynamicResource BgB1}">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <local:Icon x:Name="IdleLogo" Glyph="logo" Width="96" Height="96"/>
+                        <local:Icon x:Name="IdleLogo" Glyph="logo" Tint="@FgA0" Width="96" Height="96"/>
                         <TextBlock Text="{local:T 'Drop media here'}" FontSize="20" Foreground="{DynamicResource FgA1}" HorizontalAlignment="Center" Margin="0,24,0,6"/>
                         <TextBlock x:Name="IdleHint" Text="{local:T 'or press Ctrl + O to open a file, Ctrl + L for your library'}" FontSize="14" Foreground="{DynamicResource FgA3}" HorizontalAlignment="Center"/>
                     </StackPanel>

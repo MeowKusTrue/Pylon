@@ -114,7 +114,7 @@ public class OnboardingWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                new Icon { Glyph = "logo", Width = 96, Height = 96, HorizontalAlignment = HorizontalAlignment.Left },
+                new Icon { Glyph = "logo", Tint = "@FgA0", Width = 96, Height = 96, HorizontalAlignment = HorizontalAlignment.Left },
                 new TextBlock { Text = L.T("Welcome to Pylon!"), FontSize = 34, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), Margin = new Thickness(0, 28, 0, 14) },
                 new TextBlock
                 {

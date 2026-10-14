@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Pylon/Assets/Icons/logo.svg" width="96" alt="Логотип Pylon">
+  <img src="docs/brand/pylon-tile.svg" width="96" alt="Логотип Pylon">
 </p>
 
 <h1 align="center">Pylon</h1>

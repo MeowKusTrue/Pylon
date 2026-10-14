@@ -62,6 +62,7 @@ public class Icon : Image
             return Cache[key] = null; // unknown glyph: render nothing rather than crash (run tools/sync-icons.py)
         }
         svg = svg.Replace("currentColor", Resolve(tint ?? "@FgA2"))
+                 .Replace("accentColor", Resolve("@Accent"))
                  .Replace("opacity=\"0.2\"", $"fill=\"{Resolve("@Accent")}\" opacity=\"0.55\"");
         var reader = new FileSvgReader(new WpfDrawingSettings
         {

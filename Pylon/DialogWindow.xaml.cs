@@ -251,7 +251,7 @@ public partial class DialogWindow : Window
 
     public static void About(Window owner, string libVlcVersion)
     {
-        var logo = new Icon { Glyph = "logo", Width = 72, Height = 72, Margin = new Thickness(0, 0, 24, 0), VerticalAlignment = VerticalAlignment.Top };
+        var logo = new Icon { Glyph = "logo", Tint = "@FgA0", Width = 72, Height = 72, Margin = new Thickness(0, 0, 24, 0), VerticalAlignment = VerticalAlignment.Top };
         var text = Stack(
             new TextBlock { Text = "Pylon", FontSize = 22, Foreground = R("FgA0") },
             new TextBlock { Text = L.T("A VLC redesign built on libVLC"), FontSize = 14, Foreground = R("Accent"), Margin = new Thickness(0, 4, 0, 14) },
