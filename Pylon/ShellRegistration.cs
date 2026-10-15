@@ -148,6 +148,66 @@ public static partial class ShellRegistration
 
     static IEnumerable<(string Ext, string Id)> Extensions() => Formats().Select(f => (f.Ext, f.Id));
 
+    // ───────── default player: the hybrid way ─────────
+
+    /// <summary>How many of Pylon's formats open in Pylon right now (Windows' own answer, whoever set it).</summary>
+    public static (int Ours, int Total) DefaultStatus()
+    {
+        var all = Extensions().ToList();
+        return (all.Count(e => IsOurs(ProgIdOf(e.Ext))), all.Count);
+    }
+
+    static bool IsOurs(string? progId) => progId?.StartsWith("Pylon.", StringComparison.OrdinalIgnoreCase) == true;
+
+    static string? ProgIdOf(string ext)
+    {
+        var buf = new System.Text.StringBuilder(260);
+        uint n = 260;
+        return AssocQueryString(0, 20 /*ASSOCSTR_PROGID*/, ext, null, buf, ref n) == 0 ? buf.ToString() : null;
+    }
+
+    /// <summary>A choice the user made for the extension (Settings, "Always use this app"), or Windows' own default for it.</summary>
+    static bool Chosen(string ext)
+    {
+        using var k = Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}");
+        return k?.GetSubKeyNames().Any(n => n.StartsWith("UserChoice", StringComparison.OrdinalIgnoreCase)) == true; // UserChoice, UserChoiceLatest
+    }
+
+    /// <summary>Of Pylon's formats, the ones nobody has picked an app for yet (Pylon may take those itself).</summary>
+    public static List<string> Unclaimed(Func<string, bool> chosen, Func<string, string?> progIdOf) =>
+        [.. Extensions().Select(e => e.Ext).Where(ext => !chosen(ext) && !IsOurs(progIdOf(ext)))];
+
+    /// <summary>
+    /// Takes the formats nobody has chosen an app for, the way 7-Zip does: the extension's default in the user's own
+    /// classes points at Pylon. A choice of the user's (or Windows' own default) is protected by Windows and left
+    /// alone: only the user may change it, in Settings. Returns how many were taken.
+    /// </summary>
+    public static int ClaimUnclaimed()
+    {
+        var free = Unclaimed(Chosen, ProgIdOf);
+        using var hkcu = Registry.CurrentUser;
+        foreach (var ext in free)
+        {
+            using var k = hkcu.CreateSubKey($@"{Classes}\{ext}");
+            k.SetValue("", "Pylon" + ext);
+        }
+        if (free.Count > 0) Notify();
+        return free.Count;
+    }
+
+    /// <summary>The big button: take what's free, then (if anything is left) Pylon's page in Windows' default apps.</summary>
+    public static (int Taken, bool OpenedSettings) MakeDefault()
+    {
+        Register(); // ProgIDs and icons up to date first
+        var taken = ClaimUnclaimed();
+        var (ours, total) = DefaultStatus();
+        if (ours < total) OpenDefaultApps();
+        return (taken, ours < total);
+    }
+
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+    static extern int AssocQueryString(int flags, int str, string assoc, string? extra, System.Text.StringBuilder? output, ref uint length);
+
     [DllImport("shell32.dll")] static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);
     static void Notify() => SHChangeNotify(0x08000000 /*SHCNE_ASSOCCHANGED*/, 0, IntPtr.Zero, IntPtr.Zero);
 }

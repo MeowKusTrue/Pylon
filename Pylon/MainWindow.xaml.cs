@@ -923,10 +923,10 @@ public partial class MainWindow : Window
         UpdateThumbPlay();
         _session?.SetState(_mp.IsPlaying, _index >= 0);
         if (_ticks % 5 == 0 && _index >= 0) _session?.SetTimeline(TimeSpan.FromMilliseconds(t), TimeSpan.FromMilliseconds(len));
-        var spectrum = Settings.Str("ui.spectrum");
+        var spectrum = Spectrum.On;
         AudioTap.Volume = _mp.Volume / 100.0;
-        MusicSpectrum.Active = _mp.IsPlaying && spectrum != "Off";
-        VideoSpectrum.Active = _mp.IsPlaying && spectrum == "Music and video";
+        MusicSpectrum.Active = _mp.IsPlaying && spectrum; // music only: video has no visualizer
+        MusicSpectrum.Idle = !_mp.IsPlaying && _index >= 0 && spectrum; // paused: keeps breathing
         SpeedText.Text = $"{_mp.Rate:0.##}×";
         if (++_ticks % 25 == 0 && _mp.IsPlaying) SaveProgress(); // every ~5 s
     }
@@ -1199,7 +1199,7 @@ public partial class MainWindow : Window
         var inPlace = installed && r.SetupUrl != null;
         _updating = true;
         // the download runs inside the dialog, with its progress bar
-        var go = DialogWindow.UpdateAvailable(owner, r, installed, inPlace ? p => Updater.DownloadAndRunAsync(r, p) : null);
+        var go = DialogWindow.UpdateAvailable(owner, r, installed, inPlace ? (p, c) => Updater.DownloadAndRunAsync(r, p, c) : null);
         _updating = false;
         if (!go) return;
         if (!inPlace) { Updater.OpenPage(r); return; }
@@ -1245,9 +1245,9 @@ public partial class MainWindow : Window
             case "ui.corners": ApplyCorners(); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
-            case "ui.spectrumstyle": MusicSpectrum.InvalidateVisual(); VideoSpectrum.InvalidateVisual(); break;
             case "ui.lite": ApplyLayout(); LyricsPane.Reblur(); break;
-            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "lyrics.style": LyricsPane.Restyle(); break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
@@ -1388,7 +1388,7 @@ public partial class MainWindow : Window
         MusicView.Visibility = hasMedia && _isAudio && !visualizer ? Visibility.Visible : Visibility.Collapsed;
         ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
         MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
-        var spectrum = Settings.Str("ui.spectrum") != "Off";
+        var spectrum = Spectrum.On;
         MusicSpectrum.Visibility = spectrum && !_mini ? Visibility.Visible : Visibility.Collapsed;
         MusicLayout.Margin = _mini ? new Thickness(16) : new Thickness(40, 72, 40, spectrum ? 92 : 24); // the bars get their own strip under the caption
         Video.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
@@ -2870,12 +2870,11 @@ public partial class MainWindow : Window
         [
             LyricsMenu(),
             Sub("Visualizer", null, [
-                Item("Off", null, null, () => Settings.Set("ui.spectrum", "Off"), check: Settings.Str("ui.spectrum") == "Off"),
-                .. new[] { "Bars", "Mirror", "Wave", "Pulse" }.Select(v => (object)Item(v, null, null, () =>
+                .. new[] { "Off", "Bars", "Mirror", "Wave", "Pulse" }.Select(v => (object)Item(v, null, null, () =>
                 {
-                    if (Settings.Str("ui.spectrum") == "Off") Settings.Set("ui.spectrum", "Music");
+                    Settings.Set("ui.spectrum", "Music"); // the old on/off switch: only the style decides now
                     Settings.Set("ui.spectrumstyle", v);
-                }, check: Settings.Str("ui.spectrum") != "Off" && Spectrum.Style == v)),
+                }, check: (Spectrum.On ? Spectrum.Style : "Off") == v)),
             ]),
             .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
@@ -3109,6 +3108,11 @@ public partial class MainWindow : Window
                     shot = _settings;
                     break;
                 case "settingssearch": _settings!.SearchBox.Text = arg; _settings.SearchBox.Focus(); break;
+                case "winstate": WindowState = arg == "min" ? WindowState.Minimized : WindowState.Normal; break; // sleep / wake
+                case "lyricsreshow": LyricsPane.Restyle(); break; // the same lyrics built again (same height)
+                case "lyricswheel": // a notch down on the lyrics: they scroll and the scrollbar shows
+                    LyricsPane.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = MouseWheelEvent, Source = LyricsPane });
+                    break;
                 case "wheel": // two notches down on the settings page, then the offset over time
                     {
                         var sv = _settings!.Scroller;
@@ -3293,6 +3297,7 @@ public partial class MainWindow : Window
                     {
                         await Task.Delay(1500);
                         var dlg = Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible && w != _overlayWindow);
+                        if (arg.StartsWith("update-") && dlg is DialogWindow dw) { dw.SaveBtn.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); await Task.Delay(2500); }
                         Snap(dlg, outFile);
                         Application.Current.Shutdown();
                     });
@@ -3309,6 +3314,15 @@ public partial class MainWindow : Window
                         case (_, "update"):
                             DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 1, 0), "v1.1.0",
                                 "## What's Changed\n* Russian interface\n* In-app updates from GitHub\n* Miniplayer fixes", "https://github.com/x", "https://github.com/x"), true);
+                            break;
+                        case (_, "update-dl" or "update-asm"): // the download stages, faked: sizes and speed, then assembling
+                            DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 9, 4), "v1.9.4", "Fixes", "velopack", "https://github.com/x"), true,
+                                async (p, c) =>
+                                {
+                                    for (var k = 0; k <= (arg == "update-dl" ? 40 : 100); k += 5) { p.Report(new Updater.Progress(Updater.Stage.Downloading, k / 100.0, k * 11_000, 1_100_000, 2_400_000)); await Task.Delay(60, c); }
+                                    if (arg == "update-asm") p.Report(new Updater.Progress(Updater.Stage.Assembling, 1, 0, 0, 0));
+                                    await Task.Delay(60_000, c);
+                                });
                             break;
                         default: DialogWindow.NewPlaylist(this); break;
                     }

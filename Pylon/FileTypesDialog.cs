@@ -38,7 +38,54 @@ public partial class DialogWindow
         icaros.Click += async (_, _) => { icaros.IsEnabled = false; await ShellRegistration.InstallIcarosAsync(dlg); icaros.IsEnabled = true; };
         dlg.CancelBtn.Content = L.T("Not now");
         dlg.SaveBtn.Content = L.T("Make Pylon the default…");
-        if (dlg.Run(() => true)) ShellRegistration.OpenDefaultApps();
+        if (dlg.Run(() => true)) ShellRegistration.MakeDefault();
+    }
+
+    /// <summary>
+    /// The card at the top of Settings: how many formats open in Pylon now, and one button that takes every format nobody
+    /// chose an app for and opens Windows' page for the rest. The count is read again when the window comes back (after
+    /// the user was in Windows' settings).
+    /// </summary>
+    public static FrameworkElement DefaultsCard()
+    {
+        var status = new TextBlock { FontSize = 13, Foreground = R("FgA2"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+        var note = new TextBlock { FontSize = 12, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), Visibility = Visibility.Collapsed };
+        var make = new Button { Content = L.T("Make Pylon the default"), Style = (Style)Application.Current.FindResource("PrimaryButton"), Height = 36, Padding = new Thickness(18, 0, 18, 0) };
+        var types = new Button { Content = L.T("File types…"), Style = (Style)Application.Current.FindResource("SecondaryButton"), Height = 36, Margin = new Thickness(8, 0, 0, 0), Background = R("BgRaised") };
+        var installed = Updater.IsVelopackInstall;
+        void Refresh()
+        {
+            var (ours, total) = ShellRegistration.DefaultStatus();
+            status.Text = !installed ? L.T("Available in the installed Pylon (not the portable or a developer build).")
+                : ours >= total ? L.F("Pylon opens all {0} formats.", total)
+                : ours == 0 ? L.F("Pylon isn't the default for any of its {0} formats yet.", total)
+                : L.F("Pylon opens {0} of {1} formats.", ours, total);
+            make.IsEnabled = installed && ours < total;
+        }
+        make.Click += (_, _) =>
+        {
+            var (taken, opened) = ShellRegistration.MakeDefault();
+            Refresh();
+            note.Visibility = Visibility.Visible;
+            note.Text = (taken > 0 ? L.F("Took {0} formats nobody had chosen an app for.", taken) + " " : "")
+                + (opened ? L.T("Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.") : "");
+        };
+        types.Click += (_, _) => FileTypes(Window.GetWindow(types));
+        var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children =
+        {
+            new TextBlock { Text = L.T("Default player"), FontSize = 16, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0") },
+            status, note,
+        } };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 0, 0), Children = { make, types } };
+        var grid = new Grid { ColumnDefinitions = { new ColumnDefinition(), new ColumnDefinition { Width = GridLength.Auto } } };
+        Grid.SetColumn(buttons, 1);
+        grid.Children.Add(text);
+        grid.Children.Add(buttons);
+        var card = new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(10), Padding = new Thickness(18, 16, 18, 16), Child = grid };
+        EventHandler back = (_, _) => Refresh();
+        card.Loaded += (_, _) => { Refresh(); if (Window.GetWindow(card) is { } w) w.Activated += back; };
+        card.Unloaded += (_, _) => { if (Window.GetWindow(card) is { } w) w.Activated -= back; };
+        return card;
     }
 
     /// <summary>The largest frame of Pylon's icon for that format (the ones Explorer shows).</summary>

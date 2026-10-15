@@ -1,17 +1,26 @@
 # Translating Pylon
 
-Pylon's texts are written in English; a language is a JSON file that maps each English text to its translation.
-Russian is built in. Any other language is a file here named by its language code (`de.json`, `uk.json`, `pt-BR.json`).
+Pylon's texts are written in English. Each language is a JSON file here, named by its code (`ru.json`, `de.json`,
+`pt-BR.json`), mapping every English text to its translation. `en.json` is the source: every text Pylon shows.
 
-1. Get the template with every text Pylon shows:
+## On Weblate (the easy way)
 
-   ```
-   Pylon.exe --export-strings de.json
-   ```
+Translate at <https://hosted.weblate.org/engage/pylon/> in the browser. Weblate keeps these files up to date and sends
+the changes as pull requests; they ship with the next release.
 
-2. Fill in `_name` with the language's own name (`"Deutsch"`), then translate the values. Leave a value empty to keep
-   the English text. Keep `{0}`, `{1}` and keys like `Ctrl+O` as they are.
-3. Plurals: `"{0} item"` / `"{0} items"`, plus `"{0} items (few)"` for languages that use a separate form for 2–4.
-4. Try it: put the file in `%AppData%\Pylon\lang` (or `lang` next to `Pylon.exe`), pick the language in
-   Settings → General → Interface language and let Pylon restart.
-5. Send it as a pull request to this folder; it ships with the next release.
+## By hand
+
+1. Copy `en.json` to `<code>.json` (or run `Pylon.exe --export-strings <code>.json` for an empty template).
+2. Set `_name` to the language's own name (`"Deutsch"`) and translate the values. An empty value keeps the English text.
+   Keep `{0}`, `{1}` and keys like `Ctrl+O` as they are.
+3. Plurals: `"{0} item"` / `"{0} items"`, plus `"{0} items (few)"` for languages with a separate form for 2–4.
+4. Try it: put the file in `%AppData%\Pylon\lang`, pick the language in Settings → General → Interface language and let
+   Pylon restart.
+5. Send it as a pull request to this folder.
+
+## For maintainers
+
+- A new text in the code goes into `en.json` (the text itself as key and value) and `ru.json`; the checks in
+  `tests/Checks` fail when a language file's keys differ from `en.json` or a translation loses a `{0}` placeholder.
+- Weblate component: file mask `Pylon/lang/*.json`, monolingual base `Pylon/lang/en.json`, file format "JSON file",
+  new translations from `en.json` with empty values. License: GPL-3.0 (the project's).

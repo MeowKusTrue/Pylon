@@ -99,6 +99,14 @@ dotnet run --project Pylon          # запуск из исходников
 
 Новые тексты интерфейса пишутся в коде на английском, а перевод добавляется в `Pylon/Strings.Ru.cs`.
 
+## Переводы
+
+Pylon переводится на [Weblate](https://hosted.weblate.org/engage/pylon/), прямо в браузере: ни GitHub, ни программ не
+нужно. Выберите язык, переводите или голосуйте за варианты, а Weblate сам пришлёт результат сюда пулл-реквестом. Каждый
+язык — один JSON-файл в [`Pylon/lang`](Pylon/lang) ([как это устроено](Pylon/lang/README.md)).
+
+[![Статус перевода](https://hosted.weblate.org/widget/pylon/svg-badge.svg)](https://hosted.weblate.org/engage/pylon/)
+
 ## Благодарности
 
 - [VLC / libVLC](https://www.videolan.org) и [LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) — VideoLAN и сообщество.

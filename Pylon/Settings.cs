@@ -6,7 +6,7 @@ using System.Windows.Threading;
 
 namespace Pylon;
 
-public enum OptKind { Toggle, Choice, Segmented, Slider, Number, Text, Password, Folder, File, Color, Accent, Action }
+public enum OptKind { Toggle, Choice, Segmented, Slider, Number, Text, Password, Folder, File, Color, Accent, Action, Custom }
 
 /// <summary>One row on a settings page.</summary>
 public class Opt
@@ -23,6 +23,7 @@ public class Opt
     public bool Engine;                             // applied by restarting libVLC with new arguments
     public string? Unavailable;                     // shown disabled with this reason
     public Func<bool>? Visible;
+    public Func<FrameworkElement>? Build;          // Custom: a whole block of its own (the default player card)
 
     public string[] Choices => DynamicOptions?.Invoke() is { Length: > 0 } d ? d : Options;
 }
@@ -316,14 +317,14 @@ public static class Settings
     [
         new("General", "sliders-horizontal", "Global Settings", "App",
         [
+            Sec("", new Opt { Kind = OptKind.Custom, Label = "Default player", Build = DialogWindow.DefaultsCard }),
             Sec("Appearance",
-                C("general.language", "Interface language", "System", L.Choices, "Pylon restarts to switch the language. More languages: a JSON file in the lang folder (see the project page)."),
+                C("general.language", "Interface language", "System", L.Choices, "Pylon restarts to switch the language."),
+                Act("Help translate Pylon", "Open", _ => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://hosted.weblate.org/engage/pylon/") { UseShellExecute = true }),
+                    "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there."),
                 C("general.theme", "Theme", "Dark", ThemeManager.Themes),
                 new Opt { Kind = OptKind.Accent, Key = "general.accent", Label = "Accent color", Default = AccentColors[0] },
                 Seg("ui.corners", "Corner rounding", "Moderate", "Off", "Slight", "Moderate", "Strong")),
-            Sec("Windows",
-                Act("Default player and file icons", "Open", w => DialogWindow.FileTypes(w),
-                    "The formats Pylon opens, with their icons; make Pylon the default player in Windows.")),
             Sec("Startup",
                 T("general.errors", "Show confirmation and error dialogs", false, "Pop up a message when a file can't be played."),
                 T("general.updates", "Check for updates automatically", true, "Checks GitHub releases at startup."),
@@ -374,7 +375,9 @@ public static class Settings
                 S("ui.popuptime", "Popup duration", 5, 0, 10, 1, " s")),
             Sec("Lyrics",
                 T("lyrics.online", "Find lyrics online", true, "Spicy Lyrics (word by word) and LRCLIB, when a track has no .ttml or .lrc file next to it."),
-                T("lyrics.translation", "Show translations", true, "When the lyrics carry them (Apple Music TTML, bilingual LRC).")),
+                T("lyrics.translation", "Show translations", true, "When the lyrics carry them (Apple Music TTML, bilingual LRC)."),
+                C("lyrics.style", "Lyrics animation", "Spicy", ["Spicy", "Karaoke", "Line by line"],
+                    "Spicy: words swell and glow, letter by letter on long notes. Karaoke: a plain fill, lighter. Line by line: whole lines light up, the lightest.")),
         ],
         [
             Sec("",
@@ -382,8 +385,7 @@ public static class Settings
                 T("ui.pausemin", "Pause video when window is minimized", false),
                 T("ui.front", "Bring Pylon to the front when playback starts", false),
                 T("ui.cover", "Show cover art in the window when playing audio", true),
-                Seg("ui.spectrum", "Audio spectrum", "Music", "Off", "Music", "Music and video"),
-                C("ui.spectrumstyle", "Spectrum style", "Bars", ["Bars", "Mirror", "Wave", "Pulse"], "Pulse: soft waves that breathe with the music."),
+                C("ui.spectrumstyle", "Visualizer", "Bars", ["Off", "Bars", "Mirror", "Wave", "Pulse"], "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music."),
                 T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
                 Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
                 T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
@@ -428,11 +430,11 @@ public static class Settings
                 Act("Edit Keyboard Shortcuts", "Edit", w => OpenHotkeys?.Invoke(w)),
                 Act("Reset all shortcuts", "Reset", _ => Hotkeys.ResetAll())),
             Sec("Skip Amounts",
-                N("controls.skipbtn", "Skip buttons", 15, 1, 600, " s"),
-                N("controls.skip0", "Very short skip", 3, 1, 600, " s"),
-                N("controls.skip1", "Short skip", 10, 1, 600, " s"),
-                N("controls.skip2", "Medium skip", 60, 1, 3600, " s"),
-                N("controls.skip3", "Long skip", 300, 1, 7200, " s")),
+                N("controls.skipbtn", "Skip buttons on the bar (−15 / +15)", 15, 1, 600, " s"),
+                N("controls.skip0", "Very short jump (Shift + ← / →)", 3, 1, 600, " s"),
+                N("controls.skip1", "Short jump (← / →)", 10, 1, 600, " s"),
+                N("controls.skip2", "Medium jump (Ctrl + ← / →)", 60, 1, 3600, " s"),
+                N("controls.skip3", "Long jump (Ctrl + Alt + ← / →)", 300, 1, 7200, " s")),
             Sec("Mouse",
                 C("controls.click", "Single click on the video", "Play / Pause", ["Play / Pause", "Nothing"]),
                 C("controls.dblclick", "Double click on the video", "Toggle fullscreen", ["Toggle fullscreen", "Nothing"]),
@@ -556,7 +558,7 @@ public static class Settings
                 C("audio.lang", "Preferred audio language", "System language", LanguageNames, engine: true),
                 N("audio.delay", "Audio delay", 0, -10, 10, " s", step: 0.05)),
             Sec("Visualization",
-                C("audio.visualizer", "Visualizer", "Off", ["Off", "Spectrum", "Scope", "Spectrometer", "VU meter", "Goom"], "Shown instead of cover art when playing music.", engine: true)),
+                C("audio.visualizer", "VLC visualization instead of the cover", "Off", ["Off", "Spectrum", "Scope", "Spectrometer", "VU meter", "Goom"], "Shown instead of cover art when playing music.", engine: true)),
         ],
         [
             Sec("",

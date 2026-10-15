@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.4
+
+<!-- ru -->
+**Новое**
+- **Плеер по умолчанию одной кнопкой** — карточка в самом верху Настройки → Общие. Pylon сам забирает все форматы, для которых вы ещё не выбирали программу, а для остальных сразу открывает свою страницу в «Приложениях по умолчанию». Там же видно, сколько форматов уже открывается в Pylon.
+- **Подробное скачивание обновления**: размер, скорость и оставшееся время. Этап сборки новой версии из скачанных изменений теперь виден и не выглядит зависанием на 70%. Скачивание можно отменить.
+- **Играющий трек в боковой панели** выделен подложкой и «живым эквалайзером» на обложке.
+- **Полоса прокрутки у текста песни**: появляется при наведении и прокрутке, её можно тянуть.
+- **Новые стили анимации текста** (Настройки → Интерфейс): «Караоке» — простая заливка, легче; «По строкам» — строка загорается целиком, самый лёгкий.
+- **Визуализатор на паузе** не исчезает, а тихо «дышит».
+- **Переводы на Weblate**: интерфейс можно переводить прямо в браузере; кнопка «Помочь с переводом» — в Настройки → Общие.
+
+**Исправления**
+- Текст песни больше не пропадает: после повторной загрузки того же текста все строки становились прозрачными.
+- Визуализатор в настройках и в контекстном меню — теперь одна и та же настройка («Выкл / Столбики / Зеркало / Волна / Пульс»), на видео его больше нет. Встроенная визуализация VLC подписана отдельно.
+- Понятные названия шагов перемотки: какой прыжок на какие клавиши.
+
+<!-- en -->
+**New**
+- **Default player in one click**: a card at the top of Settings → General. Pylon takes every format you haven't picked an app for and opens its page in Windows' default apps for the rest, and shows how many formats already open in Pylon.
+- **Detailed update download**: size, speed and time left. Assembling the new version from the downloaded changes is shown as its own step instead of looking stuck at 70%, and the download can be cancelled.
+- **What's playing in the sidebar** gets a backdrop and bouncing bars over its cover.
+- **A scrollbar on the lyrics**: shows on hover and while scrolling, and can be dragged.
+- **New lyrics animation styles** (Settings → Interface): Karaoke, a plain fill and lighter; Line by line, whole lines light up and the lightest.
+- **The visualizer keeps breathing quietly while paused.**
+- **Translations on Weblate**: the interface can be translated in the browser; "Help translate Pylon" is in Settings → General.
+
+**Fixes**
+- Lyrics no longer vanish: after the same lyrics were loaded again, every line turned transparent.
+- The visualizer in Settings and in the right-click menu is now one setting (Off / Bars / Mirror / Wave / Pulse), and video no longer has one. VLC's own visualization is labelled separately.
+- Clearer names for the skip amounts: which jump is on which keys.
+
 ## 1.9.3
 
 <!-- ru -->

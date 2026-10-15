@@ -6,10 +6,11 @@ using System.Windows.Markup;
 namespace Pylon;
 
 /// <summary>
-/// UI language. Texts are written in English in code and looked up in a dictionary keyed by that English text: Russian
-/// is built in (<see cref="Strings.Ru"/>), any other language is a JSON file in "lang" next to Pylon.exe or in the data
-/// folder ({ "_name": "Deutsch", "Open File(s)": "Datei(en) öffnen", … }; the file name is the language code, de.json).
-/// "Pylon.exe --export-strings file.json" writes every English text as a template. Missing keys fall back to English.
+/// UI language. Texts are written in English in code and looked up in a dictionary keyed by that English text. Each
+/// language is a JSON file in "lang" next to Pylon.exe (or in the data folder: a user's own file wins), named by its
+/// code: ru.json = { "_name": "Русский", "Open File(s)": "Открыть файл(ы)", … }. lang/en.json lists every English text
+/// (the source for translators, on Weblate). "Pylon.exe --export-strings file.json" writes an empty template.
+/// Missing keys fall back to English.
 /// Applied at startup (Settings → General → Interface language).
 /// </summary>
 public static class L
@@ -25,7 +26,7 @@ public static class L
     public static Dictionary<string, (string Name, string Path)> Files { get; } = Scan();
 
     /// <summary>What Settings offers: System, English, Русский and every language file by its own name.</summary>
-    public static string[] Choices => ["System", "English", "Русский", .. Files.Values.Select(f => f.Name).Order()];
+    public static string[] Choices => ["System", "English", .. Files.Values.Select(f => f.Name).Order()];
 
     public static void Init()
     {
@@ -33,12 +34,11 @@ public static class L
         Code = chosen switch
         {
             "English" => "en",
-            "Русский" => "ru",
             "System" or "" => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName,
             _ => Files.FirstOrDefault(f => f.Value.Name == chosen).Key ?? "en",
         };
-        _table = Code == "ru" ? Strings.Ru : Files.TryGetValue(Code, out var f) ? Load(f.Path) : [];
-        if (_table.Count == 0 && Code != "ru") Code = "en";
+        _table = Files.TryGetValue(Code, out var f) ? Load(f.Path) : [];
+        if (_table.Count == 0) Code = "en";
     }
 
     static Dictionary<string, (string, string)> Scan()
@@ -49,7 +49,7 @@ public static class L
                 foreach (var file in Directory.EnumerateFiles(dir, "??.json").Concat(Directory.EnumerateFiles(dir, "??-??.json")))
                 {
                     var code = Path.GetFileNameWithoutExtension(file);
-                    if (code is "en" or "ru") continue;
+                    if (code == "en") continue; // the English source, not a translation
                     found[code] = (Load(file).GetValueOrDefault("_name") ?? code, file);
                 }
         return found;
@@ -65,7 +65,7 @@ public static class L
     public static void ExportTemplate(string path)
     {
         var template = new Dictionary<string, string> { ["_name"] = "" };
-        foreach (var key in Strings.Ru.Keys.Append("{0} item").Append("{0} items").Append("{0} items (few)")) template[key] = "";
+        foreach (var key in Load(Path.Combine(AppContext.BaseDirectory, "lang", "en.json")).Keys.Where(k => k != "_name")) template[key] = "";
         File.WriteAllText(path, JsonSerializer.Serialize(template, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
     }
 

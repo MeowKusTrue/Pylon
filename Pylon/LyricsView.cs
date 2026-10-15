@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Threading;
 
 namespace Pylon;
 
@@ -98,6 +99,7 @@ public class LyricsView : Grid
         canvas.Children.Add(_stack);
         Children.Add(canvas);
         Children.Add(_message);
+        Children.Add(Scrollbar());
         _message.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
         IsVisibleChanged += (_, _) => Hook();
         Motion.AsleepChanged += Hook;
@@ -112,7 +114,57 @@ public class LyricsView : Grid
             _target = null;
             if (_doc != null && Math.Abs(FontFor(ActualWidth) - _ls) > 1.5) Show(_doc); // type follows the column width
         };
-        _stack.SizeChanged += (_, _) => { foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y; _target = null; };
+        _stack.SizeChanged += (_, _) => _topsDirty = true;
+    }
+
+    // ───────── scrollbar: a slim thumb like the app's others; shows on hover and while scrolling, can be dragged ─────────
+
+    readonly Border _bar = new() { Width = 4, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 0, 4, 0), Opacity = 0, Cursor = Cursors.Arrow };
+    readonly TranslateTransform _barY = new();
+    readonly DispatcherTimer _barHide = new() { Interval = TimeSpan.FromSeconds(1.2) };
+    double _dragFrom = double.NaN, _dragScroll;
+
+    Border Scrollbar()
+    {
+        _bar.RenderTransform = _barY;
+        _bar.SetResourceReference(Border.BackgroundProperty, "FgA3");
+        _scroll.Changed += (_, _) => PlaceBar(); // follows the springs without a frame hook of its own
+        SizeChanged += (_, _) => PlaceBar();
+        _stack.SizeChanged += (_, _) => PlaceBar();
+        MouseEnter += (_, _) => ShowBar(true);
+        MouseLeave += (_, _) => { if (double.IsNaN(_dragFrom)) ShowBar(false); };
+        _barHide.Tick += (_, _) => { _barHide.Stop(); if (!IsMouseOver && double.IsNaN(_dragFrom)) ShowBar(false); };
+        _bar.MouseEnter += (_, _) => Motion.Animate(_bar, WidthProperty, 8, Spring.Snappy);
+        _bar.MouseLeave += (_, _) => { if (double.IsNaN(_dragFrom)) Motion.Animate(_bar, WidthProperty, 4, Spring.Snappy); };
+        _bar.MouseLeftButtonDown += (_, e) => { _dragFrom = e.GetPosition(this).Y; _dragScroll = _scroll.Y; _bar.CaptureMouse(); e.Handled = true; };
+        _bar.MouseMove += (_, e) =>
+        {
+            if (double.IsNaN(_dragFrom)) return;
+            double content = _stack.ActualHeight, view = ActualHeight, travel = view - _bar.Height;
+            if (travel <= 0) return;
+            _manualUntil = DateTime.Now.AddSeconds(3); // reading ahead, as with the wheel
+            Motion.Set(_scroll, TranslateTransform.YProperty, Math.Clamp(_dragScroll - (e.GetPosition(this).Y - _dragFrom) * (content - view) / travel, -(content - view), 0));
+        };
+        _bar.MouseLeftButtonUp += (_, e) =>
+        {
+            _dragFrom = double.NaN;
+            _bar.ReleaseMouseCapture();
+            if (!_bar.IsMouseOver) Motion.Animate(_bar, WidthProperty, 4, Spring.Snappy);
+            if (!IsMouseOver) ShowBar(false);
+            e.Handled = true;
+        };
+        return _bar;
+    }
+
+    void ShowBar(bool on) => Motion.Animate(_bar, OpacityProperty, on && _doc != null && _stack.ActualHeight > ActualHeight ? 0.75 : 0, Spring.Smooth);
+
+    void PlaceBar()
+    {
+        double content = _stack.ActualHeight, view = ActualHeight;
+        if (content <= view || view <= 0) return;
+        _bar.Height = Math.Max(32, view * view / content);
+        var y = Math.Clamp(-_scroll.Y, 0, content - view) / (content - view) * (view - _bar.Height);
+        if (Math.Abs(_barY.Y - y) > 0.5) _barY.Y = y;
     }
 
     /// <summary>The line being sung at <paramref name="t"/> (or just sung) and the one after it, for the miniplayer.</summary>
@@ -131,6 +183,13 @@ public class LyricsView : Grid
     /// <summary>Light mode switched: the blur of every line is worked out again on the next frame.</summary>
     public void Reblur() => _blurFor = -2;
 
+    /// <summary>Animation style: Spicy (springs, glow, blur), Karaoke (fill only) or Line by line (whole lines light up).</summary>
+    string _style = "Spicy";
+    bool Light => Motion.Lite || _style != "Spicy";
+
+    /// <summary>The style setting changed: the lines are built again.</summary>
+    public void Restyle() { if (_doc != null) Show(_doc); }
+
     static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
     public void ShowMessage(string text)
@@ -146,6 +205,8 @@ public class LyricsView : Grid
     public void Show(LyricsDoc doc)
     {
         _doc = doc;
+        _topsDirty = true;
+        _style = Settings.Str("lyrics.style");
         _lines.Clear();
         _stack.Children.Clear();
         _message.Visibility = Visibility.Collapsed;
@@ -345,6 +406,9 @@ public class LyricsView : Grid
         if (_doc == null) return;
         // reading ahead: scroll freely, the view returns to the singer after a few seconds
         _manualUntil = DateTime.Now.AddSeconds(3);
+        ShowBar(true);
+        _barHide.Stop();
+        _barHide.Start();
         var max = Math.Max(0, _stack.ActualHeight - ActualHeight);
         Motion.Animate(_scroll, TranslateTransform.YProperty, Math.Clamp(_scroll.Y + e.Delta * 0.8, -max, ActualHeight / 2), Spring.Snappy);
         e.Handled = true;
@@ -363,7 +427,7 @@ public class LyricsView : Grid
     // 60 updates a second look the same as 180 and cost a third: Rendering fires at the monitor's rate
     void Tick(object? sender, EventArgs e)
     {
-        if (_clock.Elapsed.TotalSeconds - _lastFrame < (Motion.Lite ? 1 / 31.0 : 1 / 62.0)) return;
+        if (_clock.Elapsed.TotalSeconds - _lastFrame < (Light ? 1 / 31.0 : 1 / 62.0)) return;
         Update();
     }
 
@@ -371,12 +435,22 @@ public class LyricsView : Grid
     internal void DebugFrame() => Update();
 #endif
 
-    public string DebugState() => $"target={_lines.IndexOf(_target!)} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
+    public string DebugState() => $"bar={_bar.Opacity:0.00}/{_bar.Height:0}@{_barY.Y:0} target={_lines.IndexOf(_target!)} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
         string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{l.Top:0} st={l.State} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00} blur={l.Blur.Radius:0.0}"));
+
+    // where each line sits in the stack, worked out after layout. Only on a size change wasn't enough: the same lyrics built
+    // again (same height, so no SizeChanged) left every new line at 0, and the edge fade hid them all
+    bool _topsDirty = true;
 
     void Update()
     {
         if (_doc == null || Clock == null) return;
+        if (_topsDirty && _stack.IsMeasureValid && _lines.Count > 0 && _lines[0].Root.IsArrangeValid && _lines[^1].Root.IsArrangeValid) // new lines laid out
+        {
+            foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y;
+            _topsDirty = false;
+            _target = null;
+        }
         var t = Clock();
         var now = _clock.Elapsed.TotalSeconds;
         var dt = Math.Min(0.25, now - _lastFrame);
@@ -428,7 +502,7 @@ public class LyricsView : Grid
             {
                 var d = Math.Abs(k - cur);
                 var line = _lines[k];
-                var r = line.Hover || cur < 0 || d == 0 || Motion.Lite ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
+                var r = line.Hover || cur < 0 || d == 0 || Light ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
                 // an attached effect renders the line off-screen every frame even at radius 0: only lines that are blurred
                 // (or still un-blurring) carry it, and far lines are faint anyway
                 if (d > 8) line.Root.Effect = null;
@@ -466,6 +540,21 @@ public class LyricsView : Grid
             Move(w, s, y * _ls);
             if (Changed(ref w.Op, o, 1e-3)) w.El.Opacity = o;
             Glow(w, 4 + 6 * g, g * 0.9);
+            return;
+        }
+        if (_style != "Spicy")
+        {
+            // light styles: no springs, no glow, just the fill. Karaoke sweeps word by word (long syllables letter by
+            // letter); Line by line lights the whole line as it starts
+            var whole = _style == "Line by line";
+            var lit = whole ? (active || st == 2 ? 1 : -0.2) : st == 0 ? -0.2 : st == 2 ? 1 : -0.2 + 1.2 * p;
+            if (w.Letters == null) Fill(w, lit);
+            else
+                foreach (var l in w.Letters)
+                {
+                    var ls = StateOf(t, l.A, l.B);
+                    Fill(l, whole ? lit : ls == 0 ? -0.2 : ls == 2 ? 1 : -0.2 + 1.2 * Prog(t, l.A, l.B));
+                }
             return;
         }
         var v = Springs(w, CScale(q), CLift(q), CGlow(q), null, dt);
@@ -544,7 +633,7 @@ public class LyricsView : Grid
     void Glow(Part p, double radius, double opacity)
     {
         if (!Changed(ref p.Go, opacity, 0.01) & !Changed(ref p.Gb, radius, 0.5)) return;
-        if (opacity < 0.02 || Motion.Lite) { p.El.Effect = null; return; } // a glow is a shadow effect per word: light mode skips it
+        if (opacity < 0.02 || Light) { p.El.Effect = null; return; } // a glow is a shadow effect per word: the light styles skip it
         if (p.El.Effect is not DropShadowEffect glow)
             p.El.Effect = glow = new DropShadowEffect { ShadowDepth = 0, Color = _fg, RenderingBias = RenderingBias.Performance };
         glow.BlurRadius = radius * 1.5;

@@ -10,7 +10,7 @@ public class Spectrum : FrameworkElement
 {
     const int Bars = 56;
     readonly double[] _levels = new double[Bars];
-    bool _active, _hooked;
+    bool _active, _idle, _hooked, _tapped;
     SolidColorBrush? _brush;
     internal bool DebugHooked => _hooked;
 
@@ -28,19 +28,28 @@ public class Spectrum : FrameworkElement
         set { if (_active != value) { _active = value; Sync(); } }
     }
 
+    /// <summary>Paused with a track loaded: a slow, quiet "breathing" pattern instead of the sound (no capture, 20 fps).</summary>
+    public bool Idle
+    {
+        get => _idle;
+        set { if (_idle != value) { _idle = value; Sync(); } }
+    }
+
     void Sync()
     {
-        var on = _active && IsVisible && !Motion.Asleep;
+        var tap = _active && IsVisible && !Motion.Asleep;
+        if (tap != _tapped)
+        {
+            _tapped = tap;
+            if (tap) AudioTap.Subscribe();
+            else AudioTap.Unsubscribe();
+        }
+        var on = (_active || _idle) && IsVisible && !Motion.Asleep && !(_idle && Motion.Lite);
         if (on == _hooked) return;
         _hooked = on;
-        if (on)
-        {
-            AudioTap.Subscribe();
-            CompositionTarget.Rendering += Tick;
-        }
+        if (on) CompositionTarget.Rendering += Tick;
         else
         {
-            AudioTap.Unsubscribe();
             CompositionTarget.Rendering -= Tick;
             Array.Clear(_levels);
             InvalidateVisual();
@@ -53,8 +62,24 @@ public class Spectrum : FrameworkElement
     void Tick(object? sender, EventArgs e)
     {
         var now = _clock.Elapsed.TotalSeconds;
-        if (now - _last < 1 / 31.0) return; // 30 updates a second, whatever the monitor's rate (an FFT and a redraw each)
+        if (now - _last < (_active ? 1 / 31.0 : 1 / 21.0)) return; // 30 updates a second (20 idle), whatever the monitor's rate
         var fall = 0.025 * Math.Min(8, (now - _last) * 60);
+        if (!_active)
+        {
+            // idle: two slow waves drifting across, low, so each style keeps moving gently (bars sway, the wave rolls,
+            // the pulse breathes); levels ease toward it, so pausing and playing blend instead of jumping
+            var k = Math.Min(1, (now - _last) * 3);
+            for (var i = 0; i < Bars; i++)
+            {
+                var x = i / (double)Bars;
+                var goal = 0.12 + 0.08 * Math.Sin(now * 1.3 + x * 7) + 0.05 * Math.Sin(now * 0.7 - x * 13) * (1 - x * 0.5);
+                _levels[i] += (goal - _levels[i]) * k;
+            }
+            _phase += (now - _last) * 0.35;
+            _last = now;
+            InvalidateVisual();
+            return;
+        }
         var bands = AudioTap.Bands(Bars);
         for (var i = 0; i < Bars; i++)
             _levels[i] = bands[i] > _levels[i] ? _levels[i] + (bands[i] - _levels[i]) * 0.6 : Math.Max(bands[i], _levels[i] - fall); // quick rise, slow fall
@@ -77,6 +102,9 @@ public class Spectrum : FrameworkElement
 
     /// <summary>Settings → Interface → Spectrum style: Bars, Mirror, Wave or Pulse.</summary>
     public static string Style => Settings.Str("ui.spectrumstyle");
+
+    /// <summary>The visualizer is on: one setting, shared by Settings and the right-click menu (1.9 and older also had ui.spectrum).</summary>
+    public static bool On => Style != "Off" && Settings.Str("ui.spectrum") != "Off";
 
     protected override void OnRender(DrawingContext dc)
     {

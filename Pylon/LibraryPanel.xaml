@@ -19,6 +19,20 @@
                             <local:Icon x:Name="placeholder" Glyph="{Binding PlaceholderGlyph}" Width="18" Height="18" Tint="@FgA3"/>
                             <Image Source="{Binding Thumb}" Stretch="UniformToFill"/>
                             <Rectangle Fill="{DynamicResource Accent}" Height="3" VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="{Binding ProgressWidth}"/>
+                            <!-- the song that's playing: three bouncing bars over its cover -->
+                            <Grid x:Name="eq" Background="#A0000000" Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Height="14">
+                                    <Rectangle Width="3" Height="14" RadiusX="1" RadiusY="1" Fill="White" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,1">
+                                        <Rectangle.RenderTransform><ScaleTransform x:Name="eq1" ScaleY="0.5"/></Rectangle.RenderTransform>
+                                    </Rectangle>
+                                    <Rectangle Width="3" Height="14" RadiusX="1" RadiusY="1" Fill="White" VerticalAlignment="Bottom" Margin="2,0" RenderTransformOrigin="0.5,1">
+                                        <Rectangle.RenderTransform><ScaleTransform x:Name="eq2" ScaleY="0.9"/></Rectangle.RenderTransform>
+                                    </Rectangle>
+                                    <Rectangle Width="3" Height="14" RadiusX="1" RadiusY="1" Fill="White" VerticalAlignment="Bottom" RenderTransformOrigin="0.5,1">
+                                        <Rectangle.RenderTransform><ScaleTransform x:Name="eq3" ScaleY="0.35"/></Rectangle.RenderTransform>
+                                    </Rectangle>
+                                </StackPanel>
+                            </Grid>
                         </Grid>
                     </Border>
                     <local:Icon x:Name="glyph" Glyph="{Binding Glyph}" Tint="{Binding GlyphTint}"/>
@@ -35,8 +49,25 @@
                 <DataTrigger Binding="{Binding Dim}" Value="True">
                     <Setter TargetName="title" Property="Foreground" Value="{DynamicResource FgA3}"/>
                 </DataTrigger>
+                <!-- what's playing: a backdrop, bright semibold title and the bars (24 fps is plenty for them) -->
                 <DataTrigger Binding="{Binding Active}" Value="True">
-                    <Setter TargetName="title" Property="Foreground" Value="{DynamicResource Accent}"/>
+                    <Setter TargetName="bd" Property="Background" Value="{DynamicResource Checked}"/>
+                    <Setter TargetName="bd" Property="Margin" Value="0,0,0,10"/> <!-- the list clips a negative margin: the backdrop shows round the cover too -->
+                    <Setter TargetName="bd" Property="Height" Value="40"/>
+                    <Setter TargetName="bd" Property="Padding" Value="4"/>
+                    <Setter TargetName="title" Property="Foreground" Value="{DynamicResource FgA0}"/>
+                    <Setter TargetName="title" Property="FontWeight" Value="SemiBold"/>
+                    <Setter TargetName="eq" Property="Visibility" Value="Visible"/>
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard x:Name="eqRun">
+                            <Storyboard Timeline.DesiredFrameRate="24" RepeatBehavior="Forever">
+                                <DoubleAnimation Storyboard.TargetName="eq1" Storyboard.TargetProperty="ScaleY" From="0.3" To="1" Duration="0:0:0.45" AutoReverse="True" RepeatBehavior="Forever"/>
+                                <DoubleAnimation Storyboard.TargetName="eq2" Storyboard.TargetProperty="ScaleY" From="1" To="0.25" Duration="0:0:0.6" AutoReverse="True" RepeatBehavior="Forever"/>
+                                <DoubleAnimation Storyboard.TargetName="eq3" Storyboard.TargetProperty="ScaleY" From="0.5" To="0.95" Duration="0:0:0.38" AutoReverse="True" RepeatBehavior="Forever"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions><StopStoryboard BeginStoryboardName="eqRun"/></DataTrigger.ExitActions>
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsHeader}" Value="True">
                     <Setter TargetName="glyph" Property="Visibility" Value="Collapsed"/>

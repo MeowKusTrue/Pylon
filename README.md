@@ -97,6 +97,14 @@ Keep the checkout in a short path, such as `D:\Projects\Pylon`. libVLC 3 can't l
 
 Icons come from [Phosphor](https://phosphoricons.com). To add one, use its name in code and run `python Pylon/tools/sync-icons.py <path-to-@phosphor-icons/core/assets>`.
 
+## Translations
+
+Pylon is translated on [Weblate](https://hosted.weblate.org/engage/pylon/), right in the browser: no GitHub account or
+tools needed. Pick a language, translate or vote on suggestions, and Weblate sends the result here as a pull request.
+Each language is one JSON file in [`Pylon/lang`](Pylon/lang) ([how it works](Pylon/lang/README.md)).
+
+[![Translation status](https://hosted.weblate.org/widget/pylon/svg-badge.svg)](https://hosted.weblate.org/engage/pylon/)
+
 ## Credits
 
 - [VLC / libVLC](https://www.videolan.org) and [LibVLCSharp](https://code.videolan.org/videolan/LibVLCSharp) by VideoLAN and contributors.

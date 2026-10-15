@@ -45,6 +45,29 @@ Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Орие�
     && Library.FromFileName(@"C:\m\x.mp3", "Real Title") == ("Real Title", null));
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
+// ── default player: only formats nobody chose an app for are taken (never a user's choice, never ours again)
+var free = ShellRegistration.Unclaimed(ext => ext == ".mp4", ext => ext == ".mkv" ? "Pylon.mkv" : ext == ".mp3" ? "WMP11.AssocFile.MP3" : null);
+Check("default player: unclaimed formats", !free.Contains(".mp4") && !free.Contains(".mkv") && free.Contains(".mp3") && free.Contains(".flac"), string.Join(" ", free.Take(6)));
+
+// ── translations: every language file has the English file's keys, and keeps its {0} {1} placeholders
+{
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Pylon", "lang", "en.json"))) dir = dir.Parent;
+    var langDir = Path.Combine(dir!.FullName, "Pylon", "lang");
+    Dictionary<string, string> Read(string f) => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(f))!;
+    var en = Read(Path.Combine(langDir, "en.json"));
+    static string Holes(string s) => string.Concat(System.Text.RegularExpressions.Regex.Matches(s, @"\{\d\}").Select(m => m.Value).Order());
+    foreach (var file in Directory.EnumerateFiles(langDir, "*.json").Where(f => !f.EndsWith("en.json")))
+    {
+        var tr = Read(file);
+        var missing = en.Keys.Except(tr.Keys).ToList();
+        var extra = tr.Keys.Except(en.Keys).ToList();
+        var broken = tr.Where(p => p.Value.Length > 0 && p.Key != "_name" && en.ContainsKey(p.Key) && Holes(p.Value) != Holes(p.Key)).Select(p => p.Key).ToList();
+        Check($"lang {Path.GetFileName(file)}", missing.Count == 0 && extra.Count == 0 && broken.Count == 0,
+            $"missing {missing.Count}, unknown {extra.Count}, placeholders {broken.Count}: {string.Join(" | ", missing.Concat(extra).Concat(broken).Take(3))}");
+    }
+}
+
 // ── shortcuts: every layout works and gives no key two jobs
 foreach (var layout in Hotkeys.Layouts.Keys)
 {

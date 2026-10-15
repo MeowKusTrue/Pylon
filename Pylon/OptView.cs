@@ -24,6 +24,13 @@ public static class OptView
     /// <summary>stacked = label above a full-width control (narrow panels).</summary>
     public static FrameworkElement Row(Opt o, double controlWidth = 320, bool stacked = false)
     {
+        if (o.Kind == OptKind.Custom)
+        {
+            var block = o.Build!();
+            block.Margin = new Thickness(0, 0, 0, 14);
+            block.Tag = o; // search
+            return block;
+        }
         var control = Control(o, stacked ? double.NaN : controlWidth);
         var label = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         label.Children.Add(new TextBlock { Text = L.T(o.Label), FontSize = 14, Foreground = R("FgA2"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });

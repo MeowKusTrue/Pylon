@@ -99,31 +99,68 @@ public static class Updater
     /// close, applies it and starts the new version. Inno copies: downloads the setup and starts it silently.
     /// The caller closes Pylon afterwards (so settings and position get saved).
     /// </summary>
-    public static async Task DownloadAndRunAsync(Release r, IProgress<double>? progress)
+    public enum Stage { Downloading, Assembling, Installing }
+
+    /// <summary>Where an update download is: bytes and speed while downloading; Assembling = building the new version from deltas.</summary>
+    public record Progress(Stage Stage, double Fraction, long Done, long Total, double BytesPerSecond);
+
+    public static async Task DownloadAndRunAsync(Release r, IProgress<Progress>? progress, CancellationToken cancel = default)
     {
+        var clock = Stopwatch.StartNew();
+        double speed = 0, lastT = 0;
+        long lastBytes = 0;
+        void Report(Stage stage, double fraction, long total)
+        {
+            var done = (long)(fraction * total);
+            var t = clock.Elapsed.TotalSeconds;
+            if (t - lastT >= 0.5) // a smoothed rate: per-chunk rates jump around
+            {
+                var now = (done - lastBytes) / (t - lastT);
+                speed = speed == 0 ? now : speed * 0.6 + now * 0.4;
+                (lastT, lastBytes) = (t, done);
+            }
+            progress?.Report(new Progress(stage, fraction, done, total, speed));
+        }
         if (Velopack is { } velo && _pending != null)
         {
-            await velo.DownloadUpdatesAsync(_pending, p => progress?.Report(p / 100.0));
+            // Velopack reports 0-70 while it downloads the deltas, then silently rebuilds the full package from them
+            // (Update.exe patch, up to a few minutes on a slow disk), then 100. If that fails it downloads the full
+            // package from 0 again. The stages are told apart by those numbers.
+            var deltas = _pending.DeltasToTarget;
+            var full = _pending.TargetFullRelease.Size;
+            var viaDeltas = _pending.BaseRelease?.FileName != null && deltas.Length is > 0 and <= 10 && deltas.Sum(d => d.Size) <= full;
+            var deltaBytes = deltas.Sum(d => d.Size);
+            var last = 0;
+            await velo.DownloadUpdatesAsync(_pending, p =>
+            {
+                if (p < last) { viaDeltas = false; (lastT, lastBytes, speed) = (clock.Elapsed.TotalSeconds, 0, 0); } // fell back to the full package
+                last = p;
+                if (viaDeltas && p >= 70 && p < 100) progress?.Report(new Progress(Stage.Assembling, 1, deltaBytes, deltaBytes, 0));
+                else if (viaDeltas) Report(Stage.Downloading, Math.Min(1, p / 70.0), deltaBytes);
+                else Report(Stage.Downloading, p / 100.0, full);
+            }, cancel);
+            progress?.Report(new Progress(Stage.Installing, 1, 0, 0, 0));
             velo.WaitExitThenApplyUpdates(_pending, silent: true, restart: true);
             return;
         }
         var file = Path.Combine(Path.GetTempPath(), $"Pylon-{r.Version}-setup.exe");
-        using (var resp = await Http.GetAsync(r.SetupUrl, HttpCompletionOption.ResponseHeadersRead))
+        using (var resp = await Http.GetAsync(r.SetupUrl, HttpCompletionOption.ResponseHeadersRead, cancel))
         {
             resp.EnsureSuccessStatusCode();
             var total = resp.Content.Headers.ContentLength ?? 0;
-            await using var src = await resp.Content.ReadAsStreamAsync();
+            await using var src = await resp.Content.ReadAsStreamAsync(cancel);
             await using var dst = File.Create(file);
             var buf = new byte[1 << 16];
             long done = 0;
             int n;
-            while ((n = await src.ReadAsync(buf)) > 0)
+            while ((n = await src.ReadAsync(buf, cancel)) > 0)
             {
-                await dst.WriteAsync(buf.AsMemory(0, n));
+                await dst.WriteAsync(buf.AsMemory(0, n), cancel);
                 done += n;
-                if (total > 0) progress?.Report((double)done / total);
+                if (total > 0) Report(Stage.Downloading, (double)done / total, total);
             }
         }
+        progress?.Report(new Progress(Stage.Installing, 1, 0, 0, 0));
         Process.Start(new ProcessStartInfo(file, "/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS") { UseShellExecute = true });
     }
 
