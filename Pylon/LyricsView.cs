@@ -112,6 +112,19 @@ public class LyricsView : Grid
         _stack.SizeChanged += (_, _) => { foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y; _target = null; };
     }
 
+    /// <summary>The line being sung at <paramref name="t"/> (or just sung) and the one after it, for the miniplayer.</summary>
+    public (string? Now, string? Next) LinesAt(double t)
+    {
+        if (_doc is not { Synced: true } doc) return (null, null);
+        var lines = doc.Lines;
+        var i = Array.FindLastIndex(lines, l => l.Start <= t + 0.1);
+        var now = i >= 0 && t < Math.Max(lines[i].End, lines[i].Start + 2) + 1.5 ? lines[i].Text : null;
+        var next = i + 1 < lines.Length ? lines[i + 1].Text : null;
+        return (now, next);
+    }
+
+    public bool HasLyrics => _doc != null;
+
     static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
     public void ShowMessage(string text)
@@ -225,6 +238,13 @@ public class LyricsView : Grid
             panel.Children.Add(p.El);
             lv.Parts.Add(p);
         }
+        if (line.Translation != null && Settings.Bool("lyrics.translation"))
+            panel.Children.Add(new TextBlock
+            {
+                Text = line.Translation, FontSize = _ls * 0.5, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(WithAlpha(0.6)), Margin = new Thickness(0, _ls * 0.08, 0, 0),
+                TextAlignment = line.Opposite ? TextAlignment.Right : TextAlignment.Left,
+            });
         return lv;
     }
 

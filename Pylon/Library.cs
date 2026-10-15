@@ -32,6 +32,7 @@ public class HistoryEntry
     public long Length { get; set; }
     public bool IsAudio { get; set; }
     public DateTime LastPlayed { get; set; }
+    public int Plays { get; set; }
     public double Progress => Length > 0 ? Math.Clamp((double)Time / Length, 0, 1) : 0;
 }
 
@@ -51,6 +52,8 @@ public class LibraryData
     public List<string> VideoFolders { get; set; } = [];
     public List<string> MusicFolders { get; set; } = [];
     public List<string> Pinned { get; set; } = []; // folders pinned to the sidebar rail
+    public Dictionary<string, string> LyricFiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);   // track -> lyrics file the user picked
+    public Dictionary<string, double> LyricOffsets { get; set; } = new(StringComparer.OrdinalIgnoreCase); // track -> seconds the lyrics run ahead
     public List<SavedStream> Streams { get; set; } = [];
     public List<SavedStream> Podcasts { get; set; } = []; // RSS feeds
     public List<Playlist> Playlists { get; set; } = [];
@@ -168,7 +171,17 @@ public static class Library
     {
         if (Excluded(path)) return;
         if (!Settings.Bool("privacy.position")) time = 0;
-        Data.History[path] = new HistoryEntry { Title = title, Artist = artist, Time = time, Length = length, IsAudio = isAudio, LastPlayed = DateTime.Now };
+        Data.History[path] = new HistoryEntry
+        {
+            Title = title, Artist = artist, Time = time, Length = length, IsAudio = isAudio, LastPlayed = DateTime.Now,
+            Plays = Data.History.GetValueOrDefault(path)?.Plays ?? 0,
+        };
+    }
+
+    /// <summary>One more start of this item (for "Most Played").</summary>
+    public static void CountPlay(string path)
+    {
+        if (Data.History.GetValueOrDefault(path) is { } h) h.Plays++;
     }
 
     /// <summary>"Title - Artist" from tags (library index, then what playback saw), else the file name.</summary>

@@ -109,6 +109,10 @@
                                 </Setter.Value>
                             </Setter>
                             <EventSetter Event="MouseLeftButtonUp" Handler="Item_Click"/>
+                            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="Item_MouseDown"/>
+                            <EventSetter Event="PreviewMouseMove" Handler="Item_MouseMove"/>
+                            <EventSetter Event="Drop" Handler="Item_Drop"/>
+                            <Setter Property="AllowDrop" Value="True"/>
                             <EventSetter Event="MouseRightButtonUp" Handler="Item_RightClick"/>
                         </Style>
                     </ListBox.ItemContainerStyle>

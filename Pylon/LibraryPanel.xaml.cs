@@ -26,6 +26,7 @@ public class Row : INotifyPropertyChanged
     public bool Active { get; init; }
     public bool Sortable { get; init; } = true; // actions ("Add") and fixed entries stay on top
     public bool IsAction { get; init; }
+    public int QueuePos { get; init; } = -1; // Now Playing rows: drag to reorder
     public Action? Click { get; init; }
     public Func<IEnumerable<object>>? Menu { get; init; }
 
@@ -476,7 +477,28 @@ public partial class LibraryPanel : UserControl
     static Row Info(string text) => new() { Title = L.T(text), Glyph = "info", GlyphTint = "#6B6B6B", Dim = true, Sortable = false, IsAction = true };
 
     Page Playlists() => new(Section.Playlists, Crumbs1("Playlists"), () =>
-        [ActionRow("Create playlist", () => CreatePlaylist()), .. Library.Data.Playlists.Select(PlaylistRow)]);
+    [
+        ActionRow("Create playlist", () => CreatePlaylist()),
+        .. Smart.Select(s => IconRow(L.T(s.Title), s.Glyph, () => Navigate(SmartPage(s.Title, s.Files)), sortable: false, menu: () => FilesMenu(s.Files()))),
+        .. Library.Data.Playlists.Select(PlaylistRow),
+    ]);
+
+    /// <summary>Playlists that fill themselves from what you play and add (music only, 50 at most).</summary>
+    static readonly (string Title, string Glyph, Func<List<string>> Files)[] Smart =
+    [
+        ("Most Played", "fire", () => [.. Library.Data.History.Where(h => h.Value.IsAudio && h.Value.Plays > 0 && File.Exists(h.Key))
+            .OrderByDescending(h => h.Value.Plays).ThenByDescending(h => h.Value.LastPlayed).Take(50).Select(h => h.Key)]),
+        ("Recently Played", "clock-counter-clockwise", () => [.. Library.Data.History.Where(h => h.Value.IsAudio && File.Exists(h.Key))
+            .OrderByDescending(h => h.Value.LastPlayed).Take(50).Select(h => h.Key)]),
+        ("Recently Added", "sparkle", () => [.. Library.Data.Meta.Keys.Where(File.Exists)
+            .OrderByDescending(File.GetCreationTimeUtc).Take(50)]),
+    ];
+
+    Page SmartPage(string title, Func<List<string>> files) => new(Section.Playlists, [new(L.T("Playlists"), Playlists), new(L.T(title), null)], () =>
+    {
+        var list = files();
+        return list.Count == 0 ? [Info("Nothing here yet")] : [.. list.Select((f, i) => MediaRow(f, list, i))];
+    }, More: () => [Item("Play All", "play", () => Player.PlayList(files(), 0)), Item("Save as Playlist…", "playlist", () => CreatePlaylist(files()))]);
 
     Page PlaylistPage(Playlist p) => new(Section.Playlists, [new(L.T("Playlists"), Playlists), new(p.Name, null)], () =>
         p.Items.Select((f, i) => MediaRow(f, p.Items, i, extra: [new Separator(), Item("Remove from Playlist", "minus-circle", () => { p.Items.RemoveAt(i); Library.Touch(); })])).ToList(),
@@ -502,7 +524,7 @@ public partial class LibraryPanel : UserControl
         var active = queueIndex >= 0 ? queueIndex == Player.QueueIndex : string.Equals(path, Player.CurrentPath, StringComparison.OrdinalIgnoreCase);
         return new Row
         {
-            Title = title, Path = path, Progress = h?.Progress ?? 0, Dim = h != null && !active, Active = active,
+            Title = title, Path = path, Progress = h?.Progress ?? 0, Dim = h != null && !active, Active = active, QueuePos = queueIndex,
             Click = () => { if (queueIndex >= 0) Player.PlayQueueAt(queueIndex); else Player.PlayList(context.ToList(), index); },
             Menu = () => [.. FilesMenu([path], single: true), .. extra ?? []],
         };
@@ -558,6 +580,7 @@ public partial class LibraryPanel : UserControl
         return
         [
             Item(single ? "Play" : "Play All", "play", () => Player.PlayList(Resolve(), 0)),
+            Item("Play Next", "skip-forward", () => Player.PlayNext(Resolve())),
             Item("Add to Queue", "queue", () => Player.Enqueue(Resolve())),
             add,
             new Separator(),
@@ -682,6 +705,36 @@ public partial class LibraryPanel : UserControl
     void Row_Loaded(object sender, RoutedEventArgs e) => ((sender as FrameworkElement)?.DataContext as Row)?.RequestThumb();
 
     void Item_Click(object sender, MouseButtonEventArgs e) => ((sender as FrameworkElement)?.DataContext as Row)?.Click?.Invoke();
+
+    // ───────── Now Playing: drag rows to reorder ─────────
+
+    Point _dragFrom;
+    Row? _dragRow;
+
+    void Item_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragRow = (sender as FrameworkElement)?.DataContext is Row { QueuePos: >= 0 } r ? r : null;
+        _dragFrom = e.GetPosition(List);
+    }
+
+    void Item_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dragRow == null || e.LeftButton != MouseButtonState.Pressed || sender is not FrameworkElement item) return;
+        var d = e.GetPosition(List) - _dragFrom;
+        if (Math.Abs(d.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        var row = _dragRow;
+        _dragRow = null;
+        item.Opacity = 0.5;
+        DragDrop.DoDragDrop(item, row, DragDropEffects.Move); // blocks until dropped; the click that started it doesn't play
+        item.Opacity = 1;
+    }
+
+    void Item_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(Row)) is Row { QueuePos: >= 0 } from && (sender as FrameworkElement)?.DataContext is Row { QueuePos: >= 0 } to)
+            Player.MoveInQueue(from.QueuePos, to.QueuePos);
+        e.Handled = true;
+    }
 
     void Item_RightClick(object sender, MouseButtonEventArgs e)
     {

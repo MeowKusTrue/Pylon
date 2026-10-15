@@ -12,8 +12,11 @@ namespace Pylon;
 /// <summary>A sung unit (word or syllable). <see cref="Joined"/>: no space before the next one (syllables of one word).</summary>
 public record Syllable(double Start, double End, string Text, bool Joined);
 
-/// <summary>One lyric line; <see cref="Words"/> is empty for line-synced lyrics. <see cref="Opposite"/>: second singer (right-aligned).</summary>
-public record LyricLine(double Start, double End, string Text, Syllable[] Words, bool Opposite, Syllable[] Background);
+/// <summary>
+/// One lyric line; <see cref="Words"/> is empty for line-synced lyrics. <see cref="Opposite"/>: second singer (right-aligned).
+/// <see cref="Translation"/>: shown small under the line.
+/// </summary>
+public record LyricLine(double Start, double End, string Text, Syllable[] Words, bool Opposite, Syllable[] Background, string? Translation = null);
 
 /// <summary><see cref="Credits"/>: attribution to show with the lyrics (text, optional link).</summary>
 public record LyricsDoc(LyricLine[] Lines, bool Synced, string Source, IReadOnlyList<(string Text, string? Url)>? Credits = null);
@@ -27,6 +30,8 @@ public static class Lyrics
     /// <param name="tags">All of the file's text tags joined, searched for a Spotify link.</param>
     public static async Task<LyricsDoc?> FindAsync(string path, string title, string? artist, string? album, double duration, string tags = "")
     {
+        if (Library.Data.LyricFiles.GetValueOrDefault(path) is { } picked && File.Exists(picked)
+            && Parse(await File.ReadAllTextAsync(picked), Path.GetFileName(picked)) is { } chosen) return chosen;
         if (!path.Contains("://"))
         {
             // sidecar files win: TTML from spicy-translate / Apple, LRC from anywhere
@@ -37,7 +42,7 @@ public static class Lyrics
             }
         }
         if (string.IsNullOrWhiteSpace(title)) return null;
-        var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{artist}|{title}|{album}|{Math.Round(duration)}".ToLowerInvariant())))[..20];
+        var key = Key(title, artist, album, duration);
         var cached = Path.Combine(CacheDir, key + ".lrc");
         var spicyCache = Path.Combine(CacheDir, key + ".spicy.json");
         var spicyMiss = Path.Combine(CacheDir, key + ".spicy2.none"); // Spicy has nothing for it: don't ask again
@@ -66,6 +71,33 @@ public static class Lyrics
             return Parse(lrc, "LRCLIB");
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException) { return null; }
+    }
+
+    static string Key(string title, string? artist, string? album, double duration) =>
+        Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{artist}|{title}|{album}|{Math.Round(duration)}".ToLowerInvariant())))[..20];
+
+    /// <summary>
+    /// "Find lyrics…": looks the song up under the artist and title the user typed (Spicy Lyrics, then LRCLIB) and keeps the
+    /// result as this track's lyrics. Null when nothing turned up.
+    /// </summary>
+    public static async Task<LyricsDoc?> SearchAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle)
+    {
+        var key = Key(title, artist, album, duration);
+        Directory.CreateDirectory(CacheDir);
+        try
+        {
+            if (SpicyLyrics.Enabled && await SpicyLyrics.FetchAsync("", queryTitle, queryArtist, duration, "") is { } json && SpicyLyrics.Parse(json) is { } spicy)
+            {
+                await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy.json"), json);
+                return spicy;
+            }
+            if (await FromLrclib(queryTitle, queryArtist, null, duration) is not { } lrc) return null;
+            File.Delete(Path.Combine(CacheDir, key + ".spicy.json")); // the old pick was wrong
+            await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy2.none"), "");
+            await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".lrc"), lrc);
+            return Parse(lrc, "LRCLIB");
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or KeyNotFoundException or InvalidOperationException) { return null; }
     }
 
     /// <summary>Exact match first (LRCLIB tolerates ±2 s), then search: the synced version closest in length wins.</summary>
@@ -98,9 +130,19 @@ public static class Lyrics
         try { doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace); }
         catch (System.Xml.XmlException) { return null; }
         XNamespace ttm = "http://www.w3.org/ns/ttml#metadata";
+        XNamespace itunes = "http://music.apple.com/lyric-ttml-internal";
+        var translations = doc.Descendants().Where(e => e.Name.LocalName == "translation").Take(1)
+            .SelectMany(t => t.Elements().Where(x => x.Name.LocalName == "text"))
+            .Where(x => x.Attribute("for") != null)
+            .GroupBy(x => (string)x.Attribute("for")!)
+            .ToDictionary(g => g.Key, g => g.First().Value.Trim());
         var lines = new List<LyricLine>();
         foreach (var p in doc.Descendants().Where(e => e.Name.LocalName == "p"))
         {
+            var inline = p.Elements().FirstOrDefault(e => (string?)e.Attribute(ttm + "role") == "x-translation");
+            inline?.Remove();
+            var translation = inline?.Value.Trim() is { Length: > 0 } it ? it
+                : (string?)p.Attribute(itunes + "key") is { } k && translations.GetValueOrDefault(k) is { Length: > 0 } tt ? tt : null;
             var start = Time((string?)p.Attribute("begin"));
             var end = Time((string?)p.Attribute("end"));
             var lead = new List<Syllable>();
@@ -112,7 +154,7 @@ public static class Lyrics
             if (start < 0) start = words.Length > 0 ? words[0].Start : 0;
             if (end <= start) end = words.Length > 0 ? words[^1].End : start + 3;
             var opposite = (string?)p.Attribute(ttm + "agent") is { } agent && agent != "v1" && agent != "v1000";
-            lines.Add(new LyricLine(start, end, lineText, words, opposite, [.. bg]));
+            lines.Add(new LyricLine(start, end, lineText, words, opposite, [.. bg], translation));
         }
         var timed = lines.Any(l => l.End > 0);
         return lines.Count == 0 ? null : new LyricsDoc([.. lines.OrderBy(l => l.Start)], timed, source);
@@ -185,12 +227,18 @@ public static class Lyrics
         if (raw.Count == 0)
             return plain.Count == 0 ? null : new LyricsDoc([.. plain.Select(p => new LyricLine(0, 0, p, [], false, []))], false, source);
 
-        raw.Sort((a, b) => a.Start.CompareTo(b.Start));
+        raw = [.. raw.OrderBy(r => r.Start)]; // stable: a translation stays after its line
         var lines = new List<LyricLine>();
         for (var i = 0; i < raw.Count; i++)
         {
             var (start, body) = raw[i];
-            var end = i + 1 < raw.Count ? raw[i + 1].Start : start + 5;
+            if (lines.Count > 0 && Math.Abs(lines[^1].Start - start) < 0.001 && lines[^1].Translation == null && WordTag.Replace(body, "").Trim() is { Length: > 0 } tr)
+            {
+                lines[^1] = lines[^1] with { Translation = tr };
+                continue;
+            }
+            var next = raw.Skip(i + 1).FirstOrDefault(r => r.Start > start + 0.001);
+            var end = next.Body != null ? next.Start : start + 5;
             var words = WordTimes(body, start, end, offset);
             var lineText = WordTag.Replace(body, "").Trim();
             if (lineText.Length == 0) { if (lines.Count > 0) lines[^1] = lines[^1] with { End = Math.Min(lines[^1].End, start) }; continue; } // empty line = end of the previous one

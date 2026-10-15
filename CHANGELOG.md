@@ -3,6 +3,28 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.6.0
+
+<!-- ru -->
+**Музыка**
+- **Перевод текста песни** мелкой строкой под оригиналом — если он есть в файле (TTML из Apple Music с переводами, двуязычный LRC). Выключается в Настройки → Интерфейс → Текст песни.
+- **Меню «Текст песни»** (правый клик в режиме музыки): найти текст под другим названием (Spicy Lyrics, затем LRCLIB), открыть свой файл .lrc / .ttml, сдвинуть синхронизацию раньше или позже на 0,25 с. Сдвиг запоминается для каждого трека.
+- **Обложки из интернета** для песен без своей: ищутся в iTunes по исполнителю и альбому, видны в окне и в медиа-панели Windows. Работает при включённом «Загружать названия и обложки из интернета».
+- **Умные плейлисты**: «Часто слушаю», «Недавно слушал», «Недавно добавлено».
+- **«Играть следующим»** в меню любых файлов и папок; в «Сейчас играет» строки перетаскиваются мышью.
+- **Одинаковая громкость без тегов**: «Выравнивание громкости → Измеренная». Pylon сам измеряет каждую песню (заодно с волной на шкале), а следующую в очереди — заранее, поэтому она сразу звучит на своём уровне. Плавный переход это учитывает.
+- **Текст в мини-плеере**: поверх обложки строка, которая сейчас поётся, и следующая.
+
+<!-- en -->
+**Music**
+- **Lyrics translations** in a small line under the original, when the file carries them (Apple Music TTML with translations, bilingual LRC). Turn off in Settings → Interface → Lyrics.
+- **Lyrics menu** (right-click in music mode): find lyrics under another name (Spicy Lyrics, then LRCLIB), open your own .lrc / .ttml, move the timing 0.25 s sooner or later. The offset is remembered per track.
+- **Cover art from the internet** for songs without any: looked up on iTunes by artist and album, shown in the window and the Windows media flyout. Needs "Fetch titles and cover art from the internet".
+- **Smart playlists**: Most Played, Recently Played, Recently Added.
+- **Play Next** in every file and folder menu; drag rows in Now Playing to reorder.
+- **Even loudness without tags**: Replay gain → Measured. Pylon measures each song itself (along with the seek bar waveform), and the next one in the queue ahead of time, so it starts at its level. The crossfade keeps it.
+- **Lyrics in the miniplayer**: the line being sung and the next one over the cover.
+
 ## 1.5.0
 
 <!-- ru -->

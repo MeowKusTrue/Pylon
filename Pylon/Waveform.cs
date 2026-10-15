@@ -15,6 +15,10 @@ public static class Waveform
     public const int Bins = 400;
     static readonly string CacheDir = Path.Combine(Library.Dir, "waves");
     static readonly ConcurrentDictionary<string, byte[]> Memory = new(StringComparer.OrdinalIgnoreCase);
+    static readonly ConcurrentDictionary<string, double> Loud = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The track's average loudness (RMS, dBFS) once it has been analyzed, for "Replay gain: Measured".</summary>
+    public static double? LoudnessOf(string path) => Loud.TryGetValue(path, out var db) ? db : null;
     static readonly SemaphoreSlim Gate = new(1);
     static LibVLC? _vlc;
     static string? _wanted;
@@ -39,17 +43,26 @@ public static class Waveform
         if (!info.Exists) return null;
         var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{path.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")))[..20];
         var cached = Path.Combine(CacheDir, key + ".bin");
-        if (File.Exists(cached) && File.ReadAllBytes(cached) is { Length: Bins } c) return Memory[path] = c;
+        var level = Path.ChangeExtension(cached, ".db"); // waveforms cached before 1.6 have no loudness: analyzed again once
+        if (File.Exists(cached) && File.ReadAllBytes(cached) is { Length: Bins } c
+            && double.TryParse(File.Exists(level) ? File.ReadAllText(level) : "", System.Globalization.CultureInfo.InvariantCulture, out var known))
+        {
+            Loud[path] = known;
+            return Memory[path] = c;
+        }
 
         var wav = Path.Combine(Path.GetTempPath(), $"pylon-wave-{Guid.NewGuid():N}.wav");
         try
         {
             if (!Decode(path, wav)) return null;
             byte[]? peaks;
-            using (var f = File.OpenRead(wav)) peaks = Reduce(f);
+            double db;
+            using (var f = File.OpenRead(wav)) (peaks, db) = Reduce(f);
             if (peaks == null) return null;
             Directory.CreateDirectory(CacheDir);
             File.WriteAllBytes(cached, peaks);
+            File.WriteAllText(level, db.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
+            Loud[path] = db;
             return Memory[path] = peaks;
         }
         catch (IOException) { return null; }
@@ -77,14 +90,14 @@ public static class Waveform
     }
 
     /// <summary>RMS per bin from a 16-bit mono WAV (read as a stream: long books make big files), normalized to the loudest bin.</summary>
-    static byte[]? Reduce(Stream wav)
+    static (byte[]? Peaks, double Db) Reduce(Stream wav)
     {
         var head = new byte[4096];
         var got = wav.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
         var start = DataOffset(head.AsSpan(0, got));
-        if (start < 0) return null;
+        if (start < 0) return (null, 0);
         var samples = (wav.Length - start) / 2; // an unfinished WAV may carry a bogus size: trust the file length
-        if (samples < Bins * 2) return null;
+        if (samples < Bins * 2) return (null, 0);
         wav.Position = start;
         using var reader = new BinaryReader(new BufferedStream(wav, 1 << 16));
         var rms = new double[Bins];
@@ -99,9 +112,10 @@ public static class Waveform
             }
             rms[b] = Math.Sqrt(sum / Math.Max(1, to - from));
         }
+        var db = 20 * Math.Log10(Math.Sqrt(rms.Average(r => r * r)) / 32768 + 1e-9);
         var max = rms.Max();
-        if (max <= 0) return null;
-        return rms.Select(r => (byte)Math.Round(255 * Math.Pow(r / max, 0.7))).ToArray(); // slight lift so quiet passages stay visible
+        if (max <= 0) return (null, 0);
+        return (rms.Select(r => (byte)Math.Round(255 * Math.Pow(r / max, 0.7))).ToArray(), db); // slight lift so quiet passages stay visible
     }
 
     /// <summary>Where the samples of the "data" chunk start, -1 if the header doesn't show one.</summary>

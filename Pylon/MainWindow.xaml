@@ -105,6 +105,19 @@
                                    HorizontalAlignment="Center" Margin="0,40,0,0" TextTrimming="CharacterEllipsis"/>
                         <local:LyricsView x:Name="LyricsPane" Grid.Column="1" Grid.RowSpan="2" Margin="40,-48,0,0" Visibility="Collapsed"/>
                     </Grid>
+                    <!-- miniplayer: the line being sung and the next one over the bottom of the cover -->
+                    <Border x:Name="MiniLyrics" VerticalAlignment="Bottom" Padding="14,28,14,12" Visibility="Collapsed" IsHitTestVisible="False">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#00000000" Offset="0"/>
+                                <GradientStop Color="#D0000000" Offset="0.55"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <StackPanel>
+                            <TextBlock x:Name="MiniLyricNow" FontSize="17" FontWeight="Bold" Foreground="White" TextWrapping="Wrap" TextAlignment="Center"/>
+                            <TextBlock x:Name="MiniLyricNext" FontSize="13" FontWeight="SemiBold" Foreground="#8CFFFFFF" TextWrapping="Wrap" TextAlignment="Center" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
                 </Grid>
 
                 <!-- OSD for everything that isn't video (music, idle); over video the one in the overlay window is used -->

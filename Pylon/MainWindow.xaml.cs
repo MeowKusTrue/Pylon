@@ -347,6 +347,7 @@ public partial class MainWindow : Window
     // ───────── crossfade ─────────
 
     MediaPlayer? _tail;           // the song fading out
+    float _tailGain = 1;          // its measured level
     DispatcherTimer? _fade;
     bool _fadeStarting;
 
@@ -366,6 +367,7 @@ public partial class MainWindow : Window
         if (next < 0 || next >= _queue.Count || _queue[next].Contains("://") || !AudioExt.Contains(Path.GetExtension(_queue[next]))) return;
 
         SaveProgress(finished: true);
+        _tailGain = _trackGain;
         var tail = _tail = _mp;
         _mp = NewPlayer();
         _mp.Mute = tail.Mute;
@@ -378,11 +380,12 @@ public partial class MainWindow : Window
 
         var clock = Stopwatch.StartNew();
         var duration = left / 1000.0;
+        var tailGain = _tailGain;
         _fade = new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Render, (_, _) =>
         {
             var k = Math.Clamp(clock.Elapsed.TotalSeconds / duration, 0, 1);
-            AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2));
-            AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2));
+            AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2) * _trackGain);
+            AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2) * tailGain);
             if (k >= 1) EndCrossfade();
         }, Dispatcher);
     }
@@ -394,7 +397,7 @@ public partial class MainWindow : Window
         _fade = null;
         if (_tail is not { } tail) return;
         _tail = null;
-        if (_mp != null) AudioChain.SetGain(_mp, 1);
+        if (_mp != null) AudioChain.SetGain(_mp, _trackGain);
         Task.Run(() => { tail.Stop(); tail.Dispose(); }); // Stop() blocks on the decoder threads
     }
 
@@ -456,6 +459,30 @@ public partial class MainWindow : Window
         BuildShuffle();
         if (wasEmpty) PlayAt(0);
         else Osd(L.T("Added to queue"));
+        Sidebar.Render();
+    }
+
+    /// <summary>Right after the current item ("Play Next").</summary>
+    public void PlayNext(IEnumerable<string> items)
+    {
+        if (_index < 0) { Enqueue(items); return; }
+        _queue.InsertRange(_index + 1, items);
+        BuildShuffle();
+        Osd(L.T("Plays next"));
+        Sidebar.Render();
+    }
+
+    /// <summary>Drag and drop in Now Playing: the playing item keeps playing wherever it moves.</summary>
+    public void MoveInQueue(int from, int to)
+    {
+        if (from == to || from < 0 || to < 0 || from >= _queue.Count || to >= _queue.Count) return;
+        var item = _queue[from];
+        _queue.RemoveAt(from);
+        _queue.Insert(to, item);
+        if (_index == from) _index = to;
+        else if (from < _index && to >= _index) _index--;
+        else if (from > _index && to <= _index) _index++;
+        BuildShuffle();
         Sidebar.Render();
     }
 
@@ -610,6 +637,7 @@ public partial class MainWindow : Window
         if (_tray != null) _tray.Tip = MiniTitle.Text;
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
         if (!parsed) return;
+        if (ArtImage.Source == null && _isAudio && !isUrl && Settings.Bool("library.netmeta")) FetchCover(src);
         if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
         _lyricsFor = null;
         ApplyLyricsLayout(); // now with the real title and artist
@@ -630,7 +658,7 @@ public partial class MainWindow : Window
         Seek.Waveform = MiniSeek.Waveform = _isAudio;
         Seek.SetWaveSeed(src);
         MiniSeek.SetWaveSeed(src);
-        if (_isAudio && !isUrl && Settings.Bool("ui.realwave")) LoadWaveform(src);
+        if (_isAudio && !isUrl && (Settings.Bool("ui.realwave") || Measured)) LoadWaveform(src);
         ClearLoop();
         _is360 = false;
         _view.Reset(animate: false);
@@ -669,11 +697,14 @@ public partial class MainWindow : Window
         }
 
         _rateApplied = false;
+        _trackGain = MeasuredGain(src) ?? 1;
+        if (_tail == null) AudioChain.SetGain(_mp, _trackGain); // during a crossfade the fade brings it in
         if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
         Perf.Mark($"play, video hwnd {_mp.Hwnd}");
         _mp.Play(media);
         MaybeTrackPopup(_index);
         Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
+        Library.CountPlay(src);
         _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
         if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
         ApplyLayout();
@@ -751,6 +782,15 @@ public partial class MainWindow : Window
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>A song without embedded art gets one from iTunes (Covers), on screen and in the Windows media flyout.</summary>
+    async void FetchCover(string src)
+    {
+        if (await Covers.FindAsync(_track.Artist, _track.Title, _track.Album) is not { } file || CurrentPath != src || ArtImage.Source != null) return;
+        var url = new Uri(file).AbsoluteUri;
+        SetArtwork(url);
+        _session?.SetTrack(true, _title, _artist, _track.Album, url);
+    }
+
     static BitmapImage? LoadFull(string url)
     {
         try
@@ -791,6 +831,7 @@ public partial class MainWindow : Window
     void Refresh()
     {
         MaybeCrossfade();
+        UpdateMiniLyrics();
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
         if (len > 0)
         {
@@ -1354,13 +1395,14 @@ public partial class MainWindow : Window
             else LyricsPane.Visibility = Visibility.Collapsed;
             Dispatcher.BeginInvoke(() => MusicLayout_SizeChanged(MusicLayout, null!), DispatcherPriority.Loaded);
         }
-        if (on && !_metaPending && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks, with real tags
+        var wanted = on || (_mini && Settings.Bool("ui.lyrics") && _isAudio && _index >= 0); // the miniplayer shows them too
+        if (wanted && !_metaPending && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks, with real tags
     }
 
     async void LoadLyrics(string path)
     {
         _lyricsFor = path;
-        LyricsPane.Clock ??= PlaybackClock;
+        LyricsPane.Clock ??= () => PlaybackClock() + LyricsOffset;
         if (LyricsPane.Tag == null)
         {
             LyricsPane.Tag = true;
@@ -1372,6 +1414,56 @@ public partial class MainWindow : Window
         if (doc != null) LyricsPane.Show(doc);
         else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
     }
+
+    /// <summary>Seconds this track's lyrics are moved ahead (Lyrics → Timing); negative = later.</summary>
+    double LyricsOffset => CurrentPath is { } p ? Library.Data.LyricOffsets.GetValueOrDefault(p) : 0;
+
+    void NudgeLyrics(double by)
+    {
+        if (CurrentPath is not { } p) return;
+        var v = by == 0 ? 0 : Math.Round(LyricsOffset + by, 2);
+        if (v == 0) Library.Data.LyricOffsets.Remove(p); else Library.Data.LyricOffsets[p] = v;
+        Library.Touch();
+        Osd(L.F("Lyrics timing {0} s", v.ToString("+0.00;-0.00;0")));
+    }
+
+    async void FindLyrics()
+    {
+        if (CurrentPath is not { } path) return;
+        var guess = string.IsNullOrWhiteSpace(_track.Artist) ? _track.Title : $"{_track.Artist} - {_track.Title}";
+        if (DialogWindow.AskName(this, "Find Lyrics", "Artist - Title", "Search Spicy Lyrics and LRCLIB under another name.", "e.g., Daft Punk - Get Lucky", guess) is not { } q) return;
+        var dash = q.IndexOf(" - ", StringComparison.Ordinal);
+        var (artist, title) = dash > 0 ? (q[..dash].Trim(), q[(dash + 3)..].Trim()) : ("", q.Trim());
+        LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
+        if (!Settings.Bool("ui.lyrics")) Settings.Set("ui.lyrics", true);
+        var doc = await Lyrics.SearchAsync(_track.Title, _track.Artist, _track.Album, _track.Duration, artist, title);
+        if (CurrentPath != path) return;
+        if (doc != null) { Library.Data.LyricFiles.Remove(path); Library.Touch(); LyricsPane.Show(doc); }
+        else LyricsPane.ShowMessage(L.F("Nothing found for “{0}”.", q));
+    }
+
+    void OpenLyricsFile()
+    {
+        if (CurrentPath is not { } path) return;
+        var dlg = new OpenFileDialog { Filter = L.T("Lyrics") + " (*.lrc;*.ttml)|*.lrc;*.ttml" };
+        if (dlg.ShowDialog(this) != true) return;
+        Library.Data.LyricFiles[path] = dlg.FileName;
+        Library.Touch();
+        _lyricsFor = null;
+        if (!Settings.Bool("ui.lyrics")) Settings.Set("ui.lyrics", true);
+        else ApplyLyricsLayout();
+    }
+
+    object LyricsMenu() => Sub("Lyrics", null,
+    [
+        Item("Show Lyrics", null, null, () => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics")), check: Settings.Bool("ui.lyrics")),
+        Item("Find Lyrics…", null, null, FindLyrics, enabled: CurrentPath != null),
+        Item("Open Lyrics File…", null, null, OpenLyricsFile, enabled: CurrentPath is { } p && !p.Contains("://")),
+        new Separator(),
+        Item("Show Lyrics Sooner", null, null, () => NudgeLyrics(+0.25)),
+        Item("Show Lyrics Later", null, null, () => NudgeLyrics(-0.25)),
+        Item(L.F("Reset Timing ({0} s)", LyricsOffset.ToString("+0.00;-0.00;0")), null, null, () => NudgeLyrics(0), enabled: LyricsOffset != 0),
+    ]);
 
     /// <summary>libVLC reports time in steps; between them the lyrics clock runs on its own so the fill sweeps smoothly.</summary>
     double PlaybackClock()
@@ -2297,8 +2389,48 @@ public partial class MainWindow : Window
     {
         var peaks = await Waveform.GetAsync(src);
         if (peaks == null || CurrentPath != src) return;
-        Seek.SetPeaks(peaks);
-        MiniSeek.SetPeaks(peaks);
+        if (Settings.Bool("ui.realwave"))
+        {
+            Seek.SetPeaks(peaks);
+            MiniSeek.SetPeaks(peaks);
+        }
+        if (!Measured) return;
+        if (MeasuredGain(src) is { } g && Math.Abs(g - _trackGain) > 0.01) RampGain(g); // first listen: measured just now
+        // the next song gets measured ahead, so it starts at its level
+        if (NextIndex(+1) is var n && n >= 0 && n < _queue.Count && AudioExt.Contains(Path.GetExtension(_queue[n])) && !_queue[n].Contains("://"))
+            _ = Waveform.GetAsync(_queue[n]);
+    }
+
+    void UpdateMiniLyrics()
+    {
+        var show = _mini && _isAudio && Settings.Bool("ui.lyrics") && LyricsPane.HasLyrics && CurrentPath == _lyricsFor;
+        var (now, next) = show ? LyricsPane.LinesAt(PlaybackClock() + LyricsOffset) : (null, null);
+        MiniLyrics.Visibility = show && (now ?? next) != null ? Visibility.Visible : Visibility.Collapsed;
+        if (MiniLyricNow.Text == (now ?? "")) return;
+        MiniLyricNow.Text = now ?? "";
+        MiniLyricNext.Text = next ?? "";
+        Motion.Pop(MiniLyricNow, dy: 10, scale: 0.97); // the new line rises in
+    }
+
+    // ───────── measured loudness ("Replay gain: Measured") ─────────
+
+    float _trackGain = 1;
+    static bool Measured => Settings.Str("audio.replaygain") == "Measured";
+
+    /// <summary>Gain that brings the song to about -18 dBFS RMS: at most 12 dB down, 4 dB up (more would clip peaks).</summary>
+    static float? MeasuredGain(string src) =>
+        Measured && Waveform.LoudnessOf(src) is { } db ? (float)Math.Pow(10, Math.Clamp(-18 - db, -12, 4) / 20) : null;
+
+    async void RampGain(float to)
+    {
+        var from = _trackGain;
+        _trackGain = to;
+        var mp = _mp;
+        for (var k = 1; k <= 20 && mp == _mp && _tail == null; k++)
+        {
+            AudioChain.SetGain(mp, from + (to - from) * k / 20f);
+            await Task.Delay(50);
+        }
     }
 
     MenuItem DiscMenu()
@@ -2383,7 +2515,7 @@ public partial class MainWindow : Window
         }));
         return
         [
-            Item("Lyrics", null, null, () => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics")), check: Settings.Bool("ui.lyrics")),
+            LyricsMenu(),
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
             Item("Convert…", null, KeyOf("convert"), OpenConverter, enabled: local),
