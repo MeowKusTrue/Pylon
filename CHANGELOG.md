@@ -3,6 +3,36 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.0
+
+<!-- ru -->
+**Новое**
+- **Склейка файлов** (Конвертировать → «Склеить в один файл»): несколько видео или песен в один файл. «Копировать потоки» — мгновенно и без потери качества для файлов одного вида (например, записи из одной программы), MP4 — для любых. Для склейки один раз скачивается ffmpeg (около 200 МБ, Pylon спросит).
+- **Смотреть вместе** («⋯» → «Смотреть вместе»): друзья в той же сети или общем VPN (Radmin, ZeroTier) открывают ваш адрес, и их Pylon повторяет за вашим паузу, воспроизведение и позицию. Пауза у любого — пауза у всех.
+
+**Исправления**
+- Поля ввода: текст больше не обрезается и не уезжает от подсказки, поиск в настройках снова виден.
+- Эффекты и эквалайзер применяются сразу, без перезапуска движка: больше не дёргаются звук и картинка при каждом движении ползунка.
+- Открытие больших папок не подвешивает окно: подпапки видны сразу, пустые отсеиваются в фоне.
+- Обновление скачивается с прогрессом прямо в окне «Доступно обновление».
+- Переход со старого установщика сохраняет закреплённый в «Пуске» ярлык.
+- В настройках нет тёмной полосы сверху и пунктов, которые ничего не делали; ключи для текстов песен убраны в «Дополнительно» — они необязательны.
+- Spicy Lyrics находит больше песен (название без «feat.» и «Remastered», первый исполнитель) и перепроверяет ненайденные через неделю.
+
+<!-- en -->
+**New**
+- **Join files** (Convert → Join into one file): several videos or songs into one. "Copy streams" is instant and lossless for files of one kind (say, from the same recorder); MP4 works for any. Joining fetches ffmpeg once (about 200 MB, Pylon asks first).
+- **Watch together** (⋯ → Watch Together): friends on the same network or a shared VPN (Radmin, ZeroTier) open your address, and their Pylon follows your play, pause and position. Anyone pausing pauses everyone.
+
+**Fixes**
+- Text fields: text is no longer clipped or shifted off the placeholder, and the settings search shows what you type again.
+- Effects and the equalizer apply at once, without restarting the engine: no more stutter on every slider move.
+- Opening big folders no longer freezes the window: subfolders show at once, empty ones are filtered out in the background.
+- Updates download with a progress bar right in the "Update available" window.
+- Moving over from the old installer keeps your Start menu pin working.
+- Settings lose the dark band at the top and the options that did nothing; lyrics keys moved to Advanced, as they're optional.
+- Spicy Lyrics finds more songs (title without "feat." and "Remastered", first artist) and checks songs it missed again after a week.
+
 ## 1.8.0
 
 <!-- ru -->

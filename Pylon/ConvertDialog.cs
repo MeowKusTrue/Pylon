@@ -58,6 +58,10 @@ public partial class DialogWindow
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
         var add = new Button { Content = L.T("Add files"), Style = (Style)Application.Current.FindResource("SecondaryButton") };
         if (!clip) tools.Children.Add(add);
+        // several files can become one (ffmpeg): copied as they are, or re-encoded to MP4
+        var join = new CheckBox { Style = (Style)Application.Current.FindResource("ToggleSwitch"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(24, 0, 10, 0) };
+        var joinLabel = new TextBlock { Text = L.T("Join into one file"), FontSize = 14, Foreground = R("FgA1"), VerticalAlignment = VerticalAlignment.Center };
+        if (!clip) { tools.Children.Add(join); tools.Children.Add(joinLabel); }
 
         var body = Stack(
             Section(clip ? L.T("Save clip") : L.T("Convert"),
@@ -96,6 +100,15 @@ public partial class DialogWindow
                 return;
             }
             var preset = (ConvertPreset)((ComboBoxItem)presets.SelectedItem).Tag;
+            if (join.IsChecked == true && items.Count > 1)
+            {
+                if (!await JoinFiles(dlg, items, preset, folder, outputs, cancel.Token)) return;
+                finished = true;
+                dlg.SaveBtn.IsEnabled = outputs.Count > 0;
+                dlg.SaveBtn.Content = L.T("Show in folder");
+                dlg.CancelBtn.Content = L.T("Close");
+                return;
+            }
             presets.IsEnabled = change.IsEnabled = add.IsEnabled = false;
             dlg.SaveBtn.IsEnabled = false;
             dlg.SaveBtn.Content = L.T("Converting…");
@@ -118,6 +131,43 @@ public partial class DialogWindow
         };
         dlg.Run(() => items.Count > 0);
         cancel.Cancel(); // closing the window stops a running conversion
+    }
+
+    /// <summary>
+    /// "Join into one file": ffmpeg (fetched on first use) concatenates in list order. "Copy streams" keeps them as they
+    /// are; any other format joins into an H.264 MP4.
+    /// </summary>
+    static async Task<bool> JoinFiles(DialogWindow dlg, List<(string Path, ScaleTransform Bar, TextBlock State)> items, ConvertPreset preset,
+        string? folder, List<string> outputs, CancellationToken cancel)
+    {
+        var status = items[0].State;
+        if (!Ffmpeg.Available)
+        {
+            if (!OfferTool(dlg, "ffmpeg", "Join files with ffmpeg",
+                    "Joining needs ffmpeg, a free open-source tool. Pylon can download it now (about 200 MB from github.com/BtbN/FFmpeg-Builds); it's only used for joining.")) return false;
+            dlg.SaveBtn.IsEnabled = false;
+            var ok = await Ffmpeg.InstallAsync(new Progress<double>(p => { status.Text = L.F("ffmpeg {0}%", (int)(p * 100)); items[0].Bar.ScaleX = p; }));
+            items[0].Bar.ScaleX = 0;
+            if (!ok) { status.Text = L.T("Couldn't download ffmpeg"); dlg.SaveBtn.IsEnabled = true; return false; }
+        }
+        var copy = preset.Extension.Length == 0;
+        var first = items[0].Path;
+        var dst = Converter.OutputPath(first, copy ? preset : preset with { Extension = ".mp4" }, folder, " " + L.T("(joined)"));
+        dlg.SaveBtn.IsEnabled = false;
+        dlg.SaveBtn.Content = L.T("Joining…");
+        foreach (var i in items) i.State.Text = "…";
+        var (done, error) = await Ffmpeg.JoinAsync([.. items.Select(i => i.Path)], dst, copy,
+            new Progress<double>(p => { foreach (var i in items) i.Bar.ScaleX = p; }), cancel);
+        foreach (var i in items)
+        {
+            i.Bar.ScaleX = done ? 1 : 0;
+            i.State.Text = done ? "✓" : L.T(cancel.IsCancellationRequested ? "Cancelled" : "Failed");
+            i.State.Foreground = done ? R("Accent") : R("FgA3");
+        }
+        if (done) outputs.Add(dst);
+        else if (error != null && copy) status.Text = L.T("Failed: files differ, choose MP4"); // copying needs files of one kind
+        else if (error != null) status.ToolTip = error;
+        return true;
     }
 
     static string Time(long ms) => TimeSpan.FromMilliseconds(ms).ToString(ms >= 3_600_000 ? @"h\:mm\:ss" : @"m\:ss");

@@ -281,13 +281,37 @@ public partial class DialogWindow : Window
     }
 
     /// <summary>The first web page played: may Pylon fetch yt-dlp?</summary>
-    public static bool OfferYtDlp(Window owner)
+    public static bool OfferYtDlp(Window owner) => OfferTool(owner, "yt-dlp", "Play videos from websites",
+        "YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites play through yt-dlp, a free open-source tool. Pylon can download it now (about 18 MB from github.com/yt-dlp) and keep it up to date.");
+
+    /// <summary>Pick one of several lines (a button each); -1 when cancelled.</summary>
+    public static int Choose(Window owner, string title, string heading, IReadOnlyList<string> options)
     {
-        var body = Stack(
-            Section(L.T("Play videos from websites"),
-                L.T("YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites play through yt-dlp, a free open-source tool. Pylon can download it now (about 18 MB from github.com/yt-dlp) and keep it up to date.")),
-            Spacer(10));
-        var dlg = new DialogWindow(owner, "yt-dlp", body) { Width = 560 };
+        var chosen = -1;
+        DialogWindow? dlg = null;
+        var list = new StackPanel();
+        for (var i = 0; i < options.Count; i++)
+        {
+            var k = i;
+            var b = new Button
+            {
+                Content = new TextBlock { Text = options[i], TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 560 },
+                Style = (Style)Application.Current.FindResource("SecondaryButton"), HorizontalAlignment = HorizontalAlignment.Stretch,
+                Height = 36, Margin = new Thickness(0, 0, 0, 6),
+            };
+            b.Click += (_, _) => { chosen = k; dlg!.DialogResult = true; };
+            list.Children.Add(b);
+        }
+        dlg = new DialogWindow(owner, title, Stack(Section(L.T(heading), ""), new ScrollViewer { Content = list, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Spacer(8))) { Width = 640 };
+        dlg.SaveBtn.Visibility = Visibility.Collapsed;
+        dlg.Run(() => true);
+        return chosen;
+    }
+
+    /// <summary>"Pylon needs X for this: download it?" True = yes.</summary>
+    public static bool OfferTool(Window owner, string tool, string heading, string text)
+    {
+        var dlg = new DialogWindow(owner, tool, Stack(Section(L.T(heading), L.T(text)), Spacer(10))) { Width = 560 };
         dlg.CancelBtn.Content = L.T("Not now");
         dlg.SaveBtn.Content = L.T("Download");
         return dlg.Run(() => true);

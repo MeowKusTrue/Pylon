@@ -387,11 +387,18 @@ public static class Settings
                 T("privacy.position", "Remember the playback position", true),
                 Txt("privacy.exclude", "Never remember items matching", "", "e.g., *private*; D:\\Secret\\*"),
                 Act("Clear history now", "Clear", w => ClearHistory?.Invoke(w)),
-                T("library.netmeta", "Fetch titles and cover art from the internet", false, "Looks up missing tags and artwork online.", engine: true),
-                T("privacy.lastfm", "Submit played tracks to last.fm", false).Off(NotInLibVlc),
-                Txt("privacy.lastfmuser", "Last.fm username").Off(NotInLibVlc),
-                Pw("privacy.lastfmpass", "Last.fm password").Off(NotInLibVlc),
-                Txt("privacy.lastfmurl", "Last.fm submission URL").Off(NotInLibVlc)),
+                T("library.netmeta", "Fetch titles and cover art from the internet", false, "Missing covers come from iTunes; songs without tags are recognized by their sound (AcoustID; downloads the 3 MB fpcalc tool once).", engine: true),
+                Discord.Possible ? T("privacy.discord", "Show what's playing in Discord", false, "Your Discord profile shows the track or video, like Spotify does. Only while Discord is running on this computer.")
+                                 : T("privacy.discord", "Show what's playing in Discord", false).Off(),
+                LastFm.Possible ? T("lastfm.scrobble", "Scrobble to Last.fm", false, "Songs you listen to (half of them, or 4 minutes) go to your Last.fm profile.")
+                                : T("lastfm.scrobble", "Scrobble to Last.fm", false).Off(),
+                LastFm.Possible ? Act("Last.fm account", "Connect", async w =>
+                {
+                    MessageBox.Show(w, L.T("Last.fm opens in your browser: allow Pylon there, then come back."), "Last.fm");
+                    MessageBox.Show(w, await LastFm.ConnectAsync() ? L.F("Connected as {0}.", Str("lastfm.user")) : L.T("Last.fm didn't confirm. Try again."), "Last.fm");
+                }, "Sign in through the Last.fm website; Pylon never sees your password.")
+                                : Act("Last.fm account", "Connect", _ => { }).Off(),
+                LastFm.Possible ? Act("Sign out of Last.fm", "Sign out", _ => LastFm.Disconnect()) : Act("Sign out of Last.fm", "Sign out", _ => { }).Off()),
         ], []),
 
         new("Controls", "keyboard", "Mouse, Keyboard & Remote Controls", "App",

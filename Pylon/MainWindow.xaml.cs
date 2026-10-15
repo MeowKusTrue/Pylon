@@ -204,6 +204,8 @@ public partial class MainWindow : Window
             _duck.Stop();
             _tray?.Dispose();
             _remote?.Dispose();
+            _discord?.Dispose();
+            _partyTimer?.Stop();
             _preview.Dispose();
             _cast?.Dispose();
             _renderers?.Stop();
@@ -641,6 +643,9 @@ public partial class MainWindow : Window
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
         if (!parsed) return;
         if (ArtImage.Source == null && _isAudio && !isUrl && Settings.Bool("library.netmeta")) FetchCover(src);
+        // no tags at all: name it by its sound (AcoustID), once; the result is kept in the library
+        if (_isAudio && !isUrl && string.IsNullOrWhiteSpace(_artist) && Recognize.Possible && Settings.Bool("library.netmeta")
+            && Library.Data.Meta.GetValueOrDefault(src) is not { Artist.Length: > 0 }) RecognizeSong(src);
         if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
         _lyricsFor = null;
         ApplyLyricsLayout(); // now with the real title and artist
@@ -786,6 +791,33 @@ public partial class MainWindow : Window
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>"Recognize Song" (or a song without tags): title, artist, album and cover from its sound.</summary>
+    async void RecognizeSong(string src)
+    {
+        Osd(L.T("Listening…"), 15);
+        var song = await Recognize.IdentifyAsync(src);
+        if (CurrentPath != src) return;
+        if (song == null) { Osd(L.T("Couldn't recognize this song"), 3); return; }
+        var meta = Library.Data.Meta.GetValueOrDefault(src) ?? new TrackMeta();
+        (meta.Title, meta.Artist, meta.Album) = (song.Title, song.Artist, song.Album ?? meta.Album);
+        if (song.Cover != null) meta.Art = new Uri(song.Cover).AbsoluteUri;
+        try { meta.Stamp = File.GetLastWriteTimeUtc(src).Ticks; } catch (IOException) { } // the tag indexer keeps it until the file changes
+        Library.Data.Meta[src] = meta;
+        _title = song.Title;
+        _artist = song.Artist;
+        _track = (song.Title, song.Artist, song.Album, _track.Duration);
+        MiniTitle.Text = MusicCaption.Text = $"{song.Title} - {song.Artist}";
+        TitleText.Text = Settings.Bool("ui.titlefile") ? song.Title : "Pylon";
+        Title = $"{song.Title} - Pylon";
+        if (meta.Art != null) SetArtwork(meta.Art);
+        _session?.SetTrack(true, song.Title, song.Artist, song.Album, meta.Art);
+        Library.Remember(src, song.Title, song.Artist, _mp.Time, _mp.Length, true);
+        Library.Touch();
+        _lyricsFor = null;
+        ApplyLyricsLayout(); // lyrics by the real name now
+        Osd($"{song.Title} - {song.Artist}", 3);
+    }
+
     /// <summary>A song without embedded art gets one from iTunes (Covers), on screen and in the Windows media flyout.</summary>
     async void FetchCover(string src)
     {
@@ -835,6 +867,8 @@ public partial class MainWindow : Window
     void Refresh()
     {
         MaybeCrossfade();
+        UpdateDiscord();
+        UpdateScrobble();
         UpdateSkip();
         UpdateMiniLyrics();
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
@@ -866,6 +900,7 @@ public partial class MainWindow : Window
 
     public void TogglePlay()
     {
+        if (_party != null && _partyHttp != null) { _ = _partyHttp.GetStringAsync(_party + "api/toggle"); return; } // the host leads: pause for everyone
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
         _duckPaused = false;
@@ -2138,6 +2173,7 @@ public partial class MainWindow : Window
         CastMenu(),
         Item(_cast != null ? "Streaming to TV / Phone…" : "Stream to TV / Phone…", "broadcast-duotone", null, StreamToNetwork, check: _cast != null, enabled: _index >= 0 || _cast != null),
         Item("Phone Remote…", "device-mobile-duotone", null, ShowRemote, check: _remote != null),
+        _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true) : Item("Watch Together…", "users-three-duotone", null, WatchTogether),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
@@ -2366,6 +2402,64 @@ public partial class MainWindow : Window
     /// <summary>Starts streaming the current item to the local network (or shows the running stream) with a QR code to join.</summary>
     RemoteServer? _remote;
 
+    // ───────── watch together ─────────
+
+    string? _party;                     // the host's address while this copy follows one
+    System.Net.Http.HttpClient? _partyHttp;
+    DispatcherTimer? _partyTimer;
+    string? _partyMissing;
+
+    void WatchTogether()
+    {
+        var pick = DialogWindow.Choose(this, "Watch Together", "Everyone needs the same file on their own computer; Pylon keeps play, pause and position in step.",
+            [L.T("Invite friends: they follow you"), L.T("Join a friend")]);
+        if (pick == 0) ShowRemote(); // friends paste the remote's address; pressing pause there pauses everyone
+        if (pick != 1) return;
+        if (DialogWindow.AskName(this, "Watch Together", "Your friend's address", "They find it in ⋯ → Watch Together → Invite friends. Same Wi-Fi, or a shared VPN such as Radmin or ZeroTier.", "http://192.168.1.10:51234/…/") is not { } url) return;
+        _party = url.Trim().EndsWith('/') ? url.Trim() : url.Trim() + "/";
+        _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        _partyMissing = null;
+        _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
+        Osd(L.T("Joined the watch party"), 3);
+    }
+
+    void LeaveParty()
+    {
+        _partyTimer?.Stop();
+        _partyHttp?.Dispose();
+        (_party, _partyHttp, _partyTimer) = (null, null, null);
+        Osd(L.T("Left the watch party"), 2);
+    }
+
+    bool _partyBusy;
+
+    /// <summary>Follows the host: same file (by name), play / pause, and the position within 1.5 s.</summary>
+    async Task FollowParty()
+    {
+        if (_party == null || _partyHttp == null || _partyBusy) return;
+        _partyBusy = true;
+        try
+        {
+            var sent = Environment.TickCount64;
+            using var doc = System.Text.Json.JsonDocument.Parse(await _partyHttp.GetStringAsync(_party + "api/state"));
+            var host = doc.RootElement;
+            var file = host.TryGetProperty("file", out var f) ? f.GetString() : null;
+            var mine = CurrentPath is { } p ? (p.Contains("://") ? p : Path.GetFileName(p)) : null;
+            if (file == null) return;
+            if (!string.Equals(file, mine, StringComparison.OrdinalIgnoreCase))
+            {
+                if (_partyMissing != file) { _partyMissing = file; Osd(L.F("Open “{0}” to watch together", file), 5); }
+                return;
+            }
+            var playing = host.GetProperty("playing").GetBoolean();
+            var time = host.GetProperty("time").GetInt64() + (playing ? (Environment.TickCount64 - sent) / 2 : 0); // half the round trip
+            if (playing != _mp.IsPlaying) _mp.SetPause(!playing);
+            if (Math.Abs(_mp.Time - time) > 1500 && _mp.IsSeekable) _mp.Time = time;
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException) { }
+        finally { _partyBusy = false; }
+    }
+
     void ShowRemote()
     {
         _remote ??= new RemoteServer(RemoteCommand);
@@ -2388,6 +2482,7 @@ public partial class MainWindow : Window
         return new
         {
             title = _index >= 0 ? _title : "Pylon", artist = _index >= 0 ? _artist : null, playing = _mp.IsPlaying,
+            file = _index >= 0 && CurrentPath is { } cp ? (cp.Contains("://") ? cp : Path.GetFileName(cp)) : null,
             time = Math.Max(0, _mp.Time), length = Math.Max(0, _mp.Length), volume = (int)Math.Round(Volume.Value * 100),
         };
     }
@@ -2446,6 +2541,60 @@ public partial class MainWindow : Window
         MiniLyricNow.Text = now ?? "";
         MiniLyricNext.Text = next ?? "";
         Motion.Pop(MiniLyricNow, dy: 10, scale: 0.97); // the new line rises in
+    }
+
+    // ───────── Last.fm ─────────
+
+    string? _scrobbleFor;
+    DateTime _scrobbleStart;
+    long _playedMs, _scrobbleTick;
+    bool _scrobbled;
+
+    /// <summary>Now Playing when a song starts; a scrobble once half of it (or 4 minutes) has really been played.</summary>
+    void UpdateScrobble()
+    {
+        if (!LastFm.Possible || !LastFm.SignedIn || !Settings.Bool("lastfm.scrobble") || !_isAudio || _index < 0 || _metaPending
+            || CurrentPath is not { } path || Library.Excluded(path) || string.IsNullOrWhiteSpace(_artist)) return;
+        var now = Environment.TickCount64;
+        if (path != _scrobbleFor)
+        {
+            (_scrobbleFor, _scrobbleStart, _playedMs, _scrobbled, _scrobbleTick) = (path, DateTime.UtcNow, 0, false, now);
+            _ = LastFm.NowPlayingAsync(_artist!, _title, _track.Album, _mp.Length / 1000.0);
+            return;
+        }
+        if (_mp.IsPlaying) _playedMs += now - _scrobbleTick;
+        _scrobbleTick = now;
+        var len = _mp.Length;
+        if (_scrobbled || len <= 30_000 || _playedMs < Math.Min(len / 2, 240_000)) return;
+        _scrobbled = true;
+        _ = LastFm.ScrobbleAsync(_artist!, _title, _track.Album, len / 1000.0, _scrobbleStart);
+    }
+
+    // ───────── Discord status ─────────
+
+    Discord? _discord;
+    string? _discordSig;
+    long _discordPos, _discordAt;
+
+    /// <summary>Sends the track to Discord when it, play / pause or the position (a seek) changes.</summary>
+    void UpdateDiscord()
+    {
+        if (!Settings.Bool("privacy.discord") || !Discord.Possible)
+        {
+            if (_discordSig != null) { _ = _discord?.SetAsync(null, null, false, 0, 0, false); _discordSig = null; }
+            return;
+        }
+        var playing = _mp.IsPlaying;
+        var sig = _index >= 0 && CurrentPath is { } p && !Library.Excluded(p) ? $"{p}|{playing}" : "";
+        var now = Environment.TickCount64;
+        var expected = _discordPos + (playing ? now - _discordAt : 0);
+        if (sig == _discordSig && (!playing || Math.Abs(expected - _mp.Time) < 3000)) return;
+        _discordSig = sig;
+        _discordPos = _mp.Time;
+        _discordAt = now;
+        _discord ??= new Discord();
+        _ = sig.Length == 0 ? _discord.SetAsync(null, null, false, 0, 0, false)
+                            : _discord.SetAsync(_title, _artist, _isAudio, Math.Max(0, _mp.Time), _mp.Length, playing);
     }
 
     // ───────── skip intro, next episode ─────────
@@ -2651,6 +2800,7 @@ public partial class MainWindow : Window
         return
         [
             LyricsMenu(),
+            .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
             Item("Convert…", null, KeyOf("convert"), OpenConverter, enabled: local),
@@ -2710,8 +2860,39 @@ public partial class MainWindow : Window
         }
         if (items.Count > 0) items.Add(new Separator());
         items.Add(Item("Add Subtitles…", "file-duotone", null, AddSubtitles, enabled: _index >= 0 && CurrentPath?.Contains("://") == false));
+        if (OnlineSubtitles.Possible) items.Add(Item("Find Subtitles Online…", "magnifying-glass", null, FindSubtitlesOnline, enabled: _index >= 0 && !_isAudio && CurrentPath?.Contains("://") == false));
         items.Add(Item("Subtitle Settings…", null, null, () => OpenSettings("Subtitles")));
         return items;
+    }
+
+    async void FindSubtitlesOnline()
+    {
+        if (CurrentPath is not { } video || video.Contains("://")) return;
+        Osd(L.T("Looking for subtitles…"), 10);
+        List<OnlineSubtitles.Result> found;
+        try { found = await OnlineSubtitles.SearchAsync(video, L.Ru ? "ru,en" : "en"); }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
+        {
+            Osd(L.T("Couldn't reach OpenSubtitles"), 3);
+            return;
+        }
+        Osd("", 0);
+        if (found.Count == 0) { Osd(L.T("No subtitles found"), 3); return; }
+        var pick = DialogWindow.Choose(this, "Find Subtitles Online", "✓ = made for exactly this file",
+            [.. found.Select(r => $"{(r.HashMatch ? "✓  " : "")}{r.Language.ToUpperInvariant()}  ·  {r.Name}  ·  {r.Downloads:N0}")]);
+        if (pick < 0 || CurrentPath != video) return;
+        try
+        {
+            var sub = await OnlineSubtitles.DownloadAsync(found[pick], video);
+            _mp.AddSlave(MediaSlaveType.Subtitle, new Uri(sub).AbsoluteUri, true);
+            (Library.Data.Subtitles.TryGetValue(video, out var list) ? list : Library.Data.Subtitles[video] = []).Add(sub);
+            Library.Touch();
+            Osd(L.T("Subtitles added"), 2);
+        }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or KeyNotFoundException)
+        {
+            Osd(L.T("Couldn't download the subtitles"), 3); // also when today's free downloads are used up
+        }
     }
 
     void AddSubtitles()
@@ -2951,6 +3132,21 @@ public partial class MainWindow : Window
                         var state = await http.GetStringAsync(_remote.Url + "api/toggle");
                         var denied = await http.GetAsync(_remote.Url.Replace(_remote.Url.Split('/')[3], "nope") + "api/toggle");
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"page {page.Length} chars; toggle -> {state}; wrong key -> {(int)denied.StatusCode}{Environment.NewLine}");
+                        break;
+                    }
+                case "join": // the queue joined by ffmpeg ("copy" or "mp4"), next to the snapshot
+                    {
+                        var dst = Path.Combine(Path.GetDirectoryName(outFile)!, "joined-" + arg + (arg == "copy" ? Path.GetExtension(_queue[0]) : ".mp4"));
+                        var (ok, error) = await Ffmpeg.JoinAsync(_queue.ToList(), dst, arg == "copy", null, CancellationToken.None);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"join {arg}: ok={ok} error={error}{Environment.NewLine}");
+                        break;
+                    }
+                case "host": _remote ??= new RemoteServer(RemoteCommand); File.WriteAllText(Path.ChangeExtension(outFile, ".url.txt"), _remote.Url); break;
+                case "party":
+                    {
+                        _party = File.ReadAllText(arg).Trim();
+                        _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+                        _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
                         break;
                     }
                 case "lyricsstate":
