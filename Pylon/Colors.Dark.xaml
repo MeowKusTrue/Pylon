@@ -16,6 +16,7 @@
     <SolidColorBrush x:Key="DividerBright" Color="#373737"/>
     <SolidColorBrush x:Key="DividerDim" Color="#222222"/>
     <SolidColorBrush x:Key="Hover" Color="#0FFFFFFF"/>
+    <SolidColorBrush x:Key="Checked" Color="#29FFFFFF"/> <!-- a toggle that is on -->
     <SolidColorBrush x:Key="MenuBg" Color="#F2191919"/>
     <SolidColorBrush x:Key="PanelBg" Color="#F20E0E0E"/>
     <SolidColorBrush x:Key="StageBg" Color="#000000"/>

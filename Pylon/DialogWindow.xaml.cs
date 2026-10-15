@@ -208,7 +208,7 @@ public partial class DialogWindow : Window
         if (!dlg.Run(() => true)) return;
         foreach (var a in Hotkeys.Actions)
         {
-            Settings.Set("hotkey." + a.Id, local[a.Id] == a.Default ? "" : local[a.Id]);
+            Settings.Set("hotkey." + a.Id, local[a.Id] == Hotkeys.Base(a.Id) ? "" : local[a.Id]);
             Settings.Set("ghotkey." + a.Id, global[a.Id]);
         }
     }

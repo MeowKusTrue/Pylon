@@ -539,6 +539,8 @@ public static partial class Strings
         ["Appearance"] = "Оформление",
         ["Interface language"] = "Язык интерфейса",
         ["Pylon restarts to switch the language."] = "Чтобы сменить язык, Pylon перезапустится.",
+        ["Pylon restarts to switch the language. More languages: a JSON file in the lang folder (see the project page)."] = "Чтобы сменить язык, Pylon перезапустится. Другие языки — JSON-файл в папке lang (подробнее на странице проекта).",
+        ["Windows"] = "Windows",
         ["Theme"] = "Тема",
         ["Accent color"] = "Акцентный цвет",
         ["Startup"] = "Запуск",
@@ -628,6 +630,11 @@ public static partial class Strings
 
         // Controls
         ["Defaults"] = "Раскладка",
+        ["Layout"] = "Раскладка",
+        ["VLC-style"] = "Как в VLC",
+        ["YouTube-style"] = "Как на YouTube",
+        ["MPC-HC-style"] = "Как в MPC-HC",
+        ["Shortcuts as in another player (YouTube: K, J and L; MPC-HC: Alt+Enter, PgUp and PgDn). Your own changes stay on top."] = "Клавиши как в другом плеере (YouTube: K, J и L; MPC-HC: Alt+Enter, PgUp и PgDn). Ваши собственные изменения сохраняются поверх.",
         ["Edit Keyboard Shortcuts"] = "Изменить горячие клавиши",
         ["Reset all shortcuts"] = "Сбросить все клавиши",
         ["Skip Amounts"] = "Шаг перемотки",
@@ -832,6 +839,7 @@ public static partial class Strings
         ["Skip Intro"] = "Пропустить заставку",
         ["Contact Sheet…"] = "Лист кадров…",
         ["Phone Remote…"] = "Пульт с телефона…",
+        ["Default Player & File Types…"] = "Плеер по умолчанию и типы файлов…",
         ["Phone Remote"] = "Пульт с телефона",
         ["Control Pylon from your phone"] = "Управляйте Pylon с телефона",
         ["Scan the code with a phone on the same Wi-Fi: play, pause, skip and volume from its browser. The address has a private key; only those you show it to can use it."] = "Отсканируйте код телефоном в той же сети Wi-Fi: пауза, перемотка, переключение треков и громкость прямо из браузера. В адресе есть секретный ключ — пультом смогут пользоваться только те, кому вы его покажете.",

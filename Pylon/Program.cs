@@ -13,8 +13,9 @@ public static class Program
     static readonly string? Probe = Environment.GetEnvironmentVariable("PYLON_VELOPACK_TEST");
 
     [STAThread]
-    public static void Main()
+    public static void Main(string[] args)
     {
+        if (args is ["--export-strings", var template]) { L.ExportTemplate(template); return; } // a starting point for a new language
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); })
             .OnAfterUpdateFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); }) // the files moved: refresh paths

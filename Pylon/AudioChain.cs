@@ -108,6 +108,7 @@ public static class AudioChain
             names.Insert(0, "equalizer");
         }
         SetString(set, mp, "audio-filter", string.Join(":", names));
+        Built.AddOrUpdate(mp, ChainKey(Settings.EngineArgs()));
         // drops the kept output so the next one inherits the chain above; must name a real module ("any" is refused)
         return mp.SetAudioOutput(audioOutput ?? "mmdevice");
     }
@@ -118,10 +119,25 @@ public static class AudioChain
     static readonly string[] FilterParams = ["--compressor-", "--spatializer-", "--norm-max-level=", "--pitch-shift=", "--equalizer-2pass", "--no-audio-time-stretch"];
 
     /// <summary>
+    /// What the running chain was built from, per player. The equalizer, compressor and spatializer follow their variables
+    /// while they run (callbacks on the output); anything else (which filters, the normalizer level, pitch, 2-pass) only
+    /// takes effect through a rebuild, and a rebuild drops a moment of sound, so it happens only when one of those changed.
+    /// </summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MediaPlayer, string> Built = [];
+
+    /// <summary>Whether the last ApplyLive had to rebuild the chain (checks).</summary>
+    public static bool LastRebuilt { get; private set; }
+
+    static string ChainKey(IEnumerable<string> args) =>
+        (Settings.Bool("audio.eq") ? "equalizer:" : "") + string.Join(":", Filters()) + "|"
+        + string.Join(" ", args.Where(a => FilterParams.Any(a.StartsWith) && !a.StartsWith("--compressor-") && !a.StartsWith("--spatializer-")));
+
+    /// <summary>
     /// Effects change while playing, without restarting the engine (which stuttered picture and sound on every slider
     /// move). The filters' parameters (--compressor-ratio and friends) are set as variables on the player and on its running
-    /// audio output: filters create theirs on the output once and never read the command line again. Setting "audio-filter"
-    /// on the output then makes libVLC rebuild just the filter chain (its own callback), with no gap in the stream.
+    /// audio output: filters create theirs on the output once and never read the command line again. Running filters with
+    /// callbacks pick the new values up at once; when the chain itself has to change, setting "audio-filter" on the output
+    /// makes libVLC rebuild just the filter chain (its own callback), without restarting the engine.
     /// Returns false when libvlccore isn't reachable; the caller restarts the engine instead.
     /// </summary>
     public static bool ApplyLive(MediaPlayer mp)
@@ -167,6 +183,9 @@ public static class AudioChain
             if (restart || obj == mp.NativeReference) SetString(set, obj, "audio-filter", string.Join(":", names)); // on the output: rebuilds the chain
         }
 
+        var key = ChainKey(args);
+        var rebuild = LastRebuilt = !Built.TryGetValue(mp, out var was) || was != key;
+        Built.AddOrUpdate(mp, key);
         Write(mp.NativeReference, false);
         var list = children(mp.NativeReference);
         if (list == IntPtr.Zero) return true; // not playing: the next output inherits all of it
@@ -176,7 +195,7 @@ public static class AudioChain
             var values = Marshal.ReadIntPtr(list, 8);
             for (var i = 0; i < count; i++)
                 if (Marshal.ReadIntPtr(values, i * 8) is var obj && obj != IntPtr.Zero && Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(obj)) == "audio output")
-                    Write(obj, true);
+                    Write(obj, rebuild);
         }
         finally { release(list); }
         return true;

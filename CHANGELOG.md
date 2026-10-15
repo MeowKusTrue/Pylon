@@ -3,6 +3,32 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.1
+
+<!-- ru -->
+**Новое**
+- **Раскладки клавиш** (Настройки → Управление → «Раскладка»): как в VLC, как на YouTube (K — пауза, J и L — перемотка) или как в MPC-HC (Alt+Enter, PgUp и PgDn). Ваши собственные сочетания остаются поверх выбранной раскладки.
+- **Плеер по умолчанию и типы файлов** теперь легко найти: «⋯» → «Плеер по умолчанию и типы файлов…» и первая страница настроек.
+- **Другие языки интерфейса**: перевод — это один JSON-файл в папке lang; Pylon сам находит его и показывает в списке языков. Шаблон со всеми строками: `Pylon.exe --export-strings de.json`.
+
+**Исправления**
+- Видно, что выбрано: выбранный вариант в переключателях («Выкл / Слабое / …») — светлая плашка, а включённые кнопки («Повтор», «Перемешать», «Текст» и другие) — с подложкой и точкой снизу, даже с серым акцентом.
+- Ползунки эквалайзера, компрессора и пространства меняют звук на лету, без пересборки фильтров: трек больше не прерывается. Короткая пауза остаётся только при включении или выключении самого эффекта.
+- Бэк-вокал в текстах подсвечивается по словам, в том числе строки, где поёт только бэк.
+- Узнанная песня получает обложку из iTunes, если в базе MusicBrainz её нет.
+
+<!-- en -->
+**New**
+- **Shortcut layouts** (Settings → Controls → Layout): VLC, YouTube (K pauses, J and L skip) or MPC-HC (Alt+Enter, PgUp and PgDn). Your own shortcuts stay on top of the layout.
+- **Default player and file types** are easy to find: ⋯ → Default Player & File Types…, and the first page of Settings.
+- **More interface languages**: a translation is one JSON file in the lang folder; Pylon finds it and lists it with the languages. A template with every text: `Pylon.exe --export-strings de.json`.
+
+**Fixes**
+- You can see what's selected: the chosen option in segmented switches is a solid chip, and toggle buttons that are on (Repeat, Shuffle, Lyrics and others) get a backdrop and a dot underneath, even with a grey accent.
+- Equalizer, compressor and spatializer sliders change the sound as it plays, without rebuilding the filters: the track no longer breaks up. A short gap remains only when an effect itself is switched on or off.
+- Background vocals in lyrics light up word by word, including lines sung by the background alone.
+- A recognized song gets its cover from iTunes when MusicBrainz has none.
+
 ## 1.9.0
 
 <!-- ru -->

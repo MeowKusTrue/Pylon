@@ -228,7 +228,7 @@ public static class OptView
                     foreach (Border b in row.Children)
                     {
                         var sel = string.Equals((string)b.Tag, Settings.Str(o.Key), StringComparison.OrdinalIgnoreCase);
-                        b.BorderBrush = sel ? R("Accent") : Brushes.Transparent;
+                        b.BorderBrush = sel ? R("FgA0") : Brushes.Transparent; // not the accent: a grey accent would hide its own swatch
                         b.Background = sel ? R("AccentBright") : Brushes.Transparent;
                     }
                 });

@@ -155,14 +155,16 @@ public static class SpicyLyrics
         {
             if (Str(c, "Type") is { } t && t != "Vocal") continue;
             var opposite = c.TryGetProperty("OppositeAligned", out var o) && o.ValueKind == JsonValueKind.True;
-            if (c.TryGetProperty("Lead", out var lead) && lead.TryGetProperty("Syllables", out var syl))
+            var bg = c.TryGetProperty("Background", out var b) && b.ValueKind == JsonValueKind.Array
+                ? b.EnumerateArray().Where(x => x.TryGetProperty("Syllables", out _)).SelectMany(x => Syllables(x.GetProperty("Syllables"))).ToArray() : [];
+            if (c.TryGetProperty("Lead", out var lead) && lead.TryGetProperty("Syllables", out var syl) || bg.Length > 0)
             {
-                var words = Syllables(syl);
-                if (words.Length == 0) continue;
-                var bg = c.TryGetProperty("Background", out var b) && b.ValueKind == JsonValueKind.Array
-                    ? b.EnumerateArray().Where(x => x.TryGetProperty("Syllables", out _)).SelectMany(x => Syllables(x.GetProperty("Syllables"))).ToArray() : [];
-                var text = string.Concat(words.Select(w => w.Joined ? w.Text : w.Text + " ")).Trim();
-                lines.Add(new LyricLine(Num(lead, "StartTime") ?? words[0].Start, Num(lead, "EndTime") ?? words[^1].End, text,
+                var words = lead.ValueKind == JsonValueKind.Object && lead.TryGetProperty("Syllables", out syl) ? Syllables(syl) : [];
+                // a line may be background vocals only (empty lead): it still goes word by word
+                var shown = words.Length > 0 ? words : bg;
+                if (shown.Length == 0) continue;
+                var text = string.Concat(shown.Select(w => w.Joined ? w.Text : w.Text + " ")).Trim();
+                lines.Add(new LyricLine(Num(lead, "StartTime") ?? shown[0].Start, Num(lead, "EndTime") ?? shown[^1].End, text,
                     type == "Syllable" ? words : [], opposite, type == "Syllable" ? bg : []));
             }
             else if (Str(c, "Text") is { Length: > 0 } text)
@@ -188,5 +190,5 @@ public static class SpicyLyrics
         .Select(s => new Syllable(Num(s, "StartTime") ?? 0, Num(s, "EndTime") ?? 0, Str(s, "Text")!.Trim(), s.TryGetProperty("IsPartOfWord", out var p) && p.ValueKind == JsonValueKind.True))];
 
     static string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-    static double? Num(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+    static double? Num(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
 }

@@ -73,7 +73,34 @@ public static class Hotkeys
         new("quit", "App", "Quit", "Ctrl+Q", w => w.Close()),
     ];
 
-    public static string Gesture(string id) => Settings.Str("hotkey." + id) is { Length: > 0 } g ? g : Actions.First(a => a.Id == id).Default;
+    /// <summary>
+    /// Layouts people bring from other players. A layout only lists what differs from VLC; the user's own changes go on
+    /// top of it, and "Reset" returns to the layout. "A|B" = either key.
+    /// </summary>
+    public static readonly Dictionary<string, Dictionary<string, string>> Layouts = new()
+    {
+        ["VLC-style"] = [],
+        ["YouTube-style"] = new()
+        {
+            ["play"] = "Space|K", ["back2"] = "J", ["fwd2"] = "L", ["back1"] = "Left", ["fwd1"] = "Right", ["back3"] = "Ctrl+Left", ["fwd3"] = "Ctrl+Right",
+            ["audiodelaydown"] = "Shift+J", ["audiodelayup"] = "Shift+K", ["library"] = "Ctrl+L",
+            ["subtrack"] = "C", ["crop"] = "Shift+C", ["next"] = "Shift+N", ["prev"] = "Shift+P", ["nextchapter"] = "Ctrl+Shift+N", ["prevchapter"] = "Ctrl+Shift+P",
+            ["faster"] = "Shift+OemPeriod", ["slower"] = "Shift+OemComma", ["frame"] = "OemPeriod",
+        },
+        ["MPC-HC-style"] = new()
+        {
+            ["fullscreen"] = "Alt+Return|F", ["stop"] = "OemPeriod", ["frame"] = "Ctrl+Right", ["back1"] = "Alt+Left", ["fwd1"] = "Alt+Right",
+            ["back2"] = "Left", ["fwd2"] = "Right", ["back3"] = "Shift+Left", ["fwd3"] = "Shift+Right",
+            ["next"] = "Next", ["prev"] = "Prior", ["mute"] = "Ctrl+M|M", ["miniplayer"] = "Ctrl+Shift+M", ["snapshot"] = "Alt+I",
+            ["faster"] = "Ctrl+Up", ["slower"] = "Ctrl+Down", ["quit"] = "Alt+X|Ctrl+Q",
+        },
+    };
+
+    /// <summary>What a shortcut is without the user's changes: the chosen layout, else Pylon's own (VLC's).</summary>
+    public static string Base(string id) =>
+        Layouts.GetValueOrDefault(Settings.Str("controls.defaults"))?.GetValueOrDefault(id) ?? Actions.First(a => a.Id == id).Default;
+
+    public static string Gesture(string id) => Settings.Str("hotkey." + id) is { Length: > 0 } g ? g : Base(id);
     public static string GlobalGesture(string id) => Settings.Str("ghotkey." + id);
 
     public static void ResetAll()
@@ -100,7 +127,7 @@ public static class Hotkeys
     }
 
     /// <summary>Human label: "Ctrl + ←".</summary>
-    public static string Display(string gesture) => string.IsNullOrEmpty(gesture) ? "" : string.Join(" + ", gesture.Split('+').Select(p => p switch
+    public static string Display(string gesture) => string.IsNullOrEmpty(gesture) ? "" : gesture.Contains('|') ? string.Join(" / ", gesture.Split('|').Select(Display)) : string.Join(" + ", gesture.Split('+').Select(p => p switch
     {
         "Left" => "←", "Right" => "→", "Up" => "↑", "Down" => "↓", "Escape" => "Esc", "Oem5" => "\\", "OemPeriod" => ".", "OemComma" => ",",
         "OemPlus" => "+", "OemMinus" => "-", "Oem2" => "/", "Return" => "Enter", "Next" => "PgDn", "Prior" => "PgUp",
@@ -108,7 +135,7 @@ public static class Hotkeys
         _ => p,
     }));
 
-    public static HotkeyAction? Match(string gesture) => gesture.Length == 0 ? null : Actions.FirstOrDefault(a => Gesture(a.Id) == gesture);
+    public static HotkeyAction? Match(string gesture) => gesture.Length == 0 ? null : Actions.FirstOrDefault(a => Gesture(a.Id).Split('|').Contains(gesture));
 
     // ───────── system-wide hotkeys (RegisterHotKey) ─────────
 

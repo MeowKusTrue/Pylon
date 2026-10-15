@@ -151,10 +151,11 @@ public static class Lyrics
             var bg = new List<Syllable>();
             CollectSpans(p, lead, bg, ttm, inBackground: false);
             var words = lead.ToArray();
-            var lineText = words.Length > 0 ? Join(words) : p.Value.Trim();
+            var shown = words.Length > 0 ? words : bg.ToArray(); // a <p> with only x-bg = a background-only line
+            var lineText = shown.Length > 0 ? Join(shown) : p.Value.Trim();
             if (lineText.Length == 0) continue;
-            if (start < 0) start = words.Length > 0 ? words[0].Start : 0;
-            if (end <= start) end = words.Length > 0 ? words[^1].End : start + 3;
+            if (start < 0) start = shown.Length > 0 ? shown[0].Start : 0;
+            if (end <= start) end = shown.Length > 0 ? shown[^1].End : start + 3;
             var opposite = (string?)p.Attribute(ttm + "agent") is { } agent && agent != "v1" && agent != "v1000";
             lines.Add(new LyricLine(start, end, lineText, words, opposite, [.. bg], translation));
         }

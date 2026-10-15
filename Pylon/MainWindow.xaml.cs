@@ -800,6 +800,9 @@ public partial class MainWindow : Window
         var song = await Recognize.IdentifyAsync(src);
         if (CurrentPath != src) return;
         if (song == null) { Osd(L.T("Couldn't recognize this song"), 3); return; }
+        // the Cover Art Archive has no picture for many releases: iTunes by the name we now know
+        if (song.Cover == null && await Covers.FindAsync(song.Artist, song.Title, song.Album) is { } found) song = song with { Cover = found };
+        if (CurrentPath != src) return;
         var meta = Library.Data.Meta.GetValueOrDefault(src) ?? new TrackMeta();
         (meta.Title, meta.Artist, meta.Album) = (song.Title, song.Artist, song.Album ?? meta.Album);
         if (song.Cover != null) meta.Art = new Uri(song.Cover).AbsoluteUri;
@@ -2198,6 +2201,7 @@ public partial class MainWindow : Window
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
+        Item("Default Player & File Types…", "file-duotone", null, () => DialogWindow.FileTypes(this)),
         Item("Customize Player", "paint-brush-duotone", null, ShowCustomize),
         Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
@@ -2912,7 +2916,7 @@ public partial class MainWindow : Window
         if (CurrentPath is not { } video || video.Contains("://")) return;
         Osd(L.T("Looking for subtitles…"), 10);
         List<OnlineSubtitles.Result> found;
-        try { found = await OnlineSubtitles.SearchAsync(video, L.Ru ? "ru,en" : "en"); }
+        try { found = await OnlineSubtitles.SearchAsync(video, L.Code == "en" ? "en" : L.Code + ",en"); }
         catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
         {
             Osd(L.T("Couldn't reach OpenSubtitles"), 3);

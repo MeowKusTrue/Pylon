@@ -12,7 +12,7 @@
     <RootNamespace>Pylon</RootNamespace>
     <ApplicationIcon>Assets\pylon.ico</ApplicationIcon>
 
-    <Version>1.9.0</Version>
+    <Version>1.9.1</Version>
     <Product>Pylon</Product>
     <Description>A media player built on libVLC, with a redesigned VLC interface.</Description>
     <Copyright>GPL-3.0-or-later</Copyright>
@@ -39,6 +39,7 @@
     <!-- license texts travel with every build (LGPL notice for libVLC) -->
     <None Include="..\LICENSE;..\THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
     <!-- Explorer icons for associated files (installer DefaultIcon) -->
+    <None Include="lang\*.json" CopyToOutputDirectory="PreserveNewest" Link="lang\%(Filename)%(Extension)" />
     <None Include="Assets\FileIcons\*.ico" CopyToOutputDirectory="PreserveNewest" Link="FileIcons\%(Filename)%(Extension)" />
   </ItemGroup>
 

@@ -14,16 +14,23 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ButtonBase">
-                    <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
-                        <local:Icon x:Name="ic" Glyph="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <!-- a toggle that is on gets a pill behind it and a dot under it: visible with any accent, grey included -->
+                    <Grid>
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <local:Icon x:Name="ic" Glyph="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <Ellipse x:Name="dot" Width="4" Height="4" Fill="{DynamicResource Accent}" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                                 Margin="0,0,0,-7" Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Grid>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="bd" Property="Background" Value="{DynamicResource Hover}"/>
                         </Trigger>
                         <Trigger Property="ToggleButton.IsChecked" Value="True">
                             <Setter TargetName="ic" Property="Tint" Value="@Accent"/>
+                            <Setter TargetName="bd" Property="Background" Value="{DynamicResource Checked}"/>
+                            <Setter TargetName="dot" Property="Visibility" Value="Visible"/>
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter TargetName="bd" Property="Opacity" Value="0.3"/>
@@ -400,15 +407,19 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="RadioButton">
-                    <Border x:Name="b" Background="{DynamicResource BgRaised}" CornerRadius="6" Margin="2,0" Height="32">
+                    <!-- the chosen one is a solid light (dark in the light theme) chip; the rest stay flat -->
+                    <Border x:Name="b" Background="Transparent" CornerRadius="6" Margin="2,0" Height="32">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="b" Property="Background" Value="{DynamicResource AccentBright}"/>
-                            <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="b" Property="Background" Value="{DynamicResource Hover}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource FgA0}"/>
                         </Trigger>
-                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.85"/></Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="b" Property="Background" Value="{DynamicResource FgA0}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource BgB1}"/>
+                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

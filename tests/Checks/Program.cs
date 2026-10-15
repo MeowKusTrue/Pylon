@@ -20,8 +20,36 @@ var ttml = Lyrics.ParseTtml("""
     """, "t")!;
 Check("TTML head translation", ttml.Lines[0].Translation == "Держись" && ttml.Lines[0].Words.Length == 2);
 Check("TTML inline translation", ttml.Lines[1].Translation == "Вторая" && ttml.Lines[1].Text == "Second");
+// background vocals: kept apart from the lead and word-timed, also on a line that is background only (spicy-translate exports those)
+var bgTtml = Lyrics.ParseTtml("""
+    <tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><body><div>
+    <p begin="1.0" end="3.0"><span begin="1.0" end="2.0">Lead</span><span ttm:role="x-bg"><span begin="2.3" end="2.6">(oh</span> <span begin="2.6" end="3.0">yeah)</span></span></p>
+    <p begin="4.0" end="5.0"><span ttm:role="x-bg"><span begin="4.0" end="4.5">only</span> <span begin="4.5" end="5.0">bg</span></span></p></div></body></tt>
+    """, "t")!;
+Check("TTML background vocals", bgTtml.Lines.Length == 2 && bgTtml.Lines[0].Words.Length == 1 && bgTtml.Lines[0].Background.Length == 2
+    && bgTtml.Lines[1].Words.Length == 0 && bgTtml.Lines[1].Background.Length == 2 && bgTtml.Lines[1].Text == "only bg");
+var bgSpicy = SpicyLyrics.Parse("""
+    {"Body":{"Type":"Syllable","Content":[
+      {"Type":"Vocal","Lead":{"StartTime":1,"EndTime":2,"Syllables":[{"Text":"Lead","StartTime":1,"EndTime":2,"IsPartOfWord":false}]},
+       "Background":[{"Syllables":[{"Text":"oh","StartTime":2.3,"EndTime":2.6,"IsPartOfWord":false}]}]},
+      {"Type":"Vocal","Lead":{"StartTime":4,"EndTime":5,"Syllables":[]},"Background":[{"Syllables":[{"Text":"only","StartTime":4,"EndTime":4.5,"IsPartOfWord":false},{"Text":"bg","StartTime":4.5,"EndTime":5,"IsPartOfWord":false}]}]}]}}
+    """)!;
+Check("Spicy background vocals", bgSpicy.Lines.Length == 2 && bgSpicy.Lines[0].Background.Length == 1
+    && bgSpicy.Lines[1].Words.Length == 0 && bgSpicy.Lines[1].Background.Length == 2, $"{bgSpicy.Lines.Length} lines");
 var lrc = Lyrics.ParseLrc("[00:01.00]Hello\n[00:01.00]Привет\n[00:04.00]Next\n", "l")!;
 Check("LRC bilingual", lrc.Lines.Length == 2 && lrc.Lines[0].Translation == "Привет" && lrc.Lines[0].End == 4, $"{lrc.Lines[0].Start}-{lrc.Lines[0].End}");
+
+// ── shortcuts: every layout works and gives no key two jobs
+foreach (var layout in Hotkeys.Layouts.Keys)
+{
+    Settings.Set("controls.defaults", layout);
+    var keys = Hotkeys.Actions.SelectMany(a => Hotkeys.Gesture(a.Id).Split('|')).ToList();
+    var twice = keys.GroupBy(k => k).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+    Check($"shortcuts: {layout}", twice.Count == 0 && Hotkeys.Match("Space")?.Id == "play", string.Join(", ", twice));
+}
+Settings.Set("controls.defaults", "YouTube-style");
+Check("shortcuts: YouTube J/K/L", Hotkeys.Match("K")?.Id == "play" && Hotkeys.Match("J")?.Id == "back2" && Hotkeys.Match("L")?.Id == "fwd2");
+Settings.Set("controls.defaults", "VLC-style");
 
 // ── audio: effects need the output rebuilt ("any" isn't a module: SetAudioOutput refused it and every effect stayed off)
 Core.Initialize();
@@ -84,6 +112,25 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     var before = Level(switchedAt - 22050, switchedAt);   // the quarter second before the switch
     var after = Level(all.Length - 22050, all.Length);   // the last quarter second
     Check("effects apply live", live && before > 0.05 && after < before * 0.1, $"{before:0.000} -> {after:0.000}");
+
+    // a slider move (equalizer preamp) reaches the running filter through its callback: no chain rebuild, no gap
+    lock (pcm) pcm.Clear();
+    Settings.Set("audio.eq", "true");
+    Settings.Set("fx.eq.preamp", "0");
+    mp.Play(media);
+    AudioChain.ApplyLive(mp);
+    Thread.Sleep(1000);
+    lock (pcm) switchedAt = pcm.Count;
+    Settings.Set("fx.eq.preamp", "-20");
+    var rebuilt = AudioChain.ApplyLive(mp) && AudioChain.LastRebuilt;
+    Thread.Sleep(800);
+    mp.Stop();
+    Settings.Set("audio.eq", "false");
+    Settings.Set("fx.eq.preamp", "0");
+    lock (pcm) all = [.. pcm];
+    before = Level(switchedAt - 22050, switchedAt);
+    after = Level(all.Length - 22050, all.Length);
+    Check("slider changes without a rebuild", !rebuilt && before > 0.05 && after < before * 0.3, $"{before:0.000} -> {after:0.000}, rebuilt={rebuilt}");
 }
 
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");

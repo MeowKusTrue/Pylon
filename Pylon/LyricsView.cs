@@ -217,13 +217,14 @@ public class LyricsView : Grid
         lv.Line = line;
         lv.A = a;
         lv.B = z;
-        if (line.Words.Length > 0)
+        if (line.Words.Length > 0 || line.Background.Length > 0)
         {
-            panel.Children.Add(Words(line.Words, _ls, FontWeights.Bold, Sung, Unsung, align, lv));
+            if (line.Words.Length > 0) panel.Children.Add(Words(line.Words, _ls, FontWeights.Bold, Sung, Unsung, align, lv));
             if (line.Background.Length > 0)
             {
+                // background vocals: smaller and fainter, word by word like the lead (also when they are the whole line)
                 var bg = Words(line.Background, _ls * 0.75, FontWeights.SemiBold, BgSung, BgUnsung, align, lv);
-                bg.Margin = new Thickness(0, -_ls * 0.1, 0, 0);
+                if (line.Words.Length > 0) bg.Margin = new Thickness(0, -_ls * 0.1, 0, 0);
                 panel.Children.Add(bg);
             }
         }
