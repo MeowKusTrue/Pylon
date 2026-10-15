@@ -90,6 +90,9 @@ public partial class SettingsWindow : Window
 
     void AddSection(Section s, string? prefix = null)
     {
+        // options libVLC can't do (or Pylon doesn't yet) stay out of sight: greyed-out rows only confused
+        s = s with { Opts = [.. s.Opts.Where(o => o.Unavailable == null)] };
+        if (s.Opts.Count == 0) return;
         if (s.Heading.Length > 0 || prefix != null)
             Page.Children.Add(new TextBlock
             {

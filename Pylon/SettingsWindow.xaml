@@ -16,7 +16,7 @@
 
             <DockPanel Margin="14" MouseLeftButtonDown="Drag">
                 <Grid DockPanel.Dock="Top" Height="36" Margin="0,0,0,12">
-                    <TextBox x:Name="SearchBox" Style="{StaticResource Input}" Tag="{local:T Search}" Padding="38,8,10,8" TextChanged="SearchBox_TextChanged"/>
+                    <TextBox x:Name="SearchBox" Style="{StaticResource Input}" Tag="{local:T Search}" Padding="38,0,10,0" TextChanged="SearchBox_TextChanged"/>
                     <local:Icon Glyph="magnifying-glass" Width="18" Height="18" HorizontalAlignment="Left" Margin="12,0,0,0" IsHitTestVisible="False"/>
                 </Grid>
                 <Border Background="{DynamicResource BgA4}" CornerRadius="10" Padding="6">
@@ -27,7 +27,7 @@
             </DockPanel>
 
             <DockPanel Grid.Column="1">
-                <Border DockPanel.Dock="Top" Background="{DynamicResource BgB1}" CornerRadius="0,14,0,0" Padding="24,0,10,0" Height="56" MouseLeftButtonDown="Drag">
+                <Border DockPanel.Dock="Top" Background="Transparent" BorderBrush="{DynamicResource DividerDim}" BorderThickness="0,0,0,1" Padding="24,0,10,0" Height="56" MouseLeftButtonDown="Drag">
                     <DockPanel>
                         <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Tag="x" Width="32" VerticalAlignment="Center" Click="Close_Click"/>
                         <TextBlock x:Name="PageTitle" FontSize="16" Foreground="{DynamicResource FgA0}" VerticalAlignment="Center"/>

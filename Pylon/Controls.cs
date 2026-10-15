@@ -286,3 +286,12 @@ public class VolumeBar : FrameworkElement
         e.Handled = true;
     }
 }
+
+/// <summary>A Thickness with only its left and right parts (text boxes center their single line instead).</summary>
+public sealed class SidePadding : System.Windows.Data.IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) =>
+        value is Thickness t ? new Thickness(t.Left, 0, t.Right, 0) : value;
+
+    public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
+}

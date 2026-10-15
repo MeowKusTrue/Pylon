@@ -3,6 +3,7 @@
                     xmlns:local="clr-namespace:Pylon">
 
     <FontFamily x:Key="Inter">Inter, Segoe UI</FontFamily>
+    <local:SidePadding x:Key="SidePadding"/>
 
     <!-- Icon-only button: Tag = glyph name. Hover = rgba(255,255,255,.06) -->
     <Style x:Key="IconButton" TargetType="ButtonBase">
@@ -177,20 +178,29 @@
         <Setter Property="SelectionBrush" Value="{DynamicResource Accent}"/>
         <Setter Property="FontSize" Value="14"/>
         <Setter Property="FontFamily" Value="{StaticResource Inter}"/>
-        <Setter Property="Padding" Value="12,8,18,8"/>
+        <Setter Property="Padding" Value="12,0,18,0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
-                    <Border x:Name="bd" Background="{DynamicResource BgB2}" BorderBrush="{DynamicResource BgA4}" BorderThickness="2" CornerRadius="6">
+                    <!-- TextBox applies Padding to its text by itself: the template adding it again doubled it (text right of the
+                         placeholder, and vertical padding squeezed 36 px fields until the text was clipped away). Single-line fields
+                         are centered with side padding only; the placeholder mirrors that. -->
+                    <Border x:Name="bd" Background="{DynamicResource BgB2}" BorderBrush="{DynamicResource BgA4}" BorderThickness="2" CornerRadius="6" MinHeight="32">
                         <Grid>
-                            <TextBlock x:Name="ph" Text="{TemplateBinding Tag}" Foreground="{DynamicResource FgA4}" Margin="{TemplateBinding Padding}"
+                            <TextBlock x:Name="ph" Text="{TemplateBinding Tag}" Foreground="{DynamicResource FgA4}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                       Margin="{Binding Padding, RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource SidePadding}}"
                                        Visibility="Collapsed" IsHitTestVisible="False" TextTrimming="CharacterEllipsis"/>
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" Padding="-2,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            <ScrollViewer x:Name="PART_ContentHost" Padding="-2,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="Text" Value=""><Setter TargetName="ph" Property="Visibility" Value="Visible"/></Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource DividerBright}"/></Trigger>
+                        <!-- multi-line boxes (top-aligned) keep their full padding -->
+                        <Trigger Property="VerticalContentAlignment" Value="Top">
+                            <Setter TargetName="ph" Property="Margin" Value="{Binding Padding, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>

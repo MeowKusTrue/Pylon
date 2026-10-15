@@ -46,8 +46,22 @@ public static class SpicyLyrics
         return null;
     }
 
-    /// <summary>ListenBrainz Labs maps artist + title to Spotify ids (no key); up to three, most relevant first.</summary>
+    static readonly Regex Extras = new(@"\s*[\(\[][^\)\]]*[\)\]]|\s+(feat\.?|ft\.?|featuring)\s.*$|\s+-\s+(remaster|live|radio edit|single version).*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// ListenBrainz Labs maps artist + title to Spotify ids (no key); up to three, most relevant first. Tags often say more
+    /// than Spotify's names ("Song (feat. X) [Remastered]", "A, B & C"), so a cleaned title and the first artist are tried too.
+    /// </summary>
     static async Task<string[]> ListenBrainzIdsAsync(string title, string artist)
+    {
+        var ids = await Lookup(title, artist);
+        if (ids.Length > 0) return ids;
+        var cleanTitle = Extras.Replace(title, "").Trim();
+        var firstArtist = Regex.Split(artist, @",|&|;|/|\s+(?:feat\.?|ft\.?|x|и|and)\s+", RegexOptions.IgnoreCase)[0].Trim();
+        return cleanTitle.Length > 0 && (cleanTitle != title || firstArtist != artist) ? await Lookup(cleanTitle, firstArtist) : [];
+    }
+
+    static async Task<string[]> Lookup(string title, string artist)
     {
         var body = JsonSerializer.Serialize(new[] { new { artist_name = artist, release_name = "", track_name = title } });
         using var res = await Http.PostAsync("https://labs.api.listenbrainz.org/spotify-id-from-metadata/json", new StringContent(body, Encoding.UTF8, "application/json"));

@@ -90,6 +90,7 @@ public partial class LibraryPanel : UserControl
         Rail.Children.Add(add);
         RenderPins();
         Library.Changed += () => { RenderPins(); if (IsVisible) Render(); };
+        Library.FoldersScanned += () => Dispatcher.BeginInvoke(() => { if (IsVisible && _pos >= 0 && _nav[_pos].Folder != null) Render(); });
         IsVisibleChanged += (_, _) => { if (IsVisible) { RenderPins(); Render(); } }; // the library may load after this panel is built
     }
 

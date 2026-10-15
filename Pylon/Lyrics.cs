@@ -48,7 +48,9 @@ public static class Lyrics
         var spicyMiss = Path.Combine(CacheDir, key + ".spicy2.none"); // Spicy has nothing for it: don't ask again
         if (File.Exists(spicyCache) && SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy;
         // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
-        if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !string.IsNullOrWhiteSpace(artist) && !File.Exists(spicyMiss))
+        // a miss is asked again after a week: Spicy and ListenBrainz keep growing
+        var missed = File.Exists(spicyMiss) && DateTime.UtcNow - File.GetLastWriteTimeUtc(spicyMiss) < TimeSpan.FromDays(7);
+        if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !string.IsNullOrWhiteSpace(artist) && !missed)
             try
             {
                 Directory.CreateDirectory(CacheDir);

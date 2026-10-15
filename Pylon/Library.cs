@@ -124,7 +124,8 @@ public static class Library
     {
         try
         {
-            return Directory.EnumerateFiles(dir, "*", recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+            // an unreadable subfolder used to throw and empty the whole list
+            return Directory.EnumerateFiles(dir, "*", new EnumerationOptions { RecurseSubdirectories = recursive, IgnoreInaccessible = true })
                 .Where(IsMedia).Order(StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
@@ -136,19 +137,29 @@ public static class Library
     /// <summary>Drops the remembered subfolder scans (folder page "Refresh").</summary>
     public static void ForgetFolders() => FolderCache.Clear();
 
-    /// <summary>Subfolders that contain media somewhere below. Recursive, so the result is cached per folder.</summary>
-    public static IEnumerable<string> MediaFolders(string dir) => FolderCache.GetOrAdd(dir, ScanFolders);
+    /// <summary>A background folder scan finished: folder pages show the filtered list.</summary>
+    public static event Action? FoldersScanned;
 
-    static List<string> ScanFolders(string dir)
+    /// <summary>
+    /// Subfolders that contain media somewhere below (4 levels deep at most). Checking that can take seconds in a big
+    /// Downloads folder, so until the background scan is done every visible subfolder is listed, like Explorer does.
+    /// </summary>
+    public static IEnumerable<string> MediaFolders(string dir)
     {
+        if (FolderCache.TryGetValue(dir, out var known)) return known;
+        List<string> all;
         try
         {
-            return Directory.EnumerateDirectories(dir)
-                .Where(d => !new DirectoryInfo(d).Attributes.HasFlag(FileAttributes.Hidden))
-                .Where(d => { try { return Directory.EnumerateFiles(d, "*", SearchOption.AllDirectories).Any(IsMedia); } catch { return false; } })
-                .Order(StringComparer.OrdinalIgnoreCase).ToList();
+            all = [.. Directory.EnumerateDirectories(dir).Where(d => !new DirectoryInfo(d).Attributes.HasFlag(FileAttributes.Hidden)).Order(StringComparer.OrdinalIgnoreCase)];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
+        _ = Task.Run(() =>
+        {
+            var deep = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 4, IgnoreInaccessible = true };
+            FolderCache[dir] = [.. all.Where(d => { try { return Directory.EnumerateFiles(d, "*", deep).Any(IsMedia); } catch (IOException) { return false; } })];
+            FoldersScanned?.Invoke();
+        });
+        return all;
     }
 
     public static string DisplayName(string path) =>

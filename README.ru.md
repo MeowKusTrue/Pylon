@@ -111,6 +111,24 @@ Pylon появился благодаря **Juxtopposed**: она переосм
 Посмотрите, как это делалось, — **[I Redesigned VLC After 25 Years](https://youtu.be/ERFeOgqk324)**, и загляните в оригинальный
 **[макет VLC Redesign в Figma](https://www.figma.com/community/file/1691465999134370980/vlc-redesign)**. Спасибо, Juxtopposed, за продуманный дизайн и за то, что им можно свободно пользоваться! 💛
 
+## Поддержать проект
+
+Pylon бесплатный и останется бесплатным. Если он вам нравится и хочется сказать спасибо, можно оставить донат. Это подарок: он не открывает функций, приоритетной поддержки или бонусов, плеер у всех одинаковый.
+
+- [Boosty](https://boosty.to/meowkustrue/donate)
+- [CloudTips](https://pay.cloudtips.ru/p/5daab507)
+- [Tribute](https://web.tribute.tg/d/Sh3)
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/donate/boosty.png" width="180" alt="QR-код Boosty"><br>Boosty</td>
+    <td align="center"><img src="docs/donate/cloudtips.png" width="180" alt="QR-код CloudTips"><br>CloudTips</td>
+    <td align="center"><img src="docs/donate/tribute.png" width="180" alt="QR-код Tribute"><br>Tribute</td>
+  </tr>
+</table>
+
+Спасибо за любую поддержку — и точно так же за сообщения об ошибках и идеи.
+
 ## Лицензия
 
 [GPL-3.0](LICENSE). libVLC и LibVLCSharp распространяются под LGPL-2.1.

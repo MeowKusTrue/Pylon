@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     string? _artist; // media title for history, independent of what the title bar shows
     WindowState _restoreState;
     Rect _restoreBounds;
-    readonly DispatcherTimer _tick, _hideTimer, _osdTimer, _clickTimer, _resumeTimer, _engineTimer;
+    readonly DispatcherTimer _tick, _hideTimer, _osdTimer, _clickTimer, _resumeTimer, _engineTimer, _fxTimer;
     int _ticks;
     SettingsWindow? _settings;
     readonly SeekPreviewer _preview;
@@ -124,6 +124,7 @@ public partial class MainWindow : Window
             WindowState = WindowState.Minimized; // start in the tray: hidden once loaded
             ShowInTaskbar = false;
         }
+        _fxTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(120), DispatcherPriority.Background, (_, _) => { _fxTimer!.Stop(); ApplyFx(); }, Dispatcher) { IsEnabled = false };
         _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
 
         SourceInitialized += (_, _) =>
@@ -431,12 +432,13 @@ public partial class MainWindow : Window
 
     // ───────────────────────── queue / playback API ─────────────────────────
 
-    public void Open(IEnumerable<string> items, bool append = false)
+    public async void Open(IEnumerable<string> items, bool append = false)
     {
         var deep = Settings.Str("library.subfolders") != "Only this folder";
-        // libVLC on Windows rejects "C:/x/y" — normalize every local path.
-        var expanded = items.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
-            .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList();
+        var list = items.ToList();
+        // libVLC on Windows rejects "C:/x/y" — normalize every local path; big folders are walked off the UI thread
+        var expanded = await Task.Run(() => list.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
+            .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList());
         if (expanded.Count == 0) return;
         if (append && _index >= 0) Enqueue(expanded);
         else PlayList(expanded, 0);
@@ -1122,21 +1124,16 @@ public partial class MainWindow : Window
             return;
         }
         var installed = Updater.IsInstalled;
-        if (!DialogWindow.UpdateAvailable(owner, r, installed)) return;
-        if (!installed || r.SetupUrl == null) { Updater.OpenPage(r); return; }
+        var inPlace = installed && r.SetupUrl != null;
         _updating = true;
-        try
-        {
-            await Updater.DownloadAndRunAsync(r, new Progress<double>(p => Osd(L.F("Downloading update… {0}%", (int)(p * 100)), 2)));
-            SaveProgress();
-            SingleInstance.Release();
-            Close(); // the installer replaces the files and starts the new version
-        }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException or IOException or System.ComponentModel.Win32Exception or TaskCanceledException)
-        {
-            _updating = false;
-            MessageBox.Show(owner, L.T("The update couldn't be downloaded. Try again later."), "Pylon");
-        }
+        // the download runs inside the dialog, with its progress bar
+        var go = DialogWindow.UpdateAvailable(owner, r, installed, inPlace ? p => Updater.DownloadAndRunAsync(r, p) : null);
+        _updating = false;
+        if (!go) return;
+        if (!inPlace) { Updater.OpenPage(r); return; }
+        SaveProgress();
+        SingleInstance.Release();
+        Close(); // the updater applies the new version and starts it
     }
 
     /// <summary>First start after an update: show what this version brought (the release notes on GitHub).</summary>
@@ -1190,7 +1187,8 @@ public partial class MainWindow : Window
         if (key.StartsWith("fxv.") || key.StartsWith("video.")) ApplyVideoSettings();
         if (key.StartsWith("ui.btn.")) UpdateControlButtons();
         if (key.StartsWith("hotkey.") || key.StartsWith("ghotkey.")) Hotkeys.RegisterGlobal(this);
-        if (Settings.IsEngineKey(key)) { _engineTimer.Stop(); _engineTimer.Start(); } // debounce slider drags
+        if (IsAudioFxKey(key)) { _fxTimer.Stop(); _fxTimer.Start(); } // live, no engine restart (debounced for slider drags)
+        else if (Settings.IsEngineKey(key)) { _engineTimer.Stop(); _engineTimer.Start(); } // debounce slider drags
     }
 
     void ApplyVideoSettings()
@@ -1237,16 +1235,22 @@ public partial class MainWindow : Window
     /// Live equalizer through libVLC's API, unless other effects are on: that API would replace the whole filter chain
     /// with just the equalizer, so then the chain is rebuilt with the engine instead (debounced restart, resumes in place).
     /// </summary>
+    /// <summary>Audio effects and the equalizer go through AudioChain.ApplyLive: no engine restart, no gap.</summary>
+    static bool IsAudioFxKey(string key) =>
+        key.StartsWith("fx.comp.") || key.StartsWith("fx.spat.") || key.StartsWith("fx.eq.")
+        || key is "audio.eq" or "audio.eqpreset" or "audio.normalize" or "audio.normlevel" or "audio.night" or "audio.compressor"
+            or "audio.spatial" or "audio.spatialmode" or "audio.pitch" or "audio.chorus" or "audio.karaoke" or "audio.eq2pass";
+
     void ApplyEqualizer(bool edited = false)
     {
-        if (AudioChain.HasOthers)
-        {
-            if (edited) { _engineTimer.Stop(); _engineTimer.Start(); }
-            return;
-        }
-        using var eq = Effects.Build();
-        if (eq != null) _mp.SetEqualizer(eq);
-        else _mp.UnsetEqualizer();
+        if (edited) { _fxTimer.Stop(); _fxTimer.Start(); }
+        else ApplyFx();
+    }
+
+    void ApplyFx()
+    {
+        if (!AudioChain.ApplyLive(_mp)) { _engineTimer.Stop(); _engineTimer.Start(); return; } // libvlccore unreachable: restart instead
+        if (_tail != null) AudioChain.ApplyLive(_tail); // a song fading out sounds the same
     }
 
     void ApplyNetworkPreset()
@@ -2846,6 +2850,7 @@ public partial class MainWindow : Window
                     OpenSettings(arg.Length > 0 ? arg : null);
                     shot = _settings;
                     break;
+                case "settingssearch": _settings!.SearchBox.Text = arg; _settings.SearchBox.Focus(); break;
                 case "listsd":
                     File.WriteAllLines(Path.ChangeExtension(outFile, ".txt"), Enum.GetValues<MediaDiscovererCategory>()
                         .SelectMany(c => Vlc.MediaDiscoverers(c).Select(d => $"{c}: {d.Name} | {d.LongName}"))

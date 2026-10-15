@@ -109,6 +109,24 @@ Pylon exists because **Juxtopposed** redesigned VLC and shared the whole design 
 Watch how it was made — **[I Redesigned VLC After 25 Years](https://youtu.be/ERFeOgqk324)** — and see the original
 **[VLC Redesign Figma file](https://www.figma.com/community/file/1691465999134370980/vlc-redesign)**. Thank you, Juxtopposed, for the thoughtful design and for making it free to build on! 💛
 
+## Support the project
+
+Pylon is free and stays free. If you enjoy it and would like to say thanks, you can leave a donation. It's a gift: it doesn't unlock features, priority support or any bonuses, and the player is the same for everyone either way.
+
+- [Boosty](https://boosty.to/meowkustrue/donate)
+- [CloudTips](https://pay.cloudtips.ru/p/5daab507)
+- [Tribute](https://web.tribute.tg/d/Sh3)
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/donate/boosty.png" width="180" alt="Boosty QR code"><br>Boosty</td>
+    <td align="center"><img src="docs/donate/cloudtips.png" width="180" alt="CloudTips QR code"><br>CloudTips</td>
+    <td align="center"><img src="docs/donate/tribute.png" width="180" alt="Tribute QR code"><br>Tribute</td>
+  </tr>
+</table>
+
+Thank you for any support, and just as much for bug reports and ideas.
+
 ## License
 
 [GPL-3.0](LICENSE). libVLC and LibVLCSharp are LGPL-2.1.

@@ -227,8 +227,11 @@ public partial class DialogWindow : Window
 
     // ───────── Update available ─────────
 
-    /// <summary>"Pylon x.y.z is available" with the release notes. True = install (or download, for portable copies).</summary>
-    public static bool UpdateAvailable(Window owner, Updater.Release r, bool installed)
+    /// <summary>
+    /// "Pylon x.y.z is available" with the release notes. True = install (or download, for portable copies). With
+    /// <paramref name="download"/>, Update runs it right here with a progress bar, and true means it finished.
+    /// </summary>
+    public static bool UpdateAvailable(Window owner, Updater.Release r, bool installed, Func<IProgress<double>, Task>? download = null)
     {
         var notes = new TextBox
         {
@@ -243,6 +246,37 @@ public partial class DialogWindow : Window
         var dlg = new DialogWindow(owner, "Update available", body) { Width = 640 };
         dlg.CancelBtn.Content = L.T("Later");
         dlg.SaveBtn.Content = L.T(installed && r.SetupUrl != null ? "Update now" : "Download");
+        if (download != null)
+        {
+            var fill = new ScaleTransform(0, 1);
+            var bar = new Grid { Height = 6, Margin = new Thickness(0, 4, 0, 0) };
+            bar.Children.Add(new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(3) });
+            bar.Children.Add(new Border { Background = R("Accent"), CornerRadius = new CornerRadius(3), RenderTransform = fill });
+            var status = new TextBlock { FontSize = 13, Foreground = R("FgA2"), Margin = new Thickness(0, 0, 0, 10) };
+            var progress = new StackPanel { Visibility = Visibility.Collapsed, Children = { status, bar } };
+            body.Children.Add(progress);
+            dlg._work = async () =>
+            {
+                dlg.SaveBtn.IsEnabled = dlg.CancelBtn.IsEnabled = false;
+                progress.Visibility = Visibility.Visible;
+                status.Text = L.T("Downloading the update…");
+                try
+                {
+                    await download(new Progress<double>(p =>
+                    {
+                        fill.ScaleX = Math.Clamp(p, 0, 1);
+                        status.Text = L.F("Downloading the update… {0}%", (int)(p * 100));
+                    }));
+                    status.Text = L.T("Installing, Pylon will restart…");
+                    dlg.DialogResult = true;
+                }
+                catch (Exception e) when (e is System.Net.Http.HttpRequestException or System.IO.IOException or System.ComponentModel.Win32Exception or TaskCanceledException)
+                {
+                    status.Text = L.T("The update couldn't be downloaded. Try again later.");
+                    dlg.SaveBtn.IsEnabled = dlg.CancelBtn.IsEnabled = true;
+                }
+            };
+        }
         return dlg.Run(() => true);
     }
 

@@ -115,6 +115,9 @@ public static class ShellRegistration
             if (k?.GetValue("UninstallString") is not string uninstall) return;
             var desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Pylon.lnk");
             var hadDesktop = File.Exists(desktop); // Velopack's shortcut: the old uninstaller deletes one with the same name
+            // the old Start menu entry: pins to Start / the taskbar point at it, so it comes back aimed at the new copy
+            var startEntry = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Pylon", "Pylon.lnk");
+            var hadStartEntry = File.Exists(startEntry);
             try
             {
                 using var p = Process.Start(new ProcessStartInfo(uninstall.Trim('"'), "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART") { UseShellExecute = true });
@@ -122,6 +125,7 @@ public static class ShellRegistration
             }
             catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) { return; }
             if (hadDesktop && !File.Exists(desktop)) Shortcut(desktop);
+            if (hadStartEntry && !File.Exists(startEntry)) { Directory.CreateDirectory(Path.GetDirectoryName(startEntry)!); Shortcut(startEntry); }
         }
         Register(); // the old uninstaller removed the shared registry keys too
     }

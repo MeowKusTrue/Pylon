@@ -54,6 +54,38 @@ var full = Rms(1f);
 var quarter = Rms(0.25f);
 Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, $"{quarter / full:0.000}");
 
+// ── audio: effects switch on while playing, without an engine restart (karaoke cancels a centered tone).
+// Captured through callbacks: the afile output restarts with the filter chain and rewrites its file.
+{
+    using var vlc = new LibVLC("--quiet", "--no-video");
+    using var mp = new MediaPlayer(vlc);
+    var pcm = new List<float>();
+    mp.SetAudioFormat("S16N", 44100, 2); // amem's float path hands out garbage
+    mp.SetAudioCallbacks((_, samples, count, _) =>
+    {
+        var buf = new short[count * 2];
+        System.Runtime.InteropServices.Marshal.Copy(samples, buf, 0, buf.Length);
+        lock (pcm) pcm.AddRange(buf.Select(v => v / 32768f));
+    }, null, null, null, null);
+    using var media = new Media(vlc, tone, FromType.FromPath);
+    Settings.Set("audio.karaoke", "false");
+    mp.Play(media);
+    Thread.Sleep(1200);
+    int switchedAt;
+    lock (pcm) switchedAt = pcm.Count;
+    Settings.Set("audio.karaoke", "true");
+    var live = AudioChain.ApplyLive(mp);
+    Thread.Sleep(1200);
+    mp.Stop();
+    Settings.Set("audio.karaoke", "false");
+    float[] all;
+    lock (pcm) all = [.. pcm];
+    double Level(int from, int to) => from < to ? Math.Sqrt(all.Skip(from).Take(to - from).Average(v => (double)v * v)) : 0;
+    var before = Level(switchedAt - 22050, switchedAt);   // the quarter second before the switch
+    var after = Level(all.Length - 22050, all.Length);   // the last quarter second
+    Check("effects apply live", live && before > 0.05 && after < before * 0.1, $"{before:0.000} -> {after:0.000}");
+}
+
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 

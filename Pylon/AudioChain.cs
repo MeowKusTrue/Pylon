@@ -115,10 +115,81 @@ public static class AudioChain
     /// <summary>True when the chain holds more than the equalizer: then equalizer edits go through an engine restart.</summary>
     public static bool HasOthers => Filters().Count > 0;
 
-    static void SetString(VarSetChecked set, MediaPlayer mp, string name, string value)
+    static readonly string[] FilterParams = ["--compressor-", "--spatializer-", "--norm-max-level=", "--pitch-shift=", "--equalizer-2pass", "--no-audio-time-stretch"];
+
+    /// <summary>
+    /// Effects change while playing, without restarting the engine (which stuttered picture and sound on every slider
+    /// move). The filters' parameters (--compressor-ratio and friends) are set as variables on the player and on its running
+    /// audio output: filters create theirs on the output once and never read the command line again. Setting "audio-filter"
+    /// on the output then makes libVLC rebuild just the filter chain (its own callback), with no gap in the stream.
+    /// Returns false when libvlccore isn't reachable; the caller restarts the engine instead.
+    /// </summary>
+    public static bool ApplyLive(MediaPlayer mp)
+    {
+        if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create
+            || (_children ??= Export<ListChildren>("vlc_list_children")) is not { } children
+            || (_release ??= Export<ListRelease>("vlc_list_release")) is not { } release) return false;
+        var args = Settings.EngineArgs();
+        var floats = args.Where(a => FilterParams.Any(a.StartsWith) && a.Contains('='))
+            .Select(a => (Name: a[2..a.IndexOf('=')], Value: float.TryParse(a[(a.IndexOf('=') + 1)..], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : float.NaN))
+            .Where(p => !float.IsNaN(p.Value)).ToList();
+        var stretch = !args.Contains("--no-audio-time-stretch");
+        var twoPass = args.Contains("--equalizer-2pass");
+        var names = Filters();
+        string? bands = null;
+        var preamp = 0f;
+        if (Settings.Bool("audio.eq") && Effects.Build() is { } eq)
+            using (eq)
+            {
+                bands = string.Join(" ", Enumerable.Range(0, (int)eq.BandCount).Select(i => eq.Amp((uint)i).ToString("0.0", CultureInfo.InvariantCulture)));
+                preamp = eq.Preamp;
+                names.Insert(0, "equalizer");
+            }
+
+        void Write(IntPtr obj, bool restart)
+        {
+            foreach (var (name, value) in floats)
+            {
+                create(obj, name, VarFloat);
+                set(obj, name, VarFloat, (IntPtr)BitConverter.SingleToInt32Bits(value));
+            }
+            create(obj, "audio-time-stretch", VarBool);
+            set(obj, "audio-time-stretch", VarBool, stretch ? 1 : 0);
+            create(obj, "equalizer-2pass", VarBool);
+            set(obj, "equalizer-2pass", VarBool, twoPass ? 1 : 0);
+            if (bands != null)
+            {
+                create(obj, "equalizer-bands", VarString);
+                SetString(set, obj, "equalizer-bands", bands);
+                create(obj, "equalizer-preamp", VarFloat);
+                set(obj, "equalizer-preamp", VarFloat, (IntPtr)BitConverter.SingleToInt32Bits(preamp));
+            }
+            if (restart || obj == mp.NativeReference) SetString(set, obj, "audio-filter", string.Join(":", names)); // on the output: rebuilds the chain
+        }
+
+        Write(mp.NativeReference, false);
+        var list = children(mp.NativeReference);
+        if (list == IntPtr.Zero) return true; // not playing: the next output inherits all of it
+        try
+        {
+            var count = Marshal.ReadInt32(list, 4);
+            var values = Marshal.ReadIntPtr(list, 8);
+            for (var i = 0; i < count; i++)
+                if (Marshal.ReadIntPtr(values, i * 8) is var obj && obj != IntPtr.Zero && Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(obj)) == "audio output")
+                    Write(obj, true);
+        }
+        finally { release(list); }
+        return true;
+    }
+
+    const int VarBool = 0x0020;
+
+    static void SetString(VarSetChecked set, MediaPlayer mp, string name, string value) => SetString(set, mp.NativeReference, name, value);
+
+    static void SetString(VarSetChecked set, IntPtr obj, string name, string value)
     {
         var p = Marshal.StringToCoTaskMemUTF8(value);
-        try { set(mp.NativeReference, name, VarString, p); } // libVLC copies the string
+        try { set(obj, name, VarString, p); } // libVLC copies the string
         finally { Marshal.FreeCoTaskMem(p); }
     }
 }
