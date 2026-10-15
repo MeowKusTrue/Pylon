@@ -6,7 +6,7 @@ using System.Windows.Media;
 namespace Pylon;
 
 /// <summary>
-/// Right-hand "Effects &amp; Filters" panel (mockup: Audio - Equalizer / Compressor / Spatializer / Stereo Widener,
+/// Right-hand "Effects &amp; Filters" panel (mockup: Audio - Equalizer / Compressor / Spatializer,
 /// Video - Essential / Crop / Colors; each card has collapsed and expanded states).
 /// </summary>
 public class EffectsPanel : Border
@@ -67,7 +67,6 @@ public class EffectsPanel : Border
             Card("Equalizer", "audio.eq", Row("audio.eqpreset"), EqualizerBands(), Row("audio.eq2pass", false));
             Card("Compressor", "audio.compressor", [.. Effects.Audio[0].Opts.Select(o => OptView.Row(o, stacked: true)), Reset("Reset compressor", [.. Effects.Audio[0].Opts.Select(o => o.Key)])]);
             Card("Spatializer", "audio.spatial", [Row("audio.spatialmode"), .. Effects.Audio[1].Opts.Select(o => OptView.Row(o, stacked: true))]);
-            Card("Stereo Widener", "audio.widen", [.. Effects.Audio[2].Opts.Select(o => OptView.Row(o, stacked: true))]);
             Card("Voice & Pitch", null, Row("audio.pitch", false), Row("audio.karaoke", false), Row("audio.chorus", false), Row("audio.normalize", false));
         }
 

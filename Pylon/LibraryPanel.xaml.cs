@@ -87,8 +87,44 @@ public partial class LibraryPanel : UserControl
         var add = new Button { Style = (Style)FindResource("IconButton"), Tag = "plus", ToolTip = L.T("Open media"), Width = 30 };
         add.Click += (_, _) => Player.ShowOpenMenu(add);
         Rail.Children.Add(add);
-        Library.Changed += () => { if (IsVisible) Render(); };
+        RenderPins();
+        Library.Changed += () => { RenderPins(); if (IsVisible) Render(); };
         IsVisibleChanged += (_, _) => { if (IsVisible) Render(); };
+    }
+
+    /// <summary>Pinned folders as rail buttons between the sections and "+".</summary>
+    void RenderPins()
+    {
+        foreach (var old in Rail.Children.OfType<FrameworkElement>().Where(c => c.Tag is "pin" || c.DataContext is string).ToList()) Rail.Children.Remove(old);
+        var at = Rail.Children.Count - 1; // before "+"
+        var pins = Library.Data.Pinned.Where(Directory.Exists).ToList();
+        if (pins.Count == 0) return;
+        var line = new Border { Height = 1, Width = 22, Margin = new Thickness(0, 0, 0, 14), Tag = "pin" };
+        line.SetResourceReference(Border.BackgroundProperty, "DividerDim");
+        Rail.Children.Insert(at++, line);
+        foreach (var dir in pins)
+        {
+            var b = new Button { Style = (Style)FindResource("IconButton"), Tag = "folder", ToolTip = Library.DisplayName(dir), Width = 30, Margin = new Thickness(0, 0, 0, 14), DataContext = dir };
+            b.Click += (_, _) => ShowFolder(dir);
+            b.MouseRightButtonUp += (_, e) =>
+            {
+                ShowMenu(b, [Item("Open", "folder-open", () => ShowFolder(dir)), Item("Play All", "play", () => PlayFolder(dir)),
+                             Item("Show in Explorer", "arrow-square-out", () => Reveal(dir)), new Separator(), PinItem(dir)], PlacementMode.Right);
+                e.Handled = true;
+            };
+            Rail.Children.Insert(at++, b);
+        }
+    }
+
+    static MenuItem PinItem(string dir)
+    {
+        var pinned = Library.Data.Pinned.Contains(dir, StringComparer.OrdinalIgnoreCase);
+        return Item(pinned ? "Unpin from Sidebar" : "Pin to Sidebar", "push-pin", () =>
+        {
+            if (pinned) Library.Data.Pinned.RemoveAll(p => string.Equals(p, dir, StringComparison.OrdinalIgnoreCase));
+            else Library.Data.Pinned.Add(dir);
+            Library.Touch();
+        });
     }
 
     // ───────── navigation ─────────
@@ -226,7 +262,8 @@ public partial class LibraryPanel : UserControl
     Page Music() => new(Section.Music, Crumbs1("Music"), () =>
     [
         ActionRow("Add", AddMusicFolder),
-        IconRow(L.T("Songs"), "music-note", () => Navigate(Songs()), sortable: false),
+        IconRow(L.T("Songs"), "music-note", () => Navigate(Songs()), sortable: false,
+            menu: () => FilesMenu([.. Library.Data.MusicFolders.SelectMany(f => Library.MediaFiles(f, true))])),
         IconRow(L.T("Albums"), "vinyl-record", () => Navigate(Group("Albums", m => m.Album)), sortable: false),
         IconRow(L.T("Artists"), "user", () => Navigate(Group("Artists", m => m.Artist)), sortable: false),
         IconRow(L.T("Genres"), "tag", () => Navigate(Group("Genres", m => m.Genre)), sortable: false),
@@ -450,6 +487,7 @@ public partial class LibraryPanel : UserControl
             Menu = () =>
             [
                 .. FilesMenu(null, folder: dir),
+                PinItem(dir),
                 .. isRoot ? new object[] { new Separator(), Item("Remove from Library", "minus-circle", () =>
                 {
                     Library.Data.VideoFolders.Remove(dir);

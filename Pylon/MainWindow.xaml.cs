@@ -2139,7 +2139,7 @@ public partial class MainWindow : Window
                 BookmarksMenu(),
                 SleepMenu(null),
             ]),
-            Sub("Video", "monitor", [
+            _isAudio ? Sub("Track", "music-note", TrackMenuItems()) : Sub("Video", "monitor", [
                 Item("Fullscreen", null, KeyOf("fullscreen"), ToggleFullscreen, check: _fullscreen),
                 Item("Take Snapshot", null, KeyOf("snapshot"), Snapshot, enabled: _index >= 0 && !_isAudio),
                 Sub("Aspect Ratio", null, Settings.Find("video.aspect")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.aspect", o), check: Settings.Str("video.aspect") == o))),
@@ -2159,6 +2159,28 @@ public partial class MainWindow : Window
         foreach (var i in items) cm.Items.Add(i);
         cm.IsOpen = true;
         e.Handled = true;
+    }
+
+    /// <summary>What a music listener reaches for: lyrics, playlists, the file itself.</summary>
+    List<object> TrackMenuItems()
+    {
+        var path = CurrentPath;
+        var local = path != null && !path.Contains("://");
+        List<object> playlists = [.. Library.Data.Playlists.Select(p => (object)Item(p.Name, "playlist", null, () => { p.Items.Add(path!); Library.Touch(); }))];
+        if (playlists.Count > 0) playlists.Add(new Separator());
+        playlists.Add(Item("New Playlist…", "plus", null, () =>
+        {
+            if (DialogWindow.NewPlaylist(this, [path!]) is not { } r) return;
+            Library.Data.Playlists.Add(new Playlist { Name = r.Name, Items = r.Files, Thumb = r.Thumb });
+            Library.Touch();
+        }));
+        return
+        [
+            Item("Lyrics", null, null, () => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics")), check: Settings.Bool("ui.lyrics")),
+            path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
+            Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
+            Item("Convert…", null, KeyOf("convert"), OpenConverter, enabled: local),
+        ];
     }
 
     List<object> AudioMenuItems()
@@ -2390,6 +2412,9 @@ public partial class MainWindow : Window
                             $"page {page.Length} chars, vlc link {page.Contains("vlc://")}; stream {(int)res.StatusCode} {res.Content.Headers.ContentType}, {n} bytes, TS sync {buf[0] == 0x47 && buf[188] == 0x47}; still playing {_mp.IsPlaying}{Environment.NewLine}");
                         break;
                     }
+                case "frames": // run the per-frame code by hand for <sec> (the off-screen test window gets few real frames)
+                    for (var k = 0; k < double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * 60; k++) { Motion.DebugFrame(); LyricsPane.DebugFrame(); await Task.Delay(16); }
+                    break;
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

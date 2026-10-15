@@ -126,7 +126,7 @@ public static partial class Strings
         ["Word-synced lyrics from Spicy Lyrics. Create a key at developers.spicylyrics.org. Stored only on this computer."] = "Тексты с синхронизацией по словам из Spicy Lyrics. Ключ создаётся на developers.spicylyrics.org и хранится только на этом компьютере.",
         ["Spotify client ID"] = "Client ID приложения Spotify",
         ["Spotify client secret"] = "Client secret приложения Spotify",
-        ["Spicy Lyrics finds songs by their Spotify id. Create a free app at developer.spotify.com to let Pylon look it up (not needed when the file's tags carry a Spotify link)."] = "Spicy Lyrics ищет песни по их ID в Spotify. Создайте бесплатное приложение на developer.spotify.com, чтобы Pylon мог его найти (не нужно, если в тегах файла есть ссылка на Spotify).",
+        ["Optional. Pylon finds a song's Spotify id by its name through ListenBrainz; for songs it misses, a free app from developer.spotify.com helps."] = "Необязательно. Pylon находит Spotify id песни по названию через ListenBrainz; для тех, что он не нашёл, поможет бесплатное приложение с developer.spotify.com.",
         ["What's new"] = "Что нового",
         // 1.2: convert, clips, streaming
         ["Save clip"] = "Сохранить отрезок",
@@ -732,6 +732,9 @@ public static partial class Strings
         ["Compresses loud peaks so you can keep the volume low."] = "Сжимает громкие пики, чтобы можно было слушать тихо.",
         ["Replay gain"] = "Replay Gain",
         ["Track"] = "Трек",
+        ["Pin to Sidebar"] = "Закрепить на боковой панели",
+        ["Unpin from Sidebar"] = "Открепить от боковой панели",
+        ["Convert…"] = "Конвертировать…",
         ["Album"] = "Альбом",
         ["Replay gain preamp"] = "Предусиление Replay Gain",
         ["Effects"] = "Эффекты",

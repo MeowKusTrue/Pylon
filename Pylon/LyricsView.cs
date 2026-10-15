@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -7,44 +8,77 @@ using System.Windows.Media.Effects;
 namespace Pylon;
 
 /// <summary>
-/// Synced lyrics in the manner of Spicy Lyrics / Apple Music: syllables fill in as they are sung and lift a little,
-/// long notes glow, lines other than the current one are dimmed and blurred by distance, the page glides on a spring to
-/// keep the current line in view, a click on a line seeks there, and long instrumental gaps show breathing dots.
+/// Synced lyrics that move like Spicy Lyrics (the same model as the spicy-translate preview, reimplemented, no code copied):
+/// - every word rides three springs (scale, lift, glow) whose goals follow curves over the word's progress, and a soft
+///   gradient sweeps through it;
+/// - a syllable of 1 s or more is sung letter by letter: the sung letter swells, its neighbours a little less;
+/// - a gap of 3 s or more between lines shows three breathing dots;
+/// - other lines are dimmed and blurred by their distance from the current one; hovering one brings it back;
+/// - the page glides to keep the current line in the middle, the wheel scrolls freely for a while, a click seeks.
 /// </summary>
 public class LyricsView : Grid
 {
-    sealed class WordView
+    /// <summary>Damped spring (frequency in Hz, damping ratio &lt; 1), solved exactly per step, so any frame time is stable.</summary>
+    sealed class Sp(double p, double f, double d)
     {
-        public required Syllable Syllable;
-        public required TextBlock Block;
-        public required GradientStop Edge0, Edge1;
-        public required TranslateTransform Lift;
-        public int State; // 0 not yet, 1 singing, 2 sung
+        public double P = p, V, G = p;
+
+        public double Step(double dt)
+        {
+            double w = f * 2 * Math.PI, wd = w * Math.Sqrt(1 - d * d), o = P - G, e = Math.Exp(-d * w * dt), cs = Math.Cos(wd * dt), sn = Math.Sin(wd * dt);
+            P = G + e * (o * cs + (V + d * w * o) / wd * sn);
+            V = e * (V * cs - (w * w * o + d * w * V) / wd * sn);
+            return P;
+        }
+    }
+
+    /// <summary>A word, a letter of a long syllable, or an interlude dot.</summary>
+    sealed class Part
+    {
+        public required FrameworkElement El;
+        public double A, B;
+        public GradientStop? E0, E1;          // fill edge; null on a letter container
+        public readonly ScaleTransform Scale = new(1, 1);
+        public readonly TranslateTransform Lift = new();
+        public Sp? S, Y, G, O;
+        public Part[]? Letters;
+        public bool Dot, Plain;
+        public double Gp = double.NaN, Sc = double.NaN, Ly = double.NaN, Op = double.NaN, Gb = double.NaN, Go = double.NaN; // last written
     }
 
     sealed class LineView
     {
-        public required LyricLine Line;
+        public LyricLine? Line;             // null: interlude dots
         public required Border Root;
         public required BlurEffect Blur;
-        public required ScaleTransform Scale;
-        public required TextBlock Dots;
-        public readonly List<WordView> Words = [];
-        public TextBlock? Plain;
-        public int State = -1; // 0 future, 1 active, 2 past
-        public double GapBefore, Top;
+        public readonly List<Part> Parts = [];
+        public ScaleTransform? DotGroup;
+        public double A, B, Top;
+        public int State = -1;              // 0 not yet, 1 being sung, 2 sung
+        public bool Hover, Hidden;
     }
+
+    // goals over a word's progress (0 = not sung, 1 = sung); lifts are in font sizes
+    static readonly Func<double, double>
+        CScale = Curve((0, 0.95), (0.7, 1.0505), (1, 1)), CLift = Curve((0, 0.01), (0.9, -1 / 60.0), (1, 0)), CGlow = Curve((0, 0), (0.15, 1), (0.6, 1), (1, 0)),
+        LScale = Curve((0, 0.95), (0.7, 1.175), (1, 1)), LLift = Curve((0, 0.01), (0.9, -1 / 56.0), (1, 0)),
+        DScale = Curve((0, 0.75), (0.7, 1.05), (1, 1)), DLift = Curve((0, 0), (0.9, -0.12), (1, 0)), DGlow = Curve((0, 0), (0.6, 1), (1, 1)), DOp = Curve((0, 0.35), (0.6, 1), (1, 1));
+
+    const double LetterMin = 1, LetterEarly = 0.25, GapDots = 3, DotPad = 0.55, DotHide = 0.5, BlurStep = 1.25, Look = 0.3;
+    const double Sung = 0.85, Unsung = 0.5, BgSung = 0.6, BgUnsung = 0.3; // fill alphas
 
     readonly StackPanel _stack = new();
     readonly TranslateTransform _scroll = new();
     readonly TextBlock _message = new() { FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center };
     readonly List<LineView> _lines = [];
+    readonly Stopwatch _clock = Stopwatch.StartNew();
     LyricsDoc? _doc;
-    int _focus = -2;
+    LineView? _target;
+    int _blurFor = -2;
     bool _hooked;
+    double _lastFrame, _ls = 34;
     DateTime _manualUntil;
-    Brush _sung = Brushes.White;
-    Color _sungColor = Colors.White, _unsungColor = Color.FromArgb(90, 255, 255, 255);
+    Color _fg = Colors.White;
 
     /// <summary>Playback position in seconds (interpolated by the host between libVLC time updates).</summary>
     public Func<double>? Clock;
@@ -56,7 +90,7 @@ public class LyricsView : Grid
     {
         ClipToBounds = true;
         _stack.RenderTransform = _scroll;
-        // on a Canvas the stack keeps its full height; arranged by a Grid it was cut to the visible 550 px *before*
+        // on a Canvas the stack keeps its full height; arranged by a Grid it was cut to the visible height *before*
         // scrolling, so every line further down came out empty
         var canvas = new Canvas();
         canvas.Children.Add(_stack);
@@ -68,9 +102,17 @@ public class LyricsView : Grid
         Background = Brushes.Transparent; // the wheel works over the gaps between lines too
         // No OpacityMask for the edge fade: WPF maps it over the content's bounds, which scroll, so it slid along and
         // hid most lines. Each line fades by its own on-screen position instead (see Update).
-        SizeChanged += (_, _) => { _stack.Width = Math.Max(0, ActualWidth - 16); Canvas.SetLeft(_stack, 8); _focus = -2; };
-        _stack.SizeChanged += (_, _) => { foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y; _focus = -2; };
+        SizeChanged += (_, _) =>
+        {
+            _stack.Width = Math.Max(0, ActualWidth - 16);
+            Canvas.SetLeft(_stack, 8);
+            _target = null;
+            if (_doc != null && Math.Abs(FontFor(ActualWidth) - _ls) > 1.5) Show(_doc); // type follows the column width
+        };
+        _stack.SizeChanged += (_, _) => { foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y; _target = null; };
     }
+
+    static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
     public void ShowMessage(string text)
     {
@@ -88,21 +130,17 @@ public class LyricsView : Grid
         _lines.Clear();
         _stack.Children.Clear();
         _message.Visibility = Visibility.Collapsed;
-        var fg = TryFindResource("FgA0") is SolidColorBrush b ? b.Color : Colors.White;
-        _sungColor = fg;
-        _unsungColor = Color.FromArgb(95, fg.R, fg.G, fg.B);
-        _sung = new SolidColorBrush(fg);
-        _sung.Freeze();
+        _fg = TryFindResource("FgA0") is SolidColorBrush b ? b.Color : Colors.White;
+        _ls = FontFor(ActualWidth > 0 ? ActualWidth : 600);
 
         _stack.Children.Add(new Border { Height = 40 });
-        LyricLine? prev = null;
+        double prevEnd = 0;
         foreach (var line in doc.Lines)
         {
-            var lv = Build(line, doc.Synced);
-            lv.GapBefore = prev == null ? line.Start : line.Start - prev.End;
-            _lines.Add(lv);
-            _stack.Children.Add(lv.Root);
-            prev = line;
+            var (a, z) = Range(line);
+            if (doc.Synced && a - prevEnd >= GapDots) Add(Dots(prevEnd, a, line.Opposite));
+            Add(Build(line, doc.Synced, a, z));
+            prevEnd = Math.Max(prevEnd, z);
         }
         var credit = new TextBlock { FontSize = 13, Margin = new Thickness(12, 28, 12, 0), TextWrapping = TextWrapping.Wrap };
         credit.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
@@ -116,89 +154,172 @@ public class LyricsView : Grid
             // the provider asks for its name and the uploader / maker to be shown and linked wherever the lyrics are
             var link = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run(text)) { NavigateUri = new Uri(url), Cursor = Cursors.Hand };
             link.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "FgA2");
-            link.RequestNavigate += (_, e) => { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); e.Handled = true; };
+            link.RequestNavigate += (_, e) => { Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true }); e.Handled = true; };
             credit.Inlines.Add(link);
         }
         _stack.Children.Add(credit);
         _stack.Children.Add(new Border { Height = 400 }); // room to scroll the last line up
         Motion.Set(_scroll, TranslateTransform.YProperty, 0);
-        _focus = -2;
+        _target = null;
+        _blurFor = -2;
         Hook();
         if (doc.Synced) Update();
-        else foreach (var lv in _lines) lv.Root.Opacity = 0.9;
+        else foreach (var lv in _lines) { lv.Root.Opacity = 0.9; foreach (var p in lv.Parts) Fill(p, 1); }
+
+        void Add(LineView lv) { _lines.Add(lv); _stack.Children.Add(lv.Root); }
     }
 
-    LineView Build(LyricLine line, bool synced)
+    /// <summary>A line's time span: its own, widened by any word (background vocals may run past it).</summary>
+    static (double A, double B) Range(LyricLine l)
     {
-        var align = line.Opposite ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-        var panel = new StackPanel { HorizontalAlignment = align };
-        var dots = new TextBlock { Text = "•  •  •", FontSize = 26, FontWeight = FontWeights.Bold, Foreground = _sung, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = align };
-        panel.Children.Add(dots);
+        var words = l.Words.Concat(l.Background).ToArray();
+        return words.Length == 0 ? (l.Start, l.End) : (Math.Min(l.Start, words.Min(w => w.Start)), Math.Max(l.End, words.Max(w => w.End)));
+    }
+
+    LineView Shell(Panel content, bool opposite, Action click)
+    {
         var blur = new BlurEffect { Radius = 0, RenderingBias = RenderingBias.Performance };
-        var scale = new ScaleTransform(1, 1);
         var root = new Border
         {
-            Child = panel, Padding = new Thickness(12, 10, 12, 10), CornerRadius = new CornerRadius(10), Background = Brushes.Transparent,
-            Cursor = synced ? Cursors.Hand : null, Effect = synced ? blur : null, RenderTransform = scale,
-            RenderTransformOrigin = new Point(line.Opposite ? 1 : 0, 0.5),
+            Child = content, Padding = new Thickness(12, _ls * 0.12, 12, _ls * 0.12), Background = Brushes.Transparent,
+            HorizontalAlignment = opposite ? HorizontalAlignment.Right : HorizontalAlignment.Left,
         };
-        var lv = new LineView { Line = line, Root = root, Blur = blur, Scale = scale, Dots = dots };
-        if (synced)
+        var lv = new LineView { Root = root, Blur = blur };
+        if (_doc?.Synced == true)
         {
-            root.MouseEnter += (_, _) => root.SetResourceReference(Border.BackgroundProperty, "Hover");
-            root.MouseLeave += (_, _) => root.Background = Brushes.Transparent;
-            root.MouseLeftButtonUp += (_, e) => { _manualUntil = DateTime.MinValue; Seek?.Invoke(line.Start); e.Handled = true; };
-        }
-        if (line.Words.Length > 0)
-        {
-            panel.Children.Add(WordsPanel(line.Words, 34, align, lv));
-            if (line.Background.Length > 0) panel.Children.Add(WordsPanel(line.Background, 22, align, lv, background: true));
-        }
-        else
-        {
-            lv.Plain = new TextBlock { Text = line.Text, FontSize = 34, FontWeight = FontWeights.Bold, TextWrapping = TextWrapping.Wrap, Foreground = _sung, TextAlignment = line.Opposite ? TextAlignment.Right : TextAlignment.Left };
-            panel.Children.Add(lv.Plain);
+            root.Cursor = Cursors.Hand;
+            root.Effect = blur;
+            root.MouseEnter += (_, _) => { lv.Hover = true; _blurFor = -2; lv.State = -1; };
+            root.MouseLeave += (_, _) => { lv.Hover = false; _blurFor = -2; lv.State = -1; };
+            root.MouseLeftButtonUp += (_, e) => { _manualUntil = DateTime.MinValue; click(); e.Handled = true; };
         }
         return lv;
     }
 
-    WrapPanel WordsPanel(Syllable[] words, double size, HorizontalAlignment align, LineView lv, bool background = false)
+    LineView Build(LyricLine line, bool synced, double a, double z)
     {
-        var wrap = new WrapPanel { HorizontalAlignment = align, Margin = background ? new Thickness(0, 6, 0, 0) : default, Opacity = background ? 0.85 : 1 };
+        var align = line.Opposite ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+        var panel = new StackPanel { HorizontalAlignment = align };
+        var lv = Shell(panel, line.Opposite, () => Seek?.Invoke(line.Start));
+        lv.Line = line;
+        lv.A = a;
+        lv.B = z;
+        if (line.Words.Length > 0)
+        {
+            panel.Children.Add(Words(line.Words, _ls, FontWeights.Bold, Sung, Unsung, align, lv));
+            if (line.Background.Length > 0)
+            {
+                var bg = Words(line.Background, _ls * 0.75, FontWeights.SemiBold, BgSung, BgUnsung, align, lv);
+                bg.Margin = new Thickness(0, -_ls * 0.1, 0, 0);
+                panel.Children.Add(bg);
+            }
+        }
+        else
+        {
+            // line-synced (LRC) or unsynced: the whole line lights up when it starts
+            var p = Text(line.Text, _ls, FontWeights.Bold, Sung, Unsung);
+            ((TextBlock)p.El).TextWrapping = TextWrapping.Wrap;
+            ((TextBlock)p.El).TextAlignment = line.Opposite ? TextAlignment.Right : TextAlignment.Left;
+            p.A = p.B = line.Start;
+            p.Plain = true;
+            panel.Children.Add(p.El);
+            lv.Parts.Add(p);
+        }
+        return lv;
+    }
+
+    WrapPanel Words(Syllable[] words, double size, FontWeight weight, double ga, double ge, HorizontalAlignment align, LineView lv)
+    {
+        var wrap = new WrapPanel { HorizontalAlignment = align };
         foreach (var s in words)
         {
-            var e0 = new GradientStop(_sungColor, 0);
-            var e1 = new GradientStop(_unsungColor, 0);
-            var brush = new LinearGradientBrush(new GradientStopCollection { new(_sungColor, 0), e0, e1, new(_unsungColor, 1) }, new Point(0, 0), new Point(1, 0));
-            var lift = new TranslateTransform();
-            var tb = new TextBlock
+            var tail = s.Joined ? "" : " ";
+            Part w;
+            if (s.End - s.Start >= LetterMin && s.Text.Length > 0)
             {
-                Text = s.Joined ? s.Text : s.Text + " ", FontSize = size, FontWeight = background ? FontWeights.SemiBold : FontWeights.Bold,
-                Foreground = brush, RenderTransform = lift,
-            };
-            wrap.Children.Add(tb);
-            lv.Words.Add(new WordView { Syllable = s, Block = tb, Edge0 = e0, Edge1 = e1, Lift = lift });
-            SetFill(lv.Words[^1], 0);
+                // long syllable: the letters share its time, ending a little early
+                var row = new StackPanel { Orientation = Orientation.Horizontal };
+                double b = s.End - LetterEarly, step = (b - s.Start) / s.Text.Length;
+                var letters = s.Text.Select((ch, k) =>
+                {
+                    var l = Text(ch.ToString(), size, weight, ga, ge);
+                    l.A = s.Start + k * step;
+                    l.B = s.Start + (k + 1) * step;
+                    row.Children.Add(l.El);
+                    return l;
+                }).ToArray();
+                if (tail.Length > 0) row.Children.Add(new TextBlock { Text = tail, FontSize = size, FontWeight = weight });
+                w = new Part { El = row, A = s.Start, B = b, Letters = letters };
+                Transforms(w);
+            }
+            else
+            {
+                w = Text(s.Text + tail, size, weight, ga, ge);
+                w.A = s.Start;
+                w.B = s.End;
+            }
+            wrap.Children.Add(w.El);
+            lv.Parts.Add(w);
         }
         return wrap;
     }
 
-    static void SetFill(WordView w, double p)
+    Part Text(string text, double size, FontWeight weight, double ga, double ge)
     {
-        // a soft edge sweeps across the syllable: sung color left of it, the dim color right of it
-        w.Edge0.Offset = Math.Clamp(p - 0.08, 0, 1);
-        w.Edge1.Offset = Math.Clamp(p + 0.08, 0, 1);
-        if (p <= 0) { w.Edge0.Offset = 0; w.Edge1.Offset = 0; }
-        if (p >= 1) { w.Edge0.Offset = 1; w.Edge1.Offset = 1; }
+        var e0 = new GradientStop(WithAlpha(ga), -0.2);
+        var e1 = new GradientStop(WithAlpha(ge), 0);
+        var tb = new TextBlock
+        {
+            Text = text, FontSize = size, FontWeight = weight, LineHeight = size * 1.1818, LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            Foreground = new LinearGradientBrush(new GradientStopCollection { e0, e1 }, new Point(0, 0), new Point(1, 0)),
+        };
+        var p = new Part { El = tb, E0 = e0, E1 = e1 };
+        Transforms(p);
+        return p;
+    }
+
+    static void Transforms(Part p)
+    {
+        p.El.RenderTransformOrigin = new Point(0.5, 0.5);
+        p.El.RenderTransform = new TransformGroup { Children = { p.Scale, p.Lift } };
+    }
+
+    Color WithAlpha(double a) => Color.FromArgb((byte)(a * 255), _fg.R, _fg.G, _fg.B);
+
+    /// <summary>Three dots filling a long gap, each taking a third of it; they shrink away just before the singing resumes.</summary>
+    LineView Dots(double a, double b, bool opposite)
+    {
+        var group = new StackPanel { Orientation = Orientation.Horizontal, RenderTransformOrigin = new Point(opposite ? 1 : 0, 0.5) };
+        var scale = new ScaleTransform(1, 1);
+        group.RenderTransform = scale;
+        var lv = Shell(group, opposite, () => Seek?.Invoke(a));
+        lv.A = a;
+        lv.B = b;
+        lv.DotGroup = scale;
+        lv.Root.Visibility = Visibility.Collapsed;
+        double T = b - a;
+        double[] ends = [a + T / 3 - DotPad / 3, a + 2 * T / 3 - 2 * DotPad / 3, b - DotPad];
+        for (var k = 0; k < 3; k++)
+        {
+            var dot = Text("•", _ls * 1.3, FontWeights.Bold, Sung, Sung);
+            dot.El.Margin = new Thickness(0, 0, _ls * 0.12, 0);
+            ((TextBlock)dot.El).LineHeight = _ls * 0.9;
+            dot.A = k == 0 ? a : ends[k - 1];
+            dot.B = ends[k];
+            dot.Dot = true;
+            group.Children.Add(dot.El);
+            lv.Parts.Add(dot);
+        }
+        return lv;
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         if (_doc == null) return;
         // reading ahead: scroll freely, the view returns to the singer after a few seconds
-        _manualUntil = DateTime.Now.AddSeconds(4);
+        _manualUntil = DateTime.Now.AddSeconds(3);
         var max = Math.Max(0, _stack.ActualHeight - ActualHeight);
-        Motion.Animate(_scroll, TranslateTransform.YProperty, Math.Clamp(_scroll.Y + e.Delta * 0.8, -max, 0), Spring.Snappy);
+        Motion.Animate(_scroll, TranslateTransform.YProperty, Math.Clamp(_scroll.Y + e.Delta * 0.8, -max, ActualHeight / 2), Spring.Snappy);
         e.Handled = true;
     }
 
@@ -207,92 +328,207 @@ public class LyricsView : Grid
         var on = IsVisible && _doc is { Synced: true };
         if (on == _hooked) return;
         _hooked = on;
+        _lastFrame = _clock.Elapsed.TotalSeconds;
         if (on) CompositionTarget.Rendering += Tick;
         else CompositionTarget.Rendering -= Tick;
     }
 
     void Tick(object? sender, EventArgs e) => Update();
 
-    public string DebugState() => $"focus={_focus} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
-        string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{l.Top:0}/{l.Root.TranslatePoint(new Point(0, 0), _stack).Y:0} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00}"));
+#if DEBUG
+    internal void DebugFrame() => Update();
+#endif
+
+    public string DebugState() => $"target={_lines.IndexOf(_target!)} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
+        string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{l.Top:0} st={l.State} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00} blur={l.Blur.Radius:0.0}"));
 
     void Update()
     {
         if (_doc == null || Clock == null) return;
         var t = Clock();
-        var focus = -1;
-        for (var i = 0; i < _lines.Count; i++)
-            if (_lines[i].Line.Start <= t + 0.05) focus = i; else break;
+        var now = _clock.Elapsed.TotalSeconds;
+        var dt = Math.Min(0.25, now - _lastFrame);
+        _lastFrame = now;
+
+        // the line being sung (the first one, if lines overlap), else the last one started
+        var cur = _lines.FindIndex(l => t >= l.A && t < l.B);
+        if (cur < 0) cur = _lines.FindLastIndex(l => l.A <= t);
 
         for (var i = 0; i < _lines.Count; i++)
         {
             var lv = _lines[i];
-            var l = lv.Line;
-            var active = t >= l.Start - 0.05 && t < l.End;
-            var state = active ? 1 : t >= l.End ? 2 : 0;
+            var state = t < lv.A ? 0 : t >= lv.B ? 2 : 1;
+            if (lv.DotGroup != null)
+            {
+                lv.Root.Visibility = state == 1 ? Visibility.Visible : Visibility.Collapsed; // collapsed unless it's their turn
+                var hide = state == 1 && t > lv.B - DotHide;
+                if (hide != lv.Hidden)
+                {
+                    lv.Hidden = hide;
+                    Motion.Animate(lv.DotGroup, ScaleTransform.ScaleXProperty, hide ? 0 : 1, hide ? Spring.Snappy : Spring.Smooth);
+                    Motion.Animate(lv.DotGroup, ScaleTransform.ScaleYProperty, hide ? 0 : 1, hide ? Spring.Snappy : Spring.Smooth);
+                }
+            }
             if (state != lv.State)
             {
                 lv.State = state;
-                Motion.Animate(lv.Root, OpacityProperty, active ? 1 : 0.42, Spring.Smooth);
-                Motion.Animate(lv.Scale, ScaleTransform.ScaleXProperty, active ? 1 : 0.96, Spring.Smooth);
-                Motion.Animate(lv.Scale, ScaleTransform.ScaleYProperty, active ? 1 : 0.96, Spring.Smooth);
-                if (lv.Plain != null) lv.Plain.Opacity = 1;
-                if (!active) foreach (var w in lv.Words) EndGlow(w);
+                Motion.Animate(lv.Root, OpacityProperty, state == 1 || lv.Hover ? 1 : state == 0 ? 0.51 : 0.497, Spring.Snappy);
             }
-            // blur grows with the distance from the current line
-            var dist = Math.Abs(i - Math.Max(focus, 0));
-            var blur = active ? 0 : Math.Min(1 + dist * 1.1, 4.5);
-            if (Math.Abs(lv.Blur.Radius - blur) > 0.05) Motion.Animate(lv.Blur, BlurEffect.RadiusProperty, blur, Spring.Smooth);
-            lv.Root.Effect = dist > 7 ? null : lv.Blur; // far away lines are faint anyway; skip their blur pass
 
-            // soft fade near the top and bottom edges ("scroll edge effect")
+            // soft fade near the top and bottom edges
             var y = lv.Top + _scroll.Y;
             var edge = Math.Clamp(Math.Min(y + lv.Root.ActualHeight, ActualHeight - y) / 70, 0, 1);
-            lv.Root.Child.Opacity = edge * edge * (3 - 2 * edge);
+            var fade = edge * edge * (3 - 2 * edge);
+            if (Math.Abs(lv.Root.Child.Opacity - fade) > 0.005) lv.Root.Child.Opacity = fade;
 
-            // instrumental gap before this line: breathing dots
-            var inGap = lv.GapBefore >= 6 && t < l.Start && (i == 0 ? t >= 0 : t >= _lines[i - 1].Line.End) && t >= l.Start - lv.GapBefore;
-            lv.Dots.Visibility = inGap ? Visibility.Visible : Visibility.Collapsed;
-            if (inGap) lv.Dots.Opacity = 0.35 + 0.45 * (0.5 + 0.5 * Math.Sin(t * Math.PI * 1.6));
-
-            if (state == 1 || (state == 2 && lv.Words.Count > 0 && lv.Words[^1].State != 2))
-                foreach (var w in lv.Words)
-                {
-                    var s = w.Syllable;
-                    var p = s.End > s.Start ? (t - s.Start) / (s.End - s.Start) : (t >= s.Start ? 1 : 0);
-                    SetFill(w, p);
-                    var ws = p <= 0 ? 0 : p >= 1 ? 2 : 1;
-                    if (ws == w.State) continue;
-                    w.State = ws;
-                    // the syllable being sung rises a touch and settles once it's done
-                    Motion.Animate(w.Lift, TranslateTransform.YProperty, ws == 1 ? -3 : 0, ws == 1 ? Spring.Snappy : Spring.Smooth);
-                    if (ws == 1 && s.End - s.Start > 0.9) Glow(w);
-                    if (ws == 2) EndGlow(w);
-                }
-            else if (state == 0 && lv.Words.Count > 0 && lv.Words[0].State != 0)
-                foreach (var w in lv.Words) { w.State = 0; SetFill(w, 0); Motion.Set(w.Lift, TranslateTransform.YProperty, 0); } // after seeking back
+            var visible = y + lv.Root.ActualHeight > -200 && y < ActualHeight + 200;
+            foreach (var p in lv.Parts) Paint(p, t, dt, state == 1, visible);
         }
 
-        if (focus != _focus && DateTime.Now >= _manualUntil)
+        if (cur != _blurFor)
         {
-            _focus = focus;
-            var target = focus < 0 ? _lines.FirstOrDefault()?.Root : _lines[focus].Root;
-            if (target != null && target.IsArrangeValid)
+            _blurFor = cur;
+            for (var k = 0; k < _lines.Count; k++)
             {
-                var top = target.TranslatePoint(new Point(0, 0), _stack).Y;
-                Motion.Animate(_scroll, TranslateTransform.YProperty, -(top - ActualHeight * 0.4), Spring.Smooth); // current line a bit above the middle
+                var d = Math.Abs(k - cur);
+                var r = _lines[k].Hover || cur < 0 || d == 0 ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
+                if (Math.Abs(_lines[k].Blur.Radius - r) > 0.05) Motion.Animate(_lines[k].Blur, BlurEffect.RadiusProperty, r, Spring.Smooth);
+                _lines[k].Root.Effect = d > 8 ? null : _lines[k].Blur; // far lines are faint anyway: skip their blur pass
             }
         }
-        else if (DateTime.Now >= _manualUntil && _manualUntil != DateTime.MinValue)
+
+        // follow the song: the line about to be sung (slightly early), or the interlude dots, in the middle
+        if (DateTime.Now < _manualUntil) return;
+        var dots = cur >= 0 && _lines[cur].DotGroup != null && _lines[cur].State == 1 ? _lines[cur] : null;
+        var next = dots ?? _lines.LastOrDefault(l => l.Line != null && l.A <= t + Look) ?? _lines.FirstOrDefault(l => l.Line != null);
+        if (next == null || (next == _target && _manualUntil == DateTime.MinValue) || !next.Root.IsArrangeValid) return;
+        _target = next;
+        _manualUntil = DateTime.MinValue;
+        var top = next.Root.TranslatePoint(new Point(0, 0), _stack).Y;
+        Motion.Animate(_scroll, TranslateTransform.YProperty, -(top + next.Root.ActualHeight / 2 - ActualHeight / 2), Spring.Smooth);
+    }
+
+    static int StateOf(double t, double a, double b) => t < a ? 0 : t >= b ? 2 : 1;
+    static double Prog(double t, double a, double b) => t <= a ? 0 : t >= b ? 1 : (t - a) / (b - a);
+
+    /// <summary>One frame of a word / letter / dot. Off-screen ones jump to where they belong instead of animating.</summary>
+    void Paint(Part w, double t, double dt, bool active, bool visible)
+    {
+        int st = StateOf(t, w.A, w.B);
+        double p = Prog(t, w.A, w.B), q = st == 1 ? p : st / 2.0; // rest = curve(0), sung = curve(1)
+        if (w.Plain) { Fill(w, st == 0 ? -0.2 : 1); return; }
+        if (!visible) dt = 10; // settles at once
+        if (w.Dot)
         {
-            _manualUntil = DateTime.MinValue;
-            _focus = -2; // back to following the song
+            var (s, y, g, o) = Springs(w, DScale(q), DLift(q), DGlow(q), DOp(q), dt, dot: true);
+            Move(w, s, y * _ls);
+            if (Changed(ref w.Op, o, 1e-3)) w.El.Opacity = o;
+            Glow(w, 4 + 6 * g, g * 0.9);
+            return;
+        }
+        var v = Springs(w, CScale(q), CLift(q), CGlow(q), null, dt);
+        Move(w, v.s, v.y * _ls);
+        if (w.Letters == null)
+        {
+            Fill(w, st == 0 ? -0.2 : st == 2 ? 1 : -0.2 + 1.2 * p);
+            Glow(w, 4 + 2 * v.g, active ? Math.Min(v.g * 0.35, 1) : 0);
+            return;
+        }
+        var letters = w.Letters;
+        var act = st == 1 ? Array.FindIndex(letters, l => t >= l.A && t < l.B) : -1;
+        var ap = act >= 0 ? Prog(t, letters[act].A, letters[act].B) : 0;
+        for (var k = 0; k < letters.Length; k++)
+        {
+            var l = letters[k];
+            var ls = StateOf(t, l.A, l.B);
+            double s = LScale(0), y = LLift(0), g = CGlow(0), gp = -0.2;
+            if (st == 2) { s = LScale(1); y = LLift(1); g = CGlow(1); gp = 1; }
+            else if (st == 1)
+            {
+                if (act >= 0)
+                {
+                    // the sung letter swells, its neighbours follow with a steep falloff
+                    double d = Math.Abs(k - act), f = 1 / (1 + Math.Pow(d, 2.8)), gf = 1 / (1 + d * 0.9);
+                    s += (LScale(ap) - s) * f;
+                    y += (LLift(ap) - y) * f;
+                    g += (CGlow(ap) - g) * gf;
+                }
+                if (ls == 0) { s = LScale(0); y = LLift(0); g = CGlow(0); }
+                else if (ls == 2 && act < 0) g = CGlow(0.2);
+                gp = ls == 0 ? -0.2 : ls == 2 ? 1 : k == act ? -0.2 + 1.2 * Math.Sin(ap * Math.PI / 2) : -0.2;
+            }
+            var lv = Springs(l, s, y, g, null, visible ? dt : 10);
+            Fill(l, gp);
+            Move(l, lv.s, lv.y * 2 * _ls);
+            Glow(l, 4 + 12 * lv.g, active ? Math.Min(lv.g * 1.85, 1) : 0);
         }
     }
 
+    static (double s, double y, double g, double o) Springs(Part p, double s, double y, double g, double? o, double dt, bool dot = false)
+    {
+        if (p.S == null) // start where it belongs: no jump after a rebuild
+        {
+            p.S = dot ? new Sp(s, 0.7, 0.6) : new Sp(s, 0.88, 0.64);
+            p.Y = dot ? new Sp(y, 1.25, 0.4) : new Sp(y, 1.45, 0.4);
+            p.G = dot ? new Sp(g, 1, 0.5) : new Sp(g, 1.18, 0.56);
+            if (o is { } o0) p.O = new Sp(o0, 1, 0.5);
+        }
+        p.S.G = s; p.Y!.G = y; p.G!.G = g;
+        if (p.O != null && o is { } og) p.O.G = og;
+        return (p.S.Step(dt), p.Y.Step(dt), p.G.Step(dt), p.O?.Step(dt) ?? 1);
+    }
 
-    void Glow(WordView w) =>
-        w.Block.Effect = new DropShadowEffect { Color = _sungColor, ShadowDepth = 0, BlurRadius = 16, Opacity = 0.55, RenderingBias = RenderingBias.Performance };
+    static bool Changed(ref double last, double v, double eps)
+    {
+        if (!double.IsNaN(last) && Math.Abs(last - v) <= eps) return false;
+        last = v;
+        return true;
+    }
 
-    static void EndGlow(WordView w) => w.Block.Effect = null;
+    static void Move(Part p, double scale, double lift)
+    {
+        if (Changed(ref p.Sc, scale, 1e-3)) { p.Scale.ScaleX = scale; p.Scale.ScaleY = scale; }
+        if (Changed(ref p.Ly, lift, 0.02)) p.Lift.Y = lift;
+    }
+
+    /// <summary>Sung color left of <paramref name="gp"/>, the dim one from 20 % further on (gp −0.2 … 1 across the word).</summary>
+    static void Fill(Part p, double gp)
+    {
+        if (p.E0 == null || !Changed(ref p.Gp, gp, 0.0005)) return;
+        p.E0.Offset = gp;
+        p.E1!.Offset = gp + 0.2;
+    }
+
+    void Glow(Part p, double radius, double opacity)
+    {
+        if (!Changed(ref p.Go, opacity, 0.01) & !Changed(ref p.Gb, radius, 0.5)) return;
+        if (opacity < 0.02) { p.El.Effect = null; return; }
+        if (p.El.Effect is not DropShadowEffect glow)
+            p.El.Effect = glow = new DropShadowEffect { ShadowDepth = 0, Color = _fg, RenderingBias = RenderingBias.Performance };
+        glow.BlurRadius = radius * 1.5;
+        glow.Opacity = opacity;
+    }
+
+    /// <summary>Natural cubic spline through the points (x ascending).</summary>
+    static Func<double, double> Curve(params (double X, double Y)[] pts)
+    {
+        int n = pts.Length;
+        double[] x = [.. pts.Select(p => p.X)], y = [.. pts.Select(p => p.Y)], m = new double[n], c = new double[n], d = new double[n];
+        var h = new double[n - 1];
+        for (var i = 0; i < n - 1; i++) h[i] = x[i + 1] - x[i];
+        for (var i = 1; i < n - 1; i++) // tridiagonal solve for the second derivatives
+        {
+            double a = h[i - 1], b = 2 * (h[i - 1] + h[i]) - a * c[i - 1], r = 6 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1]) - a * d[i - 1];
+            c[i] = h[i] / b;
+            d[i] = r / b;
+        }
+        for (var i = n - 2; i > 0; i--) m[i] = d[i] - c[i] * m[i + 1];
+        return t =>
+        {
+            var i = 0;
+            while (i < n - 2 && t > x[i + 1]) i++;
+            double a = x[i + 1] - t, b = t - x[i], w = h[i];
+            return (m[i] * a * a * a + m[i + 1] * b * b * b) / (6 * w) + (y[i] / w - m[i] * w / 6) * a + (y[i + 1] / w - m[i + 1] * w / 6) * b;
+        };
+    }
 }

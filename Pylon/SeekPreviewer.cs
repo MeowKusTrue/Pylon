@@ -51,7 +51,8 @@ public sealed class SeekPreviewer : IDisposable
     {
         Close();
         if (path == null) return;
-        _vlc ??= new LibVLC("--no-audio", "--no-spu", "--no-osd", "--quiet", "--no-video-title-show", "--avcodec-hw=none");
+        _vlc ??= new LibVLC("--no-audio", "--no-spu", "--no-osd", "--quiet", "--no-video-title-show", "--avcodec-hw=none",
+            "--no-avcodec-hurry-up", "--no-avcodec-corrupted"); // a late decoder otherwise shows half-decoded grey frames
         _mp = new MediaPlayer(_vlc);
         _mp.SetVideoFormat("RV32", W, H, W * 4);
         _mp.SetVideoCallbacks(_lock, null, _display);

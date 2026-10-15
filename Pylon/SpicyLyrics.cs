@@ -9,8 +9,8 @@ namespace Pylon;
 
 /// <summary>
 /// Spicy Lyrics' public API (api.spicylyrics.org, key from developers.spicylyrics.org). It answers only by Spotify track id,
-/// so the id comes from the file's tags (spotdl and many download bots store the Spotify link) or from the Spotify Web API
-/// (client-credentials app from developer.spotify.com): Deezer gives the ISRC, Spotify maps the ISRC to its id.
+/// so the id comes from the file's tags (spotdl and many download bots store the Spotify link), from ListenBrainz's
+/// metadata → Spotify mapping (free, no key), or from the Spotify Web API when the user added a developer.spotify.com app.
 /// </summary>
 public static class SpicyLyrics
 {
@@ -19,17 +19,42 @@ public static class SpicyLyrics
     static string? _token;
     static DateTime _tokenUntil;
 
-    public static bool Enabled => Settings.Str("lyrics.spicykey").Trim().Length > 0;
+    /// <summary>
+    /// Pylon's publishable key ("No Origin header" on, as Spicy's docs say for native clients): public by design, so every
+    /// copy works without setup. A key in settings wins.
+    /// </summary>
+    const string BuiltInKey = "";
+
+    static string Key => Settings.Str("lyrics.spicykey").Trim() is { Length: > 0 } own ? own : BuiltInKey;
+
+    public static bool Enabled => Key.Length > 0;
 
     /// <summary>The Spicy Lyrics JSON for the track (raw, for the cache), or null.</summary>
     public static async Task<string?> FetchAsync(string path, string title, string artist, double duration, string tags)
     {
-        var id = SpotifyLink.Match(tags) is { Success: true } m ? m.Groups[1].Value : LinkInFile(path) ?? await SpotifyIdAsync(title, artist, duration);
-        if (id == null) return null;
-        using var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.spicylyrics.org/v1/lyrics/{id}");
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Settings.Str("lyrics.spicykey").Trim());
-        using var res = await Http.SendAsync(req);
-        return res.IsSuccessStatusCode ? await res.Content.ReadAsStringAsync() : null;
+        var linked = SpotifyLink.Match(tags) is { Success: true } m ? m.Groups[1].Value : LinkInFile(path);
+        string[] ids = linked != null ? [linked] : await ListenBrainzIdsAsync(title, artist);
+        if (ids.Length == 0 && await SpotifyIdAsync(title, artist, duration) is { } found) ids = [found];
+        foreach (var id in ids) // one song has several ids (single, album, reissues); lyrics may sit on any of them
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.spicylyrics.org/v1/lyrics/{id}");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Key);
+            using var res = await Http.SendAsync(req);
+            if (res.IsSuccessStatusCode) return await res.Content.ReadAsStringAsync();
+            if (res.StatusCode != System.Net.HttpStatusCode.NotFound) res.EnsureSuccessStatusCode(); // bad key, rate limit: not a "no lyrics" answer
+        }
+        return null;
+    }
+
+    /// <summary>ListenBrainz Labs maps artist + title to Spotify ids (no key); up to three, most relevant first.</summary>
+    static async Task<string[]> ListenBrainzIdsAsync(string title, string artist)
+    {
+        var body = JsonSerializer.Serialize(new[] { new { artist_name = artist, release_name = "", track_name = title } });
+        using var res = await Http.PostAsync("https://labs.api.listenbrainz.org/spotify-id-from-metadata/json", new StringContent(body, Encoding.UTF8, "application/json"));
+        if (!res.IsSuccessStatusCode) return [];
+        var hits = JsonDocument.Parse(await res.Content.ReadAsStringAsync()).RootElement;
+        return hits.GetArrayLength() > 0 && hits[0].TryGetProperty("spotify_track_ids", out var ids)
+            ? [.. ids.EnumerateArray().Select(i => i.GetString()).OfType<string>().Where(i => i.Length == 22).Take(3)] : [];
     }
 
     /// <summary>A Spotify link anywhere in the file's tag area (ID3 comment / WOAS, Vorbis comments, MP4 atoms): libVLC doesn't expose those.</summary>

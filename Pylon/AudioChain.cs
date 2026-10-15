@@ -50,8 +50,8 @@ public static class AudioChain
             names.Insert(0, "equalizer");
         }
         SetString(set, mp, "audio-filter", string.Join(":", names));
-        mp.SetAudioOutput(audioOutput ?? "any"); // drops the kept output: the next one inherits the chain above
-        return true;
+        // drops the kept output so the next one inherits the chain above; must name a real module ("any" is refused)
+        return mp.SetAudioOutput(audioOutput ?? "mmdevice");
     }
 
     /// <summary>True when the chain holds more than the equalizer: then equalizer edits go through an engine restart.</summary>

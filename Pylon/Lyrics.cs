@@ -40,7 +40,7 @@ public static class Lyrics
         var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{artist}|{title}|{album}|{Math.Round(duration)}".ToLowerInvariant())))[..20];
         var cached = Path.Combine(CacheDir, key + ".lrc");
         var spicyCache = Path.Combine(CacheDir, key + ".spicy.json");
-        var spicyMiss = Path.Combine(CacheDir, key + ".spicy.none"); // Spicy has nothing for it: don't ask again
+        var spicyMiss = Path.Combine(CacheDir, key + ".spicy2.none"); // Spicy has nothing for it: don't ask again
         if (File.Exists(spicyCache) && SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy;
         // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
         if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !string.IsNullOrWhiteSpace(artist) && !File.Exists(spicyMiss))

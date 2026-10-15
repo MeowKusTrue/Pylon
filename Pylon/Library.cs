@@ -50,6 +50,7 @@ public class LibraryData
 {
     public List<string> VideoFolders { get; set; } = [];
     public List<string> MusicFolders { get; set; } = [];
+    public List<string> Pinned { get; set; } = []; // folders pinned to the sidebar rail
     public List<SavedStream> Streams { get; set; } = [];
     public List<SavedStream> Podcasts { get; set; } = []; // RSS feeds
     public List<Playlist> Playlists { get; set; } = [];

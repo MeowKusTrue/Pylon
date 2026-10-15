@@ -4,7 +4,7 @@ using LibVLCSharp.Shared;
 namespace Pylon;
 
 /// <summary>
-/// Audio/video effect definitions for the effects panel (mockup: Audio - Equalizer / Compressor / Spatializer / Stereo Widener,
+/// Audio/video effect definitions for the effects panel (mockup: Audio - Equalizer / Compressor / Spatializer,
 /// Video - Essential / Crop / Colors). Values live in Settings ("fx.*", "fxv.*"); filter modules are applied through libVLC arguments.
 /// </summary>
 public static class Effects
@@ -83,13 +83,6 @@ public static class Effects
             S("fx.spat.wet", "Wet", 0.4, 0, 1, 0.05),
             S("fx.spat.dry", "Dry", 0.5, 0, 1, 0.05),
             S("fx.spat.damp", "Damping", 0.5, 0, 1, 0.05),
-        ]),
-        new("Stereo Widener",
-        [
-            S("fx.widen.delay", "Delay", 20, 1, 100, 1, " ms"),
-            S("fx.widen.feedback", "Feedback", 0.3, 0, 0.9, 0.05),
-            S("fx.widen.crossfeed", "Crossfeed", 0.3, 0, 0.8, 0.05),
-            S("fx.widen.dry", "Dry mix", 0.8, 0, 1, 0.05),
         ]),
     ];
 

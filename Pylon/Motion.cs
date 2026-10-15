@@ -86,6 +86,11 @@ public static class Motion
 
     static void Stop(DependencyObject target, DependencyProperty property) => Drivers.Remove((target, property));
 
+#if DEBUG
+    /// <summary>Off-screen test windows get few Rendering frames: probes drive them by hand.</summary>
+    internal static void DebugFrame() => Tick(null, EventArgs.Empty);
+#endif
+
     static void Tick(object? sender, EventArgs e)
     {
         var dt = Math.Min(Clock.Elapsed.TotalSeconds, 1 / 20.0); // after a stall, don't jump

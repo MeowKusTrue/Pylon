@@ -41,6 +41,9 @@ public static class ShellRegistration
             k.SetValue("", $"{ext.TrimStart('.').ToUpperInvariant()} {(video ? (ru ? "видео" : "video") : (ru ? "аудио" : "audio"))} (Pylon)");
             var icon = Path.Combine(icons, ext.TrimStart('.') + ".ico");
             using (var di = k.CreateSubKey("DefaultIcon")) di.SetValue("", File.Exists(icon) ? icon : Path.Combine(icons, video ? "file-video.ico" : "file-audio.ico"));
+            // over a thumbnail (video frame, album art) Explorer draws this badge instead of the whole file icon
+            k.SetValue("TypeOverlay", $"{exe},0");
+            if (video) k.SetValue("Treatment", 3, RegistryValueKind.DWord); // film sprockets
             using var cmd = k.CreateSubKey(@"shell\open\command");
             cmd.SetValue("", open);
         }

@@ -130,7 +130,6 @@ public static class Settings
         if (Bool("audio.normalize")) f.Add("normvol");
         if (Bool("audio.compressor") || Bool("audio.night")) f.Add("compressor");
         if (Bool("audio.spatial")) f.Add(Str("audio.spatialmode") == "Room spatializer" ? "spatializer" : "headphone");
-        if (Bool("audio.widen")) f.Add("stereo_widen");
         if (Num("audio.pitch") != 0) f.Add("scaletempo_pitch");
         if (Bool("audio.chorus")) f.Add("chorus_flanger");
         if (Bool("audio.karaoke")) f.Add("karaoke");
@@ -153,6 +152,7 @@ public static class Settings
         if (Int("playback.audiotrack") > 0) Add($"--audio-track={Int("playback.audiotrack") - 1}");
         if (Int("playback.subtrack") > 0) Add($"--sub-track={Int("playback.subtrack") - 1}");
         if (!Bool("playback.precise")) Add("--input-fast-seek");
+        Add("--no-avcodec-hurry-up"); Add("--no-avcodec-corrupted"); // no grey smears after seeks in heavy video (1440p60 HEVC recordings)
         Add($"--avi-index={Array.IndexOf(["Ask", "Always", "Never"], Str("playback.avi")) switch { 1 => 1, 2 => 2, _ => 0 }}");
         if (Str("playback.tsfolder") is { Length: > 0 } ts) Add($"--input-timeshift-path={ts}");
         Add($"--input-timeshift-granularity={Str("playback.tssize") switch { "Small" => 10_000_000, "Large" => 200_000_000, _ => 50_000_000 }}");
@@ -191,12 +191,6 @@ public static class Settings
                 Add($"--spatializer-damp={Inv(Num("fx.spat.damp"))}");
             }
             else filters.Add("headphone");
-        }
-        if (Bool("audio.widen"))
-        {
-            filters.Add("stereo_widen");
-            Add($"--stereowiden-delay={Inv(Num("fx.widen.delay"))}"); Add($"--stereowiden-feedback={Inv(Num("fx.widen.feedback"))}");
-            Add($"--stereowiden-crossfeed={Inv(Num("fx.widen.crossfeed"))}"); Add($"--stereowiden-dry-mix={Inv(Num("fx.widen.dry"))}");
         }
         if (Num("audio.pitch") != 0) { filters.Add("scaletempo_pitch"); Add($"--pitch-shift={Inv(Num("audio.pitch"))}"); Add("--no-audio-time-stretch"); } // the pitch filter stretches time itself
         if (Bool("audio.chorus")) filters.Add("chorus_flanger");
@@ -378,13 +372,15 @@ public static class Settings
                 Seg("ui.spectrum", "Audio spectrum", "Music", "Off", "Music", "Music and video"),
                 T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
                 Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
-                T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
+                T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts.")),
+            Sec("Lyrics",
                 T("lyrics.online", "Find lyrics online", true, "Searches lrclib.net by artist and title when a track has no .ttml or .lrc file next to it."),
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spicykey", Label = "Spicy Lyrics API key", ButtonText = "sl_pk_… / sl_sk_…",
                           Info = "Word-synced lyrics from Spicy Lyrics. Create a key at developers.spicylyrics.org. Stored only on this computer." },
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spotifyid", Label = "Spotify client ID", ButtonText = "developer.spotify.com",
-                          Info = "Spicy Lyrics finds songs by their Spotify id. Create a free app at developer.spotify.com to let Pylon look it up (not needed when the file's tags carry a Spotify link)." },
-                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" },
+                          Info = "Optional. Pylon finds a song's Spotify id by its name through ListenBrainz; for songs it misses, a free app from developer.spotify.com helps." },
+                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" }),
+            Sec("",
                 T("ui.browser", "Show the file browser inside the open dialog", true).Off(),
                 T("ui.appicon", "Allow the app icon to change", true).Off(),
                 S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),
@@ -528,7 +524,6 @@ public static class Settings
                 T("audio.eq2pass", "Two-pass", false, "Applies the equalizer twice for a stronger effect.", engine: true),
                 T("audio.spatial", "Spatial audio", false, engine: true),
                 C("audio.spatialmode", "Spatial audio mode", "Headphone virtualization", ["Headphone virtualization", "Room spatializer"], engine: true),
-                T("audio.widen", "Stereo widening", false, engine: true),
                 T("audio.compressor", "Compressor", false, engine: true),
                 N("audio.pitch", "Pitch shift", 0, -12, 12, " semitones", engine: true, step: 0.5),
                 T("audio.chorus", "Chorus/flanger", false, engine: true),
