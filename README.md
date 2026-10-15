@@ -30,6 +30,8 @@ Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC R
 - **Lyrics:** syllable-by-syllable karaoke in the style of Spicy Lyrics (glow, blur by distance, click a line to jump). Reads `.ttml` (Apple / Spicy Lyrics / spicy-translate, with background vocals and duets) and `.lrc` next to the track, or finds synced lyrics on LRCLIB.
 - **Video:** NVIDIA RTX / Intel Super Resolution and RTX Video HDR, chapters on the seek bar, bookmarks (`Ctrl+B`), 360° video you look around with the mouse, a blurred backdrop of the video's own frames instead of black bars.
 - **Windows:** media session (track and cover in the volume flyout and on the lock screen, media keys), taskbar thumbnail buttons, own icon for every file format.
+- **Websites:** YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites through [yt-dlp](https://github.com/yt-dlp/yt-dlp) (downloaded on first use, kept up to date). Paste a playlist or channel and its videos join the queue.
+- **Crossfade:** songs blend into each other (Settings → Playback → Crossfade between songs).
 - **Playback tools:** A-B loop (`Shift+L`, range shown on the seek bar), sleep timer with a gentle fade-out, a real waveform on the music seek bar (decoded once in the background, cached).
 - **Motion:** quick ease-out transitions for panels, menus, dialogs and library pages; hotkey actions stay instant, and Windows' "Animation effects" switch turns them off.
 - **Audio spectrum:** live bars under the cover art, optionally over video too. Only Pylon's own sound is captured (WASAPI process loopback, Windows 10 2004+).

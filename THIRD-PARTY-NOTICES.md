@@ -9,6 +9,7 @@ Pylon is licensed under the GNU GPL v3 (see `LICENSE`). It ships or uses:
 | SharpVectors | BSD-3-Clause | https://github.com/ElinamLLC/SharpVectors |
 | Phosphor Icons | MIT | https://phosphoricons.com |
 | QRCoder | MIT | https://github.com/Shane32/QRCoder |
+| yt-dlp — not shipped; downloaded from its GitHub releases on first use, into %LocalAppData%\Pylon\tools | Unlicense | https://github.com/yt-dlp/yt-dlp |
 
 libVLC is loaded as separate DLLs from the `libvlc` folder and can be replaced with another build of the same version.
 

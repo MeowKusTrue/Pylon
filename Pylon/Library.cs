@@ -177,8 +177,11 @@ public static class Library
         if (Data.Meta.GetValueOrDefault(path) is { Title: { Length: > 0 } t } m) return m.Artist is { Length: > 0 } a ? $"{t} - {a}" : t;
         if (HistoryOf(path) is { Title: { Length: > 0 } ht } h && ht != "Pylon") // "Pylon": entries saved by 1.0.0 with the title bar text
             return h.Artist is { Length: > 0 } ha ? $"{ht} - {ha}" : ht;
-        return DisplayName(path);
+        return Titles.GetValueOrDefault(path) ?? DisplayName(path);
     }
+
+    /// <summary>Names known before an item plays (videos of a web playlist), for this session.</summary>
+    public static readonly Dictionary<string, string> Titles = [];
 
     public static HistoryEntry? HistoryOf(string path) => Data.History.GetValueOrDefault(path);
 

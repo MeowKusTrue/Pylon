@@ -94,6 +94,11 @@
                                 <Image x:Name="ArtImage" Stretch="UniformToFill">
                                     <Image.Clip><RectangleGeometry x:Name="ArtClip" RadiusX="12" RadiusY="12"/></Image.Clip>
                                 </Image>
+                                <!-- play / pause flash after a click on the music view: in the middle of the cover -->
+                                <Border x:Name="StageFlash" Width="88" Height="88" CornerRadius="44" Background="{DynamicResource MenuBg}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        Opacity="0" IsHitTestVisible="False">
+                                    <local:Icon x:Name="StageFlashIcon" Glyph="play-fill" Width="38" Height="38" Tint="@FgA0"/>
+                                </Border>
                             </Grid>
                         </Border>
                         <TextBlock x:Name="MusicCaption" Grid.Row="1" FontSize="24" FontWeight="Medium" Foreground="{DynamicResource FgA1}"
@@ -108,11 +113,6 @@
                     <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
                 </Border>
 
-                <!-- play / pause flash after a click on the music view -->
-                <Border x:Name="StageFlash" Width="88" Height="88" CornerRadius="44" Background="{DynamicResource MenuBg}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                        Opacity="0" IsHitTestVisible="False" Panel.ZIndex="5">
-                    <local:Icon x:Name="StageFlashIcon" Glyph="play-fill" Width="38" Height="38" Tint="@FgA0"/>
-                </Border>
 
                 <!-- Around the video: its own frames, blurred (sized to the picture, the video sits on top) -->
                 <Grid x:Name="VideoBackdrop" Visibility="Collapsed">

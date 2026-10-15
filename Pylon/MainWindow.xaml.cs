@@ -163,6 +163,7 @@ public partial class MainWindow : Window
             {
                 ShowWhatsNewIfUpdated();
                 if (Settings.Bool("general.updates")) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
+                YtDlp.UpdateIfDue();
             }
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
@@ -223,13 +224,8 @@ public partial class MainWindow : Window
             Osd(L.T("Some settings were rejected by libVLC"));
         }
         HookLog();
-        _mp = new MediaPlayer(Vlc);
-        AudioChain.Apply(_mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
-        // libVLC raises events on its own thread; never call back into libVLC from there.
-        _mp.EndReached += (_, _) => Dispatcher.BeginInvoke(OnEnded);
-        _mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(OnError);
-        _mp.Playing += (_, _) => Dispatcher.BeginInvoke(OnPlaying);
-        _mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
+        EndCrossfade();
+        _mp = NewPlayer();
 
         if (oldMp != null)
         {
@@ -246,6 +242,73 @@ public partial class MainWindow : Window
     }
 
     void ReloadEngine() => CreateEngine(resume: true);
+
+    MediaPlayer NewPlayer()
+    {
+        var mp = new MediaPlayer(Vlc);
+        AudioChain.Apply(mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
+        // libVLC raises events on its own thread; never call back into libVLC from there. A song fading out in a
+        // crossfade is no longer the main player: its events are ignored.
+        mp.EndReached += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
+        mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
+        mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
+        mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
+        return mp;
+    }
+
+    // ───────── crossfade ─────────
+
+    MediaPlayer? _tail;           // the song fading out
+    DispatcherTimer? _fade;
+    bool _fadeStarting;
+
+    /// <summary>
+    /// Music only: a few seconds before a song ends it keeps playing on its own player and fades out while the next one
+    /// starts on a fresh main player and fades in (equal power). Each player's loudness is its own gain
+    /// (<see cref="AudioChain.SetGain"/>); the volume slider would move both. Everything else goes through PlayAt.
+    /// </summary>
+    void MaybeCrossfade()
+    {
+        var secs = Settings.Num("playback.crossfade");
+        if (secs <= 0 || _tail != null || !_isAudio || !_mp.IsPlaying || _sleepEndOfItem) return;
+        if (Settings.Str("playback.repeat") == "One" || Settings.Bool("playback.stopeach")) return;
+        long len = _mp.Length, left = len - _mp.Time;
+        if (len < secs * 3000 || left > secs * 1000 || left < 500) return; // short clips just play out
+        var next = NextIndex(+1);
+        if (next < 0 || next >= _queue.Count || _queue[next].Contains("://") || !AudioExt.Contains(Path.GetExtension(_queue[next]))) return;
+
+        SaveProgress(finished: true);
+        var tail = _tail = _mp;
+        _mp = NewPlayer();
+        _mp.Mute = tail.Mute;
+        AudioChain.SetGain(_mp, 0); // silent from its first sample
+        Video.MediaPlayer = _mp;    // the view must never keep the player that is about to be disposed
+        _fadeStarting = true;
+        PlayAt(next, autoplay: true);
+        _fadeStarting = false;
+        ApplyVolume();
+
+        var clock = Stopwatch.StartNew();
+        var duration = left / 1000.0;
+        _fade = new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Render, (_, _) =>
+        {
+            var k = Math.Clamp(clock.Elapsed.TotalSeconds / duration, 0, 1);
+            AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2));
+            AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2));
+            if (k >= 1) EndCrossfade();
+        }, Dispatcher);
+    }
+
+    /// <summary>Finishes a crossfade at once (it ran out, or the user did something else).</summary>
+    void EndCrossfade()
+    {
+        _fade?.Stop();
+        _fade = null;
+        if (_tail is not { } tail) return;
+        _tail = null;
+        if (_mp != null) AudioChain.SetGain(_mp, 1);
+        Task.Run(() => { tail.Stop(); tail.Dispose(); }); // Stop() blocks on the decoder threads
+    }
 
     void HookLog()
     {
@@ -351,10 +414,13 @@ public partial class MainWindow : Window
             if (stopAtEnd) { _mp.Stop(); ShowIdle(); }
             return;
         }
+        if (!_fadeStarting) EndCrossfade();
         _index = i;
         _switch = Stopwatch.StartNew();
         var src = _queue[i];
         var isUrl = src.Contains("://");
+        if (isUrl && YtDlp.Handles(src) && await PlaySite(i, src, startAt, autoplay)) return;
+        if (_index != i || _queue.ElementAtOrDefault(i) != src) return; // moved on while yt-dlp was busy
         var media = isUrl ? new Media(Vlc, new Uri(src)) : new Media(Vlc, src, FromType.FromPath);
         try
         {
@@ -382,7 +448,53 @@ public partial class MainWindow : Window
         finally { Library.DisposeLater(media); }
     }
 
-    bool _metaPending;
+    bool _metaPending, _ytDlpDeclined;
+
+    /// <summary>
+    /// A web page (YouTube and the rest) through yt-dlp: a playlist or channel turns into its videos, a video into its
+    /// stream addresses. True when it took care of the item (or the user moved on); false lets libVLC try the address.
+    /// </summary>
+    async Task<bool> PlaySite(int i, string src, long startAt, bool? autoplay)
+    {
+        if (!YtDlp.Available && (_ytDlpDeclined || !await OfferYtDlp())) return false;
+        Osd(L.T("Loading…"), 30);
+        if (await YtDlp.ExpandAsync(src) is { Count: > 0 } items)
+        {
+            if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
+            _queue.RemoveAt(i);
+            _queue.InsertRange(i, items.Select(x => x.Url));
+            foreach (var (url, title) in items) if (title.Length > 0 && Library.HistoryOf(url) == null) Library.Titles[url] = title;
+            BuildShuffle();
+            PlayAt(i, startAt: startAt, autoplay: autoplay);
+            return true;
+        }
+        var q = Settings.Str("playback.quality");
+        var s = await YtDlp.ResolveAsync(src, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
+        if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
+        if (s == null) { Osd(YtDlp.LastError ?? L.T("yt-dlp couldn't open this page"), 5); return false; }
+        var media = new Media(Vlc, new Uri(s.Url));
+        try
+        {
+            if (s.Audio != null) media.AddSlave(MediaSlaveType.Audio, 4, s.Audio);
+            if (s.UserAgent != null) media.AddOption(":http-user-agent=" + s.UserAgent);
+            if (s.Referer != null) media.AddOption(":http-referrer=" + s.Referer);
+            media.SetMeta(MetadataType.Title, s.Title);
+            if (s.Artist != null) media.SetMeta(MetadataType.Artist, s.Artist);
+            if (s.Thumbnail != null) media.SetMeta(MetadataType.ArtworkURL, s.Thumbnail);
+            Osd("", 0);
+            StartMedia(media, src, isUrl: true, s.Live ? -1 : startAt, autoplay ?? Settings.Bool("playback.autoplay"), audio: !s.HasVideo);
+        }
+        finally { Library.DisposeLater(media); }
+        return true;
+    }
+
+    async Task<bool> OfferYtDlp()
+    {
+        if (!DialogWindow.OfferYtDlp(this)) { _ytDlpDeclined = true; return false; }
+        var ok = await YtDlp.InstallAsync(new Progress<double>(p => Osd(L.F("Downloading yt-dlp… {0}%", (int)(p * 100)), 5)));
+        if (!ok) Osd(L.T("Couldn't download yt-dlp"), 3);
+        return ok;
+    }
 
     /// <summary>Title, artist, cover and everything derived from the tags; run again once a quick-started file is parsed.</summary>
     void ApplyMeta(Media media, string src, bool isUrl, bool parsed)
@@ -415,10 +527,10 @@ public partial class MainWindow : Window
         Sidebar.Render();
     }
 
-    void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay)
+    void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay, bool? audio = null)
     {
         var ext = isUrl ? "" : Path.GetExtension(src);
-        _isAudio = AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video));
+        _isAudio = audio ?? (AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video)));
         _lyricsFor = null;
         ApplyMeta(media, src, isUrl, parsed: false);
         var title = _title;
@@ -588,6 +700,7 @@ public partial class MainWindow : Window
 
     void Refresh()
     {
+        MaybeCrossfade();
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
         if (len > 0)
         {
@@ -618,6 +731,7 @@ public partial class MainWindow : Window
     public void TogglePlay()
     {
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
+        EndCrossfade();
         if (_mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
         else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
         else _mp.SetPause(false);
@@ -627,6 +741,7 @@ public partial class MainWindow : Window
     public void Stop()
     {
         SaveProgress();
+        EndCrossfade();
         _mp.Stop();
         if (_recording) ToggleRecord();
         KeepAwake(false);
@@ -2415,6 +2530,7 @@ public partial class MainWindow : Window
                 case "frames": // run the per-frame code by hand for <sec> (the off-screen test window gets few real frames)
                     for (var k = 0; k < double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * 60; k++) { Motion.DebugFrame(); LyricsPane.DebugFrame(); await Task.Delay(16); }
                     break;
+                case "flash": FlashPlayState(false); break;
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

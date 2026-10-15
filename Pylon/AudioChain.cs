@@ -17,16 +17,74 @@ public static class AudioChain
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate int VarSetChecked(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int type, IntPtr value);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate int VarName(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate int VarCreate(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, int type);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr ListChildren(IntPtr obj);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate void ListRelease(IntPtr list);
+
     const int VarString = 0x0040, VarFloat = 0x0050;
+    static IntPtr _lib;
     static VarSetChecked? _set;
 
-    static VarSetChecked? Setter()
+    static T? Export<T>(string name) where T : Delegate
     {
-        if (_set != null) return _set;
-        var path = Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64", "libvlccore.dll");
-        if (!NativeLibrary.TryLoad(path, out var lib) && !NativeLibrary.TryLoad("libvlccore.dll", out lib)) return null;
-        if (!NativeLibrary.TryGetExport(lib, "var_SetChecked", out var fn)) return null;
-        return _set = Marshal.GetDelegateForFunctionPointer<VarSetChecked>(fn);
+        if (_lib == IntPtr.Zero)
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64", "libvlccore.dll");
+            if (!NativeLibrary.TryLoad(path, out _lib) && !NativeLibrary.TryLoad("libvlccore.dll", out _lib)) return null;
+        }
+        return NativeLibrary.TryGetExport(_lib, name, out var fn) ? Marshal.GetDelegateForFunctionPointer<T>(fn) : null;
+    }
+
+    static VarSetChecked? Setter() => _set ??= Export<VarSetChecked>("var_SetChecked");
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MediaPlayer, object> GainVar = [];
+    static VarCreate? _create;
+    static VarName? _trigger;
+    static ListChildren? _children;
+    static ListRelease? _release;
+
+    /// <summary>
+    /// This player's own loudness, 0…1 (crossfades). Its volume can't do that: below 100 % libVLC sets the Windows session
+    /// volume, which every player in the process shares. libVLC's audio output multiplies its replay-gain factor by the
+    /// "gain" variable it inherits from the player, so that is set on the player (a starting output reads it at once) and a
+    /// running output is asked to recompute. Returns false when libvlccore isn't reachable.
+    /// </summary>
+    public static bool SetGain(MediaPlayer mp, float gain)
+    {
+        if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create
+            || (_trigger ??= Export<VarName>("var_TriggerCallback")) is not { } trigger
+            || (_children ??= Export<ListChildren>("vlc_list_children")) is not { } children
+            || (_release ??= Export<ListRelease>("vlc_list_release")) is not { } release) return false;
+        if (!GainVar.TryGetValue(mp, out _))
+        {
+            create(mp.NativeReference, "gain", VarFloat);
+            GainVar.Add(mp, new());
+        }
+        set(mp.NativeReference, "gain", VarFloat, (IntPtr)BitConverter.SingleToInt32Bits(gain));
+        // the output is a child object of the player: struct vlc_list_t { int i_type; int i_count; vlc_value_t *p_values; }
+        var list = children(mp.NativeReference);
+        if (list == IntPtr.Zero) return true;
+        try
+        {
+            var count = Marshal.ReadInt32(list, 4);
+            var values = Marshal.ReadIntPtr(list, 8);
+            for (var i = 0; i < count; i++)
+            {
+                var obj = Marshal.ReadIntPtr(values, i * 8);
+                if (obj != IntPtr.Zero && Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(obj)) == "audio output") // object_type comes first
+                    trigger(obj, "audio-replay-gain-mode");
+            }
+        }
+        finally { release(list); }
+        return true;
     }
 
     /// <summary>Audio filters other than the equalizer, in chain order.</summary>

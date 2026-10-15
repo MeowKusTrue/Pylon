@@ -3,6 +3,24 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.4.0
+
+<!-- ru -->
+**Этап 3**
+- **Видео с сайтов**: YouTube, Twitch, VK, Rutube, SoundCloud и ещё около 1800 сайтов. Вставьте ссылку («Открыть сетевой поток» или перетащите), и Pylon сыграет её через yt-dlp. Он скачивается при первой ссылке (Pylon спросит) и обновляется сам. Плейлист или канал попадает в очередь целиком; качество берётся из «Предпочитаемое качество видео». Если сайт просит доказать, что вы не бот, включите «Входить на сайты с cookies из» (Настройки → Сеть).
+- **Плавный переход между песнями** (Настройки → Воспроизведение): следующая песня нарастает, пока текущая затихает. У каждой песни своя громкость, так что переход ровный и не трогает общий ползунок громкости.
+
+**Исправления**
+- Значок паузы и воспроизведения в режиме музыки появляется на обложке, а не поверх текста песни.
+
+<!-- en -->
+**Stage 3**
+- **Videos from websites**: YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites. Paste a link (Open Network Stream, or drop it on the window) and Pylon plays it through yt-dlp, downloaded on the first link (Pylon asks first) and kept up to date. A playlist or channel joins the queue whole; quality follows "Preferred video quality". If a site wants proof you're not a bot, turn on "Sign in to websites with cookies from" (Settings → Network).
+- **Crossfade between songs** (Settings → Playback): the next song fades in while the current one fades out. Each song has its own loudness, so the blend is even and the volume slider stays put.
+
+**Fixes**
+- In music mode the play / pause badge appears on the cover, not over the lyrics.
+
 ## 1.3.1
 
 <!-- ru -->

@@ -246,6 +246,19 @@ public partial class DialogWindow : Window
         return dlg.Run(() => true);
     }
 
+    /// <summary>The first web page played: may Pylon fetch yt-dlp?</summary>
+    public static bool OfferYtDlp(Window owner)
+    {
+        var body = Stack(
+            Section(L.T("Play videos from websites"),
+                L.T("YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites play through yt-dlp, a free open-source tool. Pylon can download it now (about 18 MB from github.com/yt-dlp) and keep it up to date.")),
+            Spacer(10));
+        var dlg = new DialogWindow(owner, "yt-dlp", body) { Width = 560 };
+        dlg.CancelBtn.Content = L.T("Not now");
+        dlg.SaveBtn.Content = L.T("Download");
+        return dlg.Run(() => true);
+    }
+
     public static void WhatsNew(Window owner, Version v, string notes)
     {
         var text = new TextBox
