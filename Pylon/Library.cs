@@ -54,6 +54,7 @@ public class LibraryData
     public List<string> Pinned { get; set; } = []; // folders pinned to the sidebar rail
     public Dictionary<string, string> LyricFiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);   // track -> lyrics file the user picked
     public Dictionary<string, double> LyricOffsets { get; set; } = new(StringComparer.OrdinalIgnoreCase); // track -> seconds the lyrics run ahead
+    public Dictionary<string, long> IntroEnds { get; set; } = new(StringComparer.OrdinalIgnoreCase);      // series folder -> ms where its intro ends
     public List<SavedStream> Streams { get; set; } = [];
     public List<SavedStream> Podcasts { get; set; } = []; // RSS feeds
     public List<Playlist> Playlists { get; set; } = [];
@@ -262,7 +263,9 @@ public static class Library
         await ThumbGate.WaitAsync();
         try
         {
-            var img = await Task.Run(() => art != null ? LoadImage(art) : path.Contains("://") ? null : ShellThumbnail(path, 96));
+            // Windows' own thumbnail first (fast, cached); for videos it can't preview, a frame through libVLC
+            var img = await Task.Run(() => art != null ? LoadImage(art) : path.Contains("://") ? null
+                : ShellThumbnail(path, 96) ?? (MainWindow.VideoExt.Contains(Path.GetExtension(path)) ? Frames.Thumbnail(path, 160) : null));
             return Thumbs[path] = img;
         }
         finally { ThumbGate.Release(); }

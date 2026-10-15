@@ -3,6 +3,36 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.7.0
+
+<!-- ru -->
+**Видео**
+- **«Пропустить заставку»**: кнопка появляется во время главы Intro / Opening, а если глав нет — до отметки, поставленной один раз на всю папку (правый клик → Воспроизведение → «Здесь кончается заставка»). Можно пропускать автоматически.
+- **«Следующая серия»**: за 30 секунд до конца или на титрах — кнопка со следующим файлом из очереди или папки, в порядке Проводника («Серия 2» перед «Серия 10»). После видео следующая серия включается сама; выключается в Настройки → Воспроизведение.
+- **Лист кадров** (правый клик → Видео → «Лист кадров…»): 16 кадров с метками времени, именем, длительностью и размером в одной PNG, в папке снимков.
+- Миниатюры в библиотеке для видео, которые Windows не умеет показывать (FLV, RMVB, VOB и т. п.): кадр берётся через libVLC.
+- Безымянные звуковые дорожки подписаны кодеком, каналами, частотой и языком: «Дорожка 2 · AAC · стерео · 48 kHz».
+
+**Тексты песен**
+- **Spicy Lyrics работает у всех без настройки**: в Pylon встроен свой публичный ключ. Свой ключ можно указать по желанию.
+
+**Исправления**
+- Превью на шкале перемотки больше не может зависнуть в фоне при смене файла (взаимная блокировка внутри libVLC).
+
+<!-- en -->
+**Video**
+- **Skip Intro**: a button during a chapter named Intro / Opening, or, without chapters, up to a mark set once per folder (right-click → Playback → Intro Ends Here). Can skip automatically.
+- **Next Episode**: 30 seconds before the end or during the credits, a button with the next file from the queue or the folder, in Explorer's order ("Episode 2" before "Episode 10"). After a video the next episode plays by itself; turn off in Settings → Playback.
+- **Contact sheet** (right-click → Video → Contact Sheet…): 16 frames with times, name, length and size in one PNG, in the snapshot folder.
+- Library thumbnails for videos Windows can't preview (FLV, RMVB, VOB and the like): a frame through libVLC.
+- Unnamed audio tracks are labeled with codec, channels, rate and language: "Track 2 · AAC · stereo · 48 kHz".
+
+**Lyrics**
+- **Spicy Lyrics works for everyone with no setup**: Pylon has its own public key. Your own key is optional.
+
+**Fixes**
+- The seek bar preview can no longer hang in the background when the file changes (a lock-up inside libVLC).
+
 ## 1.6.0
 
 <!-- ru -->
@@ -12,7 +42,7 @@ Each version's section becomes its GitHub release notes (`.github/workflows/rele
 - **Обложки из интернета** для песен без своей: ищутся в iTunes по исполнителю и альбому, видны в окне и в медиа-панели Windows. Работает при включённом «Загружать названия и обложки из интернета».
 - **Умные плейлисты**: «Часто слушаю», «Недавно слушал», «Недавно добавлено».
 - **«Играть следующим»** в меню любых файлов и папок; в «Сейчас играет» строки перетаскиваются мышью.
-- **Одинаковая громкость без тегов**: «Выравнивание громкости → Измеренная». Pylon сам измеряет каждую песню (заодно с волной на шкале), а следующую в очереди — заранее, поэтому она сразу звучит на своём уровне. Плавный переход это учитывает.
+- **Одинаковая громкость без тегов**: «Replay Gain → Измеренная» (Настройки → Аудио). Pylon сам измеряет каждую песню (заодно с волной на шкале), а следующую в очереди — заранее, поэтому она сразу звучит на своём уровне. Плавный переход это учитывает.
 - **Текст в мини-плеере**: поверх обложки строка, которая сейчас поётся, и следующая.
 
 <!-- en -->

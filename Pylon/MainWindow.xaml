@@ -157,6 +157,9 @@
                                 <Button Style="{StaticResource IconButton}" Tag="x" Margin="6,0,0,0" Click="ResumeClose_Click"/>
                             </StackPanel>
                         </Border>
+                        <!-- "Skip Intro" / "Next Episode" -->
+                        <Button x:Name="SkipBtn" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,28" Style="{StaticResource PrimaryButton}"
+                                Visibility="Collapsed" Click="Skip_Click" FontFamily="{StaticResource Inter}"/>
                         <ContentControl x:Name="OverlayControlsHost" VerticalAlignment="Bottom"/>
                     </Grid>
                 </vlc:VideoView>

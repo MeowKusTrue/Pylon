@@ -747,6 +747,7 @@ public partial class MainWindow : Window
             next = Settings.Bool("playback.shuffle") ? _shuffle[0] : 0;
         }
         if (next >= 0 && next < _queue.Count) { PlayAt(next); return; }
+        if (!_isAudio && Settings.Bool("playback.nextepisode") && NextInFolder() is { } episode) { PlayEpisode(episode); return; }
         switch (Settings.Str("playback.finish"))
         {
             case "Clear the queue": ClearQueue(); break;
@@ -831,6 +832,7 @@ public partial class MainWindow : Window
     void Refresh()
     {
         MaybeCrossfade();
+        UpdateSkip();
         UpdateMiniLyrics();
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
         if (len > 0)
@@ -948,7 +950,7 @@ public partial class MainWindow : Window
         if (tracks.Count == 0) return;
         var next = tracks[(tracks.FindIndex(t => t.Id == _mp.AudioTrack) + 1) % tracks.Count];
         _mp.SetAudioTrack(next.Id);
-        Osd(L.F("Audio: {0}", next.Name));
+        Osd(L.F("Audio: {0}", AudioTrackName(next)));
     }
 
     public void CycleSubtitle()
@@ -2412,6 +2414,102 @@ public partial class MainWindow : Window
         Motion.Pop(MiniLyricNow, dy: 10, scale: 0.97); // the new line rises in
     }
 
+    // ───────── skip intro, next episode ─────────
+
+    static readonly string[] IntroNames = ["intro", "opening", "op", "заставка", "вступление", "опенинг"];
+    static readonly string[] CreditNames = ["credits", "end credits", "ending", "outro", "ed", "титры", "эндинг"];
+    Action? _skip;
+    long _autoSkipped = -1;
+
+    static bool Named(string chapter, string[] names) =>
+        names.Contains(chapter.Trim().ToLowerInvariant()) || names.Any(n => n.Length > 3 && chapter.Contains(n, StringComparison.OrdinalIgnoreCase));
+
+    string? SeriesFolder => CurrentPath is { } p && !p.Contains("://") ? Path.GetDirectoryName(p) : null;
+
+    /// <summary>The intro: a chapter called so, else the end the user marked for this folder ("Intro Ends Here").</summary>
+    (long From, long To)? IntroRange()
+    {
+        for (var i = 0; i < _chapters.Length; i++)
+            if (Named(_chapters[i].Name, IntroNames))
+                return (_chapters[i].Time, i + 1 < _chapters.Length ? _chapters[i + 1].Time : _chapters[i].Time + 90_000);
+        return SeriesFolder is { } dir && Library.Data.IntroEnds.TryGetValue(dir, out var end) ? (0, end) : null;
+    }
+
+    /// <summary>The file after this one in its folder, in Explorer's order ("Episode 2" before "Episode 10").</summary>
+    string? NextInFolder()
+    {
+        if (CurrentPath is not { } p || p.Contains("://") || Path.GetDirectoryName(p) is not { } dir) return null;
+        try
+        {
+            var files = Directory.EnumerateFiles(dir).Where(f => VideoExt.Contains(Path.GetExtension(f))).ToList();
+            files.Sort(StrCmpLogicalW);
+            var i = files.FindIndex(f => string.Equals(f, p, StringComparison.OrdinalIgnoreCase));
+            return i >= 0 && i + 1 < files.Count ? files[i + 1] : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)] static extern int StrCmpLogicalW(string a, string b);
+
+    void PlayEpisode(string path)
+    {
+        var next = NextIndex(+1);
+        if (next >= 0 && next < _queue.Count) { PlayAt(next); return; }
+        _queue.Add(path);
+        BuildShuffle();
+        PlayAt(_queue.Count - 1);
+    }
+
+    void UpdateSkip()
+    {
+        _skip = null;
+        string? text = null;
+        if (!_isAudio && _index >= 0 && _mp.Length > 0)
+        {
+            long t = _mp.Time, len = _mp.Length;
+            if (IntroRange() is { } intro && t >= intro.From && t < intro.To - 2000)
+            {
+                if (Settings.Bool("playback.autoskip") && _autoSkipped != intro.To) { _autoSkipped = intro.To; _mp.Time = intro.To; Osd(L.T("Intro skipped")); return; }
+                text = L.T("Skip Intro");
+                _skip = () => _mp.Time = intro.To;
+            }
+            else if (len > 300_000 && (len - t < 30_000 || _chapters.LastOrDefault(c => c.Time <= t).Name is { } ch && Named(ch, CreditNames))
+                     && (NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? _queue[n] : NextInFolder()) is { } episode)
+            {
+                text = $"{L.T("Next Episode")}  ·  {Path.GetFileNameWithoutExtension(episode)}";
+                _skip = () => PlayEpisode(episode);
+            }
+        }
+        var show = text != null;
+        if ((SkipBtn.Visibility == Visibility.Visible) != show)
+        {
+            if (show) Motion.In(SkipBtn, dx: 24, scale: 0.96);
+            else SkipBtn.Visibility = Visibility.Collapsed;
+        }
+        if (show && !Equals(SkipBtn.Content, text)) SkipBtn.Content = text;
+    }
+
+    void Skip_Click(object sender, RoutedEventArgs e) { _skip?.Invoke(); SkipBtn.Visibility = Visibility.Collapsed; }
+
+    async void MakeContactSheet()
+    {
+        if (CurrentPath is not { } path || path.Contains("://")) return;
+        Osd(L.T("Making a contact sheet…"), 30);
+        var dir = Settings.Str("video.snapdir") is { Length: > 0 } d ? d : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        var file = await Frames.ContactSheetAsync(path, dir);
+        if (file == null) { Osd(L.T("Couldn't read frames from this video"), 3); return; }
+        Osd(L.T("Contact sheet saved"), 3);
+        Process.Start("explorer.exe", $"/select,\"{file}\"");
+    }
+
+    void MarkIntroEnd()
+    {
+        if (SeriesFolder is not { } dir || _mp.Time <= 0) return;
+        Library.Data.IntroEnds[dir] = _mp.Time;
+        Library.Touch();
+        Osd(L.F("Intro ends at {0} for this folder", Fmt(_mp.Time)));
+    }
+
     // ───────── measured loudness ("Replay gain: Measured") ─────────
 
     float _trackGain = 1;
@@ -2473,6 +2571,8 @@ public partial class MainWindow : Window
                 Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
                 Item("Next Frame", null, KeyOf("frame"), NextFrame),
                 Item("A-B Loop", null, KeyOf("abloop"), ToggleAbLoop, check: _loopA >= 0, enabled: _index >= 0),
+                Item("Intro Ends Here", null, null, MarkIntroEnd, enabled: !_isAudio && SeriesFolder != null),
+                Item("Forget Intro", null, null, () => { Library.Data.IntroEnds.Remove(SeriesFolder!); Library.Touch(); }, enabled: SeriesFolder is { } sf && Library.Data.IntroEnds.ContainsKey(sf)),
                 Item("Save A-B Clip…", null, null, SaveClip, enabled: _loopB > _loopA && _loopA >= 0 && CurrentPath is { } cp && !cp.Contains("://")),
                 ChaptersMenu(),
                 BookmarksMenu(),
@@ -2484,6 +2584,7 @@ public partial class MainWindow : Window
                 Sub("Aspect Ratio", null, Settings.Find("video.aspect")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.aspect", o), check: Settings.Str("video.aspect") == o))),
                 Sub("Crop", null, Settings.Find("video.crop")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("video.crop", o), check: Settings.Str("video.crop") == o))),
                 Item("Reset 360° View", null, null, () => _view.Reset(), enabled: _is360),
+                Item("Contact Sheet…", null, null, MakeContactSheet, enabled: !_isAudio && CurrentPath is { } cs && !cs.Contains("://")),
                 Sub("Deinterlace", null, new[] { "Automatic", "On", "Off" }.Select(o => (object)Item(o, null, null, () => Settings.Set("video.deint", o), check: Settings.Str("video.deint") == o))),
             ]),
             Sub("Audio", "speaker-high", AudioMenuItems()),
@@ -2522,13 +2623,40 @@ public partial class MainWindow : Window
         ];
     }
 
+    static readonly System.Text.RegularExpressions.Regex GenericTrack = new(@"^\S+ \d+( - \[[^\]]*\])?$");
+
+    /// <summary>
+    /// "Track 2 · AAC · stereo · 48 kHz · English": recordings (OBS, ShadowPlay) carry several unnamed tracks that libVLC
+    /// only numbers; a real name from the file is kept.
+    /// </summary>
+    string AudioTrackName(LibVLCSharp.Shared.Structures.TrackDescription t)
+    {
+        if (t.Id < 0) return t.Name ?? L.T("Disable");
+        var tracks = _mp.Media?.Tracks.Where(m => m.TrackType == TrackType.Audio).ToList() ?? [];
+        var i = tracks.FindIndex(m => m.Id == t.Id);
+        if (i < 0 || (t.Name is { Length: > 0 } n && !GenericTrack.IsMatch(n))) return t.Name ?? L.F("Track {0}", t.Id);
+        var m = tracks[i];
+        var a = m.Data.Audio;
+        var codec = string.Concat(BitConverter.GetBytes(m.Codec).Select(b => (char)b)).Trim() switch
+        {
+            "mp4a" => "AAC", "a52" => "AC-3", "eac3" => "E-AC-3", "dts" => "DTS", "mlp" or "trhd" => "TrueHD", "mpga" or "mp3" => "MP3",
+            "flac" => "FLAC", "opus" => "Opus", "vorb" => "Vorbis", "araw" or "s16l" or "s24l" or "fl32" => "PCM", var c => c.ToUpperInvariant(),
+        };
+        var parts = new List<string> { L.F("Track {0}", i + 1), codec };
+        parts.Add(a.Channels switch { 1 => L.T("mono"), 2 => L.T("stereo"), 6 => "5.1", 8 => "7.1", 0 => "", var c => $"{c} ch" });
+        if (a.Rate > 0) parts.Add($"{a.Rate / 1000.0:0.#} kHz");
+        if (!string.IsNullOrWhiteSpace(m.Language)) parts.Add(m.Language!);
+        if (!string.IsNullOrWhiteSpace(m.Description)) parts.Add(m.Description!);
+        return string.Join("  ·  ", parts.Where(p => p.Length > 0));
+    }
+
     List<object> AudioMenuItems()
     {
         var items = new List<object>();
         foreach (var t in _mp.AudioTrackDescription)
         {
             var id = t.Id;
-            items.Add(Item(t.Name ?? L.F("Track {0}", id), null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
+            items.Add(Item(AudioTrackName(t), null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
         }
         if (items.Count == 0) items.Add(Item("No audio tracks", null, null, () => { }, enabled: false));
         items.Add(new Separator());
@@ -2776,6 +2904,10 @@ public partial class MainWindow : Window
                         enc.Save(f);
                         break;
                     }
+                case "seek": _mp.Time = long.Parse(arg); await Task.Delay(600); Refresh(); break;
+                case "skipstate": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"skip={SkipBtn.Visibility} '{SkipBtn.Content}' chapters={_chapters.Length} next={NextInFolder()}{Environment.NewLine}"); break;
+                case "sheet": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"sheet={await Frames.ContactSheetAsync(CurrentPath!, Path.GetDirectoryName(outFile)!)}{Environment.NewLine}"); break;
+                case "tracks": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", _mp.AudioTrackDescription.Select(AudioTrackName)) + Environment.NewLine); break;
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

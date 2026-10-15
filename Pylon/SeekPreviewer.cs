@@ -27,6 +27,7 @@ public sealed class SeekPreviewer : IDisposable
     volatile bool _awaitingFrame;
     volatile int _key = -1; // cache slot of the position being decoded
     long _targetMs = -1;     // its time
+    long _nowMs = -1;
     readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte[]> _cache = new();
 
     public WriteableBitmap Bitmap { get; } = new(W, H, 96, 96, PixelFormats.Bgr32, null);
@@ -40,7 +41,8 @@ public sealed class SeekPreviewer : IDisposable
         _display = (_, _) =>
         {
             // resuming first shows the old picture again: wait for one from near the requested time
-            if (_awaitingFrame && _targetMs >= 0 && _mp is { } m && Math.Abs(m.Time - _targetMs) > 3000) return;
+            // (_nowMs comes from TimeChanged: calling libVLC from here deadlocks against Stop())
+            if (_awaitingFrame && _targetMs >= 0 && Math.Abs(Interlocked.Read(ref _nowMs) - _targetMs) > 3000) return;
             _ui.BeginInvoke(() => Bitmap.WritePixels(new Int32Rect(0, 0, W, H), _buffer, W * H * 4, W * 4));
             if (_awaitingFrame && _key >= 0 && _cache.Count < 200) // ~30 MB at most
             {
@@ -73,6 +75,7 @@ public sealed class SeekPreviewer : IDisposable
         _mp = new MediaPlayer(_vlc);
         _mp.SetVideoFormat("RV32", W, H, W * 4);
         _mp.SetVideoCallbacks(_lock, null, _display);
+        _mp.TimeChanged += (_, e) => Interlocked.Exchange(ref _nowMs, e.Time);
         var player = _mp;
         _awaitingFrame = true; // pause on the first frame
         var media = new Media(_vlc, path, FromType.FromPath);

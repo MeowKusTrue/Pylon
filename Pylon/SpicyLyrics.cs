@@ -23,7 +23,7 @@ public static class SpicyLyrics
     /// Pylon's publishable key ("No Origin header" on, as Spicy's docs say for native clients): public by design, so every
     /// copy works without setup. A key in settings wins.
     /// </summary>
-    const string BuiltInKey = "";
+    const string BuiltInKey = "sl_pk_6Z61PHzbtjSmooaAx3XRxpUGdQjrfscg66r81Z-ZuOc";
 
     static string Key => Settings.Str("lyrics.spicykey").Trim() is { Length: > 0 } own ? own : BuiltInKey;
 
