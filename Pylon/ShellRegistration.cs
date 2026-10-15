@@ -76,14 +76,60 @@ public static partial class ShellRegistration
             using var cmd = folder.CreateSubKey("command");
             cmd.SetValue("", open);
         }
+        // pylon://join/?url=… from a Watch Together room's page ("Open in Pylon")
+        using (var proto = hkcu.CreateSubKey($@"{Classes}\pylon"))
+        {
+            proto.SetValue("", "URL:Pylon");
+            proto.SetValue("URL Protocol", "");
+            using var cmd = proto.CreateSubKey(@"shell\open\command");
+            cmd.SetValue("", open);
+        }
+        // "Add to Music" on every audio format, whatever app opens it: a submenu with the music folders
+        foreach (var ext in MainWindow.AudioExt)
+        {
+            using var k = hkcu.CreateSubKey($@"{Classes}\SystemFileAssociations\{ext}\shell\Pylon.AddToMusic");
+            k.SetValue("MUIVerb", ru ? "Добавить в музыку" : "Add to Music");
+            k.SetValue("Icon", $"{exe},0");
+            k.SetValue("ExtendedSubCommandsKey", "Pylon.MusicMenu");
+        }
+        _musicMenuFor = null;
+        MusicMenu();
         Notify();
+    }
+
+    static string? _musicMenuFor;
+
+    /// <summary>
+    /// The folders under "Add to Music" in Explorer, rewritten when the library's music folders change. Each one runs
+    /// "Pylon.exe --add-to-music folder file" (one quick copy per selected file, no window). Only where Pylon is registered
+    /// (an installed copy), never from a test profile: a portable or developer build leaves the registry alone.
+    /// </summary>
+    public static void MusicMenu()
+    {
+        var targets = Library.MusicTargets();
+        var key = string.Join("|", targets);
+        if (key == _musicMenuFor || Environment.GetEnvironmentVariable("PYLON_DATA") != null) return;
+        _musicMenuFor = key;
+        using var hkcu = Registry.CurrentUser;
+        using (var caps = hkcu.OpenSubKey(Capabilities)) if (caps == null) return;
+        hkcu.DeleteSubKeyTree($@"{Classes}\Pylon.MusicMenu", throwOnMissingSubKey: false);
+        for (var i = 0; i < targets.Count; i++)
+        {
+            var dir = targets[i].TrimEnd('\\'); // "D:\" would escape the closing quote ("D:" is made a root again on the way in)
+            using var k = hkcu.CreateSubKey($@"{Classes}\Pylon.MusicMenu\shell\{i:00}");
+            k.SetValue("MUIVerb", Path.GetFileName(dir) is { Length: > 0 } name ? $"{name}   ({dir})" : dir);
+            k.SetValue("MultiSelectModel", "Player"); // more than 15 files at once
+            using var cmd = k.CreateSubKey("command");
+            cmd.SetValue("", $"\"{Exe}\" --add-to-music \"{dir}\" \"%1\"");
+        }
     }
 
     public static void Unregister()
     {
         using var hkcu = Registry.CurrentUser;
-        foreach (var key in new[] { $@"{Classes}\Pylon.Video", $@"{Classes}\Pylon.Audio", $@"{Classes}\Applications\Pylon.exe", $@"{Classes}\Directory\shell\Pylon.Play", @"Software\Pylon" }
-                     .Concat(Formats().Select(f => $@"{Classes}\{f.Id}")))
+        foreach (var key in new[] { $@"{Classes}\Pylon.Video", $@"{Classes}\Pylon.Audio", $@"{Classes}\Applications\Pylon.exe", $@"{Classes}\Directory\shell\Pylon.Play", $@"{Classes}\Pylon.MusicMenu", $@"{Classes}\pylon", @"Software\Pylon" }
+                     .Concat(Formats().Select(f => $@"{Classes}\{f.Id}"))
+                     .Concat(MainWindow.AudioExt.Select(e => $@"{Classes}\SystemFileAssociations\{e}\shell\Pylon.AddToMusic")))
             hkcu.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
         using (var reg = hkcu.OpenSubKey(@"Software\RegisteredApplications", writable: true)) reg?.DeleteValue("Pylon", throwOnMissingValue: false);
         foreach (var (ext, id) in Extensions())

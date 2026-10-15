@@ -46,7 +46,11 @@ public static class Lyrics
         var cached = Path.Combine(CacheDir, key + ".lrc");
         var spicyCache = Path.Combine(CacheDir, key + ".spicy.json");
         var spicyMiss = Path.Combine(CacheDir, key + ".spicy2.none"); // Spicy has nothing for it: don't ask again
-        if (File.Exists(spicyCache) && SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy;
+        // a cache cut short (killed mid-write) threw here, in an async void, and closed the player whenever the song came up:
+        // now it's fetched again and overwritten below
+        if (File.Exists(spicyCache))
+            try { if (SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy; }
+            catch (Exception e) when (e is JsonException or IOException or KeyNotFoundException or InvalidOperationException) { }
         // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
         // a miss is asked again after a week: Spicy and ListenBrainz keep growing
         var missed = File.Exists(spicyMiss) && DateTime.UtcNow - File.GetLastWriteTimeUtc(spicyMiss) < TimeSpan.FromDays(7);

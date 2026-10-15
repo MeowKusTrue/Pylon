@@ -353,6 +353,49 @@ public partial class DialogWindow : Window
         return chosen;
     }
 
+    /// <summary>
+    /// "Find music on this computer": the drives are searched while the dialog is open (closing it stops the search), the
+    /// folders found are listed with a switch each; returns the ones left on, or null.
+    /// </summary>
+    public static List<string>? FindMusic(Window owner)
+    {
+        var status = new TextBlock { Text = L.T("Looking through your drives…"), FontSize = 13, Foreground = R("FgA3"), TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 10) };
+        var list = new StackPanel();
+        var picks = new List<(CheckBox Box, string Folder)>();
+        var dlg = new DialogWindow(owner, "Find Music", Stack(
+            Section(L.T("Music on this computer"), L.T("Folders with songs on your drives (programs, games and Windows are skipped). The ones left on are added to Music.")),
+            status, new ScrollViewer { Content = list, MaxHeight = 360, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Spacer(10))) { Width = 680 };
+        dlg.SaveBtn.Content = L.T("Add");
+        var cts = new CancellationTokenSource();
+        dlg.Closed += (_, _) => cts.Cancel();
+        dlg.Loaded += async (_, _) =>
+        {
+            List<(string Folder, int Songs)> found;
+            try { found = await Task.Run(() => Library.FindMusicFolders(new Progress<string>(d => status.Text = d), cts.Token)); }
+            catch (OperationCanceledException) { return; }
+            status.Text = found.Count == 0 ? L.T("No new folders with music found.") : L.F("Found {0} folders with music.", found.Count);
+            foreach (var (folder, songs) in found)
+            {
+                var box = new CheckBox { Style = (Style)Application.Current.FindResource("ToggleSwitch"), IsChecked = true, VerticalAlignment = VerticalAlignment.Center };
+                box.Checked += (_, _) => dlg.Revalidate();
+                box.Unchecked += (_, _) => dlg.Revalidate();
+                var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children =
+                {
+                    new TextBlock { Text = folder, FontSize = 14, Foreground = R("FgA0"), TextTrimming = TextTrimming.CharacterEllipsis },
+                    new TextBlock { Text = L.F("{0} songs", songs), FontSize = 12, Foreground = R("FgA3") },
+                } };
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
+                DockPanel.SetDock(box, Dock.Right);
+                row.Children.Add(box);
+                row.Children.Add(text);
+                list.Children.Add(row);
+                picks.Add((box, folder));
+            }
+            dlg.Revalidate();
+        };
+        return dlg.Run(() => picks.Any(p => p.Box.IsChecked == true)) ? [.. picks.Where(p => p.Box.IsChecked == true).Select(p => p.Folder)] : null;
+    }
+
     /// <summary>"Pylon needs X for this: download it?" True = yes.</summary>
     public static bool OfferTool(Window owner, string tool, string heading, string text)
     {

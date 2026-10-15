@@ -72,7 +72,7 @@ public static class Profiles
     static readonly Dictionary<string, (string Key, string Value)[]> Sets = new()
     {
         ["Movies"] = [("subs.enable", "true"), ("video.deint", "Automatic"), ("playback.resume", "Ask"), ("ui.autohide", "In fullscreen only"), ("audio.night", "false")],
-        ["Music"] = [("audio.normalize", "true"), ("ui.cover", "true"), ("playback.resume", "Never"), ("ui.scene", "Radial"), ("playback.autoplay", "true")],
+        ["Music"] = [("audio.normalize", "true"), ("ui.cover", "true"), ("playback.resume", "Never"), ("ui.scene", "Bio"), ("playback.autoplay", "true")],
         ["Night"] = [("audio.night", "true"), ("audio.normalize", "true"), ("general.theme", "Dark"), ("video.screensaver", "true")],
     };
 

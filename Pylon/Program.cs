@@ -16,6 +16,12 @@ public static class Program
     public static void Main(string[] args)
     {
         if (args is ["--export-strings", var template]) { L.ExportTemplate(template); return; } // a starting point for a new language
+        if (args is ["--add-to-music", var folder, .. var files]) // Explorer's "Add to Music": a copy per selected file, no window
+        {
+            try { Library.CopyToMusic(files, folder.EndsWith(':') ? folder + "\\" : folder); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { System.Windows.MessageBox.Show(e.Message, "Pylon"); }
+            return;
+        }
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); })
             .OnAfterUpdateFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); }) // the files moved: refresh paths

@@ -54,7 +54,7 @@ public class LyricsView : Grid
         public required BlurEffect Blur;
         public readonly List<Part> Parts = [];
         public ScaleTransform? DotGroup;
-        public double A, B, Top;
+        public double A, B;
         public int State = -1;              // 0 not yet, 1 being sung, 2 sung
         public bool Hover, Hidden;
         public int Painted = -1;            // the state an off-screen line was last settled in (-1: paint every frame)
@@ -64,7 +64,8 @@ public class LyricsView : Grid
     static readonly Func<double, double>
         CScale = Curve((0, 0.95), (0.7, 1.0505), (1, 1)), CLift = Curve((0, 0.01), (0.9, -1 / 60.0), (1, 0)), CGlow = Curve((0, 0), (0.15, 1), (0.6, 1), (1, 0)),
         LScale = Curve((0, 0.95), (0.7, 1.175), (1, 1)), LLift = Curve((0, 0.01), (0.9, -1 / 56.0), (1, 0)),
-        DScale = Curve((0, 0.75), (0.7, 1.05), (1, 1)), DLift = Curve((0, 0), (0.9, -0.12), (1, 0)), DGlow = Curve((0, 0), (0.6, 1), (1, 1)), DOp = Curve((0, 0.35), (0.6, 1), (1, 1));
+        DScale = Curve((0, 0.75), (0.7, 1.05), (1, 1)), DLift = Curve((0, 0), (0.9, -0.12), (1, 0)), DGlow = Curve((0, 0), (0.6, 1), (1, 1)), DOp = Curve((0, 0.35), (0.6, 1), (1, 1)),
+        JScale = Curve((0, 1), (0.15, 1.1), (0.6, 1.02), (1, 1)), JLift = Curve((0, 0), (0.15, -0.14), (0.6, -0.03), (1, 0));
 
     const double LetterMin = 1, LetterEarly = 0.25, GapDots = 3, DotPad = 0.55, DotHide = 0.5, BlurStep = 1.25, Look = 0.3;
     const double Sung = 0.85, Unsung = 0.5, BgSung = 0.6, BgUnsung = 0.3; // fill alphas
@@ -102,20 +103,28 @@ public class LyricsView : Grid
         Children.Add(Scrollbar());
         _message.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
         IsVisibleChanged += (_, _) => Hook();
-        Motion.AsleepChanged += Hook;
-        ThemeManager.Changed += () => { if (_doc != null) Show(_doc); };
+        // static events: a closed Spotify lyrics window must not stay subscribed (and rebuilt on every theme change)
+        Loaded += (_, _) => { Motion.AsleepChanged -= Hook; Motion.AsleepChanged += Hook; ThemeManager.Changed -= Restyle; ThemeManager.Changed += Restyle; };
+        Unloaded += (_, _) => { Motion.AsleepChanged -= Hook; ThemeManager.Changed -= Restyle; };
         Background = Brushes.Transparent; // the wheel works over the gaps between lines too
         // No OpacityMask for the edge fade: WPF maps it over the content's bounds, which scroll, so it slid along and
         // hid most lines. Each line fades by its own on-screen position instead (see Update).
-        SizeChanged += (_, _) =>
+        SizeChanged += (_, e) =>
         {
             _stack.Width = Math.Max(0, ActualWidth - 16);
             Canvas.SetLeft(_stack, 8);
             _target = null;
-            if (_doc != null && Math.Abs(FontFor(ActualWidth) - _ls) > 1.5) Show(_doc); // type follows the column width
+            // type follows the column width: at once for the first real size, else once the size settles (a sliding side
+            // panel resizes this every frame, and each rebuild makes every line again)
+            if (_doc == null || Math.Abs(FontFor(ActualWidth) - _ls) <= 1.5) return;
+            _refit.Stop();
+            if (e.PreviousSize.Width == 0) Show(_doc);
+            else _refit.Start();
         };
-        _stack.SizeChanged += (_, _) => _topsDirty = true;
+        _refit.Tick += (_, _) => { _refit.Stop(); if (_doc != null && Math.Abs(FontFor(ActualWidth) - _ls) > 1.5) Show(_doc); };
     }
+
+    readonly DispatcherTimer _refit = new() { Interval = TimeSpan.FromMilliseconds(250) };
 
     // ───────── scrollbar: a slim thumb like the app's others; shows on hover and while scrolling, can be dragged ─────────
 
@@ -183,9 +192,13 @@ public class LyricsView : Grid
     /// <summary>Light mode switched: the blur of every line is worked out again on the next frame.</summary>
     public void Reblur() => _blurFor = -2;
 
-    /// <summary>Animation style: Spicy (springs, glow, blur), Karaoke (fill only) or Line by line (whole lines light up).</summary>
+    /// <summary>
+    /// Animation style: Spicy (springs, glow, blur); the word styles Jump, Wave, Rise and Neon (one transform per word, no
+    /// blur, no effect per word); Karaoke (fill only) or Line by line (whole lines light up).
+    /// </summary>
     string _style = "Spicy";
     bool Light => Motion.Lite || _style != "Spicy";
+    bool Slow => Motion.Lite || _style is "Karaoke" or "Line by line"; // 30 updates a second are enough for a plain fill
 
     /// <summary>The style setting changed: the lines are built again.</summary>
     public void Restyle() { if (_doc != null) Show(_doc); }
@@ -205,7 +218,9 @@ public class LyricsView : Grid
     public void Show(LyricsDoc doc)
     {
         _doc = doc;
-        _topsDirty = true;
+        _refit.Stop();
+        _snap = true;
+        _neon = null;
         _style = Settings.Str("lyrics.style");
         _lines.Clear();
         _stack.Children.Clear();
@@ -323,11 +338,12 @@ public class LyricsView : Grid
         {
             var tail = s.Joined ? "" : " ";
             Part w;
-            if (s.End - s.Start >= LetterMin && s.Text.Length > 0)
+            var isLong = s.End - s.Start >= LetterMin;
+            if ((isLong || _style == "Wave") && s.Text.Length > 0)
             {
-                // long syllable: the letters share its time, ending a little early
+                // long syllable (or any word in Wave): the letters share its time, a long one ending a little early
                 var row = new StackPanel { Orientation = Orientation.Horizontal };
-                double b = s.End - LetterEarly, step = (b - s.Start) / s.Text.Length;
+                double b = isLong ? s.End - LetterEarly : s.End, step = (b - s.Start) / s.Text.Length;
                 var letters = s.Text.Select((ch, k) =>
                 {
                     var l = Text(ch.ToString(), size, weight, ga, ge);
@@ -427,7 +443,7 @@ public class LyricsView : Grid
     // 60 updates a second look the same as 180 and cost a third: Rendering fires at the monitor's rate
     void Tick(object? sender, EventArgs e)
     {
-        if (_clock.Elapsed.TotalSeconds - _lastFrame < (Light ? 1 / 31.0 : 1 / 62.0)) return;
+        if (_clock.Elapsed.TotalSeconds - _lastFrame < (Slow ? 1 / 31.0 : 1 / 62.0)) return;
         Update();
     }
 
@@ -436,21 +452,13 @@ public class LyricsView : Grid
 #endif
 
     public string DebugState() => $"bar={_bar.Opacity:0.00}/{_bar.Height:0}@{_barY.Y:0} target={_lines.IndexOf(_target!)} scrollY={_scroll.Y:0} height={ActualHeight:0} stack={_stack.ActualHeight:0} lines={_lines.Count} " +
-        string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{l.Top:0} st={l.State} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00} blur={l.Blur.Radius:0.0}"));
+        string.Join(" ", _lines.Take(16).Select((l, i) => $"{i}:{VisualTreeHelper.GetOffset(l.Root).Y:0} st={l.State} op={l.Root.Opacity:0.00}/{l.Root.Child.Opacity:0.00} blur={l.Blur.Radius:0.0}"));
 
-    // where each line sits in the stack, worked out after layout. Only on a size change wasn't enough: the same lyrics built
-    // again (same height, so no SizeChanged) left every new line at 0, and the edge fade hid them all
-    bool _topsDirty = true;
+    bool _snap; // the next placement jumps instead of gliding (fresh lyrics, or rebuilt for a new width)
 
     void Update()
     {
         if (_doc == null || Clock == null) return;
-        if (_topsDirty && _stack.IsMeasureValid && _lines.Count > 0 && _lines[0].Root.IsArrangeValid && _lines[^1].Root.IsArrangeValid) // new lines laid out
-        {
-            foreach (var lv in _lines) lv.Top = lv.Root.TranslatePoint(new Point(0, 0), _stack).Y;
-            _topsDirty = false;
-            _target = null;
-        }
         var t = Clock();
         var now = _clock.Elapsed.TotalSeconds;
         var dt = Math.Min(0.25, now - _lastFrame);
@@ -481,8 +489,10 @@ public class LyricsView : Grid
                 Motion.Animate(lv.Root, OpacityProperty, state == 1 || lv.Hover ? 1 : state == 0 ? 0.51 : 0.497, Spring.Snappy);
             }
 
-            // soft fade near the top and bottom edges
-            var y = lv.Top + _scroll.Y;
+            // soft fade near the top and bottom edges. The line's place is read from layout every frame (a field read):
+            // positions cached "after layout" went stale. When the first line was the collapsed intro dots (never arranged),
+            // every line stayed at 0 after a rebuild and the fade hid them all
+            var y = VisualTreeHelper.GetOffset(lv.Root).Y + _scroll.Y;
             var edge = Math.Clamp(Math.Min(y + lv.Root.ActualHeight, ActualHeight - y) / 70, 0, 1);
             var fade = edge * edge * (3 - 2 * edge);
             if (Math.Abs(lv.Root.Child.Opacity - fade) > 0.005) lv.Root.Child.Opacity = fade;
@@ -511,6 +521,7 @@ public class LyricsView : Grid
                     Motion.Animate(line.Blur, BlurEffect.RadiusProperty, r, Spring.Smooth, done: r == 0 ? () => { if (line.Blur.Radius < 0.05) line.Root.Effect = null; } : null);
                 else if (r == 0) line.Root.Effect = null;
             }
+            if (_style == "Neon") Neon(cur >= 0 && _lines[cur].Line != null ? _lines[cur] : null);
         }
 
         // follow the song: the line about to be sung (slightly early), or the interlude dots, in the middle
@@ -520,12 +531,34 @@ public class LyricsView : Grid
         if (next == null || (next == _target && _manualUntil == DateTime.MinValue) || !next.Root.IsArrangeValid) return;
         _target = next;
         _manualUntil = DateTime.MinValue;
-        var top = next.Root.TranslatePoint(new Point(0, 0), _stack).Y;
-        Motion.Animate(_scroll, TranslateTransform.YProperty, -(top + next.Root.ActualHeight / 2 - ActualHeight / 2), Spring.Smooth);
+        var to = -(VisualTreeHelper.GetOffset(next.Root).Y + next.Root.ActualHeight / 2 - ActualHeight / 2);
+        if (_snap) Motion.Set(_scroll, TranslateTransform.YProperty, to); // no swoop down from the top of the song
+        else Motion.Animate(_scroll, TranslateTransform.YProperty, to, Spring.Smooth);
+        _snap = false;
+    }
+
+    LineView? _neon;
+
+    /// <summary>Neon: one soft accent glow on the current line's text (one effect for the line, not one per word).</summary>
+    void Neon(LineView? lv)
+    {
+        if (lv == _neon) return;
+        if (_neon?.Root.Child is { Effect: DropShadowEffect old } was)
+            Motion.Animate(old, DropShadowEffect.OpacityProperty, 0, Spring.Smooth, done: () => { if (old.Opacity < 0.01) was.Effect = null; });
+        _neon = lv;
+        if (lv == null || Motion.Lite) return;
+        if (lv.Root.Child.Effect is not DropShadowEffect glow)
+            lv.Root.Child.Effect = glow = new DropShadowEffect
+            {
+                ShadowDepth = 0, BlurRadius = _ls * 0.5, Opacity = 0, RenderingBias = RenderingBias.Performance,
+                Color = TryFindResource("Accent") is SolidColorBrush a ? a.Color : Colors.Orange,
+            };
+        Motion.Animate(glow, DropShadowEffect.OpacityProperty, 0.85, Spring.Smooth);
     }
 
     static int StateOf(double t, double a, double b) => t < a ? 0 : t >= b ? 2 : 1;
     static double Prog(double t, double a, double b) => t <= a ? 0 : t >= b ? 1 : (t - a) / (b - a);
+    static double Lit(double t, double a, double b) => t < a ? -0.2 : t >= b ? 1 : -0.2 + 1.2 * (t - a) / (b - a); // karaoke fill edge
 
     /// <summary>One frame of a word / letter / dot. Off-screen ones jump to where they belong instead of animating.</summary>
     void Paint(Part w, double t, double dt, bool active, bool visible)
@@ -536,7 +569,7 @@ public class LyricsView : Grid
         if (!visible) dt = 10; // settles at once
         if (w.Dot)
         {
-            var (s, y, g, o) = Springs(w, DScale(q), DLift(q), DGlow(q), DOp(q), dt, dot: true);
+            var (s, y, g, o) = Springs(w, DScale(q), DLift(q), DGlow(q), DOp(q), dt, DotK);
             Move(w, s, y * _ls);
             if (Changed(ref w.Op, o, 1e-3)) w.El.Opacity = o;
             Glow(w, 4 + 6 * g, g * 0.9);
@@ -544,20 +577,34 @@ public class LyricsView : Grid
         }
         if (_style != "Spicy")
         {
-            // light styles: no springs, no glow, just the fill. Karaoke sweeps word by word (long syllables letter by
-            // letter); Line by line lights the whole line as it starts
-            var whole = _style == "Line by line";
-            var lit = whole ? (active || st == 2 ? 1 : -0.2) : st == 0 ? -0.2 : st == 2 ? 1 : -0.2 + 1.2 * p;
-            if (w.Letters == null) Fill(w, lit);
-            else
-                foreach (var l in w.Letters)
-                {
-                    var ls = StateOf(t, l.A, l.B);
-                    Fill(l, whole ? lit : ls == 0 ? -0.2 : ls == 2 ? 1 : -0.2 + 1.2 * Prog(t, l.A, l.B));
-                }
+            // the other styles: at most one transform per word (per letter in Wave), no effects. Karaoke and Neon only
+            // sweep the fill (Neon's glow is one per line); Line by line lights the whole line as it starts
+            double? whole = null;
+            switch (_style)
+            {
+                case "Line by line": whole = active || st == 2 ? 1 : -0.2; break;
+                case "Jump": // the word hops and grows a little as it's sung, and lands with a bounce
+                    var j = Springs(w, JScale(q), JLift(q), 0, null, dt, JumpK);
+                    Move(w, j.s, j.y * _ls);
+                    break;
+                case "Rise": // words float up from below and out of transparency, lit whole
+                    var r = Springs(w, 1, st == 0 ? 0.22 : 0, 0, st == 0 ? 0.35 : 1, dt, RiseK);
+                    Move(w, 1, r.y * _ls);
+                    if (Changed(ref w.Op, r.o, 1e-3)) w.El.Opacity = Math.Clamp(r.o, 0, 1);
+                    whole = st == 0 ? -0.2 : 1;
+                    break;
+                case "Wave" when w.Letters is { } ls: // a bump runs through the letters while the word is sung
+                    const double W = 1.2;
+                    var x = -2 * W + p * (ls.Length - 1 + 4 * W);
+                    for (var k = 0; k < ls.Length; k++)
+                        Move(ls[k], 1, st == 1 ? -0.1 * _ls * Math.Exp(-Math.Pow((k - x) / W, 2)) : 0);
+                    break;
+            }
+            if (w.Letters == null) Fill(w, whole ?? Lit(t, w.A, w.B));
+            else foreach (var l in w.Letters) Fill(l, whole ?? Lit(t, l.A, l.B));
             return;
         }
-        var v = Springs(w, CScale(q), CLift(q), CGlow(q), null, dt);
+        var v = Springs(w, CScale(q), CLift(q), CGlow(q), null, dt, SpicyK);
         Move(w, v.s, v.y * _ls);
         if (w.Letters == null)
         {
@@ -588,21 +635,25 @@ public class LyricsView : Grid
                 else if (ls == 2 && act < 0) g = CGlow(0.2);
                 gp = ls == 0 ? -0.2 : ls == 2 ? 1 : k == act ? -0.2 + 1.2 * Math.Sin(ap * Math.PI / 2) : -0.2;
             }
-            var lv = Springs(l, s, y, g, null, visible ? dt : 10);
+            var lv = Springs(l, s, y, g, null, visible ? dt : 10, SpicyK);
             Fill(l, gp);
             Move(l, lv.s, lv.y * 2 * _ls);
             Glow(l, 4 + 12 * lv.g, active ? Math.Min(lv.g * 1.85, 1) : 0);
         }
     }
 
-    static (double s, double y, double g, double o) Springs(Part p, double s, double y, double g, double? o, double dt, bool dot = false)
+    // springs (frequency Hz, damping ratio) for scale, lift, glow and opacity
+    static readonly (double F, double D)[] SpicyK = [(0.88, 0.64), (1.45, 0.4), (1.18, 0.56), (1, 0.5)], DotK = [(0.7, 0.6), (1.25, 0.4), (1, 0.5), (1, 0.5)],
+        JumpK = [(1.3, 0.35), (1.8, 0.3), (1, 0.5), (1, 0.5)], RiseK = [(1, 0.9), (1.2, 0.8), (1, 0.5), (1.1, 0.95)];
+
+    static (double s, double y, double g, double o) Springs(Part p, double s, double y, double g, double? o, double dt, (double F, double D)[] k)
     {
         if (p.S == null) // start where it belongs: no jump after a rebuild
         {
-            p.S = dot ? new Sp(s, 0.7, 0.6) : new Sp(s, 0.88, 0.64);
-            p.Y = dot ? new Sp(y, 1.25, 0.4) : new Sp(y, 1.45, 0.4);
-            p.G = dot ? new Sp(g, 1, 0.5) : new Sp(g, 1.18, 0.56);
-            if (o is { } o0) p.O = new Sp(o0, 1, 0.5);
+            p.S = new Sp(s, k[0].F, k[0].D);
+            p.Y = new Sp(y, k[1].F, k[1].D);
+            p.G = new Sp(g, k[2].F, k[2].D);
+            if (o is { } o0) p.O = new Sp(o0, k[3].F, k[3].D);
         }
         p.S.G = s; p.Y!.G = y; p.G!.G = g;
         if (p.O != null && o is { } og) p.O.G = og;

@@ -73,9 +73,12 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Another app's song with its controls (Spotify, Yandex Music, a browser) while Pylon plays nothing -->
+                <local:RemoteView x:Name="RemotePane" Visibility="Collapsed"/>
+
                 <!-- Music: blurred artwork backdrop + cover + caption -->
                 <Grid x:Name="MusicView" Visibility="Collapsed" ClipToBounds="True">
-                    <Rectangle Fill="{DynamicResource StageBg}"/>
+                    <Rectangle x:Name="MusicBg" Fill="{DynamicResource StageBg}"/>
                     <local:Backdrop x:Name="ArtBackdrop" Opacity="0.32"/>
                     <local:SceneView x:Name="Scene" Opacity="0.7"/>
                     <local:Spectrum x:Name="MusicSpectrum" Height="64" VerticalAlignment="Bottom" Margin="40,0,40,14" Opacity="0.5"/>

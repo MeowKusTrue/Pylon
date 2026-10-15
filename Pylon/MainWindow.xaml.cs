@@ -77,6 +77,7 @@ public partial class MainWindow : Window
         }
         Settings.Load();
         Library.Load();
+        Dispatcher.BeginInvoke(ShellRegistration.MusicMenu, DispatcherPriority.ApplicationIdle);
         Perf.Mark("settings + library loaded");
         ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent"));
         Core.Initialize();
@@ -138,6 +139,8 @@ public partial class MainWindow : Window
         // 30 updates a second move the bar smoothly; a Rendering hook ran at the monitor's rate (144+ Hz) for the whole session
         // and kept WPF redrawing the waveform bar all the time, which cost more than a core
         new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher).Start();
+        RemotePane.AvailabilityChanged += ApplyLayout;
+        Motion.AsleepChanged += WatchOtherPlayers;
         Scene.Cover = () => ArtFrame.IsVisible && ArtFrame.ActualWidth > 0 ? ArtFrame.TransformToVisual(Scene).TransformBounds(new Rect(ArtFrame.RenderSize)) : null;
         // the preview card's shadow reaches down over the bar; with a hit-testable popup window the pointer "left" the bar,
         // the popup closed, the pointer was back on the bar, it reopened... (flickering cursor and card). Make it click-through.
@@ -455,6 +458,15 @@ public partial class MainWindow : Window
     {
         var deep = Settings.Str("library.subfolders") != "Only this folder";
         var list = items.ToList();
+        // "Open in Pylon" on a Watch Together room's page: pylon://join/?url=<room>
+        if (list.FirstOrDefault(p => p.StartsWith("pylon://", StringComparison.OrdinalIgnoreCase)) is { } link)
+        {
+            list.Remove(link);
+            if (Uri.TryCreate(link, UriKind.Absolute, out var u) && System.Web.HttpUtility.ParseQueryString(u.Query)["url"] is { Length: > 0 } room
+                && Uri.TryCreate(room, UriKind.Absolute, out var r) && r.Scheme is "http" or "https")
+                JoinParty(room);
+            if (list.Count == 0) return;
+        }
         // libVLC on Windows rejects "C:/x/y" — normalize every local path; big folders are walked off the UI thread
         var expanded = await Task.Run(() => list.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
             .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList());
@@ -671,7 +683,7 @@ public partial class MainWindow : Window
         if (_tray != null) _tray.Tip = MiniTitle.Text;
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
         if (!parsed) return;
-        if (ArtImage.Source == null && _isAudio && !isUrl && Settings.Bool("library.netmeta")) FetchCover(src);
+        if (ArtImage.Source == null && _isAudio && !isUrl) EmbeddedCover(src);
         // no tags: name it by its sound (AcoustID); the result is kept in the library
         if (_isAudio && !isUrl && tagless && Library.Data.Meta.GetValueOrDefault(src) is not { Artist.Length: > 0 } && Settings.Bool("library.netmeta")) RecognizeSong(src, quiet: true);
         if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
@@ -812,12 +824,14 @@ public partial class MainWindow : Window
         Library.Remember(path, _title, _artist, t, _mp.Length, _isAudio);
     }
 
-    void SetArtwork(string? url)
+    void SetArtwork(string? url) => SetArtwork(url == null ? null : LoadFull(url));
+
+    void SetArtwork(BitmapSource? bmp)
     {
-        var bmp = url == null ? null : LoadFull(url);
         ArtImage.Source = bmp;
         ArtBackdrop.SetImage(bmp);
         Scene.SetCover(bmp);
+        ApplyMusicBg();
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -856,6 +870,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>A song without embedded art gets one from iTunes (Covers), on screen and in the Windows media flyout.</summary>
+    /// <summary>
+    /// The picture inside the file when libVLC named none: its parse gives up after 3 s (a sleeping disk spinning up, a busy
+    /// preparser) and isn't repeated, so a song with embedded art showed the placeholder. Windows' thumbnail reads that art;
+    /// only then the internet, when allowed.
+    /// </summary>
+    async void EmbeddedCover(string src)
+    {
+        var art = await Task.Run(() => Library.ShellThumbnail(src, 900));
+        if (CurrentPath != src || ArtImage.Source != null) return;
+        if (art != null) SetArtwork(art);
+        else if (Settings.Bool("library.netmeta")) FetchCover(src);
+    }
+
     async void FetchCover(string src)
     {
         var file = await Covers.FindAsync(_track.Artist, _track.Title, _track.Album);
@@ -943,6 +970,7 @@ public partial class MainWindow : Window
     public void TogglePlay()
     {
         if (_party != null && _partyHttp != null) { _ = _partyHttp.GetStringAsync(_party + "api/toggle"); return; } // the host leads: pause for everyone
+        if (_index < 0 && RemoteShown) { RemotePane.TogglePlay(); return; }
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
         _duckPaused = false;
@@ -962,10 +990,17 @@ public partial class MainWindow : Window
         Osd(L.T("Stopped"));
     }
 
-    public void Next() => PlayQueueAt(NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? n : (Settings.Str("playback.repeat") == "All" ? 0 : -1));
+    public void Next()
+    {
+        if (_index < 0 && RemoteShown) RemotePane.Next();
+        else NextInQueue();
+    }
+
+    void NextInQueue() => PlayQueueAt(NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? n : (Settings.Str("playback.repeat") == "All" ? 0 : -1));
 
     public void Previous()
     {
+        if (_index < 0 && RemoteShown) { RemotePane.Previous(); return; }
         if (_mp.Time > 3000) _mp.Time = 0; // restart first, previous on a second press
         else PlayQueueAt(NextIndex(-1));
     }
@@ -1252,8 +1287,8 @@ public partial class MainWindow : Window
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.lite": ApplyLayout(); LyricsPane.Reblur(); break;
             case "lyrics.style": LyricsPane.Restyle(); break;
-            case "ui.scene": Scene.Restyle(); break;
-            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "ui.scene" or "ui.scenefps": Scene.Restyle(); break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.musicbg" or "remote.auto" or "ui.livebg" or "ui.lyrics" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
@@ -1389,7 +1424,10 @@ public partial class MainWindow : Window
     {
         var hasMedia = _index >= 0;
         bool video = hasMedia && !_isAudio;
-        IdleView.Visibility = hasMedia ? Visibility.Collapsed : Visibility.Visible;
+        var remote = RemoteShown;
+        IdleView.Visibility = hasMedia || remote ? Visibility.Collapsed : Visibility.Visible;
+        RemotePane.Visibility = remote ? Visibility.Visible : Visibility.Collapsed;
+        WatchOtherPlayers();
         MusicView.Visibility = hasMedia && _isAudio ? Visibility.Visible : Visibility.Collapsed;
         ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
         MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
@@ -1431,13 +1469,19 @@ public partial class MainWindow : Window
             _hideTimer.Stop();
         }
         ControlsBar.Opacity = floating ? Settings.Num("ui.fsopacity") / 100 : 1;
-        var hideBar = (_minimal && !_fullscreen) || _mini || (_fullscreen && !Settings.Bool("ui.fscontrols"));
+        var hideBar = (_minimal && !_fullscreen) || _mini || (_fullscreen && !Settings.Bool("ui.fscontrols")) || remote; // the remote has its own buttons
         ControlsBar.Visibility = hideBar ? Visibility.Collapsed : Visibility.Visible;
         MiniBar.Visibility = _mini ? Visibility.Visible : Visibility.Collapsed;
         UpdateAmbient();
         ApplyLyricsLayout();
         UpdateCornerMask();
     }
+
+    /// <summary>Pylon plays nothing and another app does: the stage is the remote for it.</summary>
+    bool RemoteShown => _index < 0 && !_mini && Settings.Bool("remote.auto") && RemotePane.HasSession;
+
+    /// <summary>Other players are looked for only while Pylon is idle and its window is awake.</summary>
+    void WatchOtherPlayers() => RemotePane.Watching = _index < 0 && !Motion.Asleep && Settings.Bool("remote.auto");
 
     // ───────── seek bar that glides instead of stepping 5 times a second ─────────
 
@@ -1576,14 +1620,17 @@ public partial class MainWindow : Window
     int _ambientSlot;
     bool _ambientBusy;
 
-    bool AmbientOn => Settings.Str("ui.videobg") != "Black" && Video.Visibility == Visibility.Visible && !_isAudio && !_fullscreen && !_mini;
+    /// <summary>The video sits in a box of its own shape over a backdrop ("Blurred frame" or "Theme color"), not on black.</summary>
+    bool VideoBoxed => Settings.Str("ui.videobg") != "Black" && Video.Visibility == Visibility.Visible && !_isAudio && !_fullscreen && !_mini;
+    bool AmbientOn => VideoBoxed && Settings.Str("ui.videobg") == "Blurred frame";
 
     void UpdateAmbient()
     {
         var on = AmbientOn;
-        VideoBackdrop.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        VideoBackdrop.Visibility = VideoBoxed ? Visibility.Visible : Visibility.Collapsed;
+        Ambient.Visibility = on ? Visibility.Visible : Visibility.Collapsed; // "Theme color": just the stage color around it
         Ambient.Live = on && Settings.Bool("ui.livebg") && !Motion.Lite;
-        ArtBackdrop.Live = MusicView.Visibility == Visibility.Visible && Settings.Bool("ui.livebg") && !Motion.Lite;
+        ApplyMusicBg();
         FitVideo();
         _ambientTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => { if (AmbientOn && _mp.IsPlaying) GrabAmbient(); }, Dispatcher);
         _ambientTimer.IsEnabled = on;
@@ -1593,7 +1640,7 @@ public partial class MainWindow : Window
     void FitVideo()
     {
         uint w = 0, h = 0;
-        if (!AmbientOn || !_mp.Size(0, ref w, ref h) || w == 0 || h == 0 || Stage.ActualWidth <= 0 || Stage.ActualHeight <= 0)
+        if (!VideoBoxed || !_mp.Size(0, ref w, ref h) || w == 0 || h == 0 || Stage.ActualWidth <= 0 || Stage.ActualHeight <= 0)
         {
             Video.Width = Video.Height = double.NaN;
             return;
@@ -1605,6 +1652,23 @@ public partial class MainWindow : Window
         double sw = Stage.ActualWidth, sh = Stage.ActualHeight;
         if (sw / sh > aspect) { Video.Height = sh; Video.Width = Math.Round(sh * aspect); }
         else { Video.Width = sw; Video.Height = Math.Round(sw / aspect); }
+    }
+
+    /// <summary>Behind the music: the blurred cover, the theme's stage color, or the cover's main color (toned toward it).</summary>
+    void ApplyMusicBg()
+    {
+        var mode = Settings.Str("ui.musicbg");
+        var blurred = mode is not ("Theme color" or "Cover color");
+        ArtBackdrop.Visibility = blurred ? Visibility.Visible : Visibility.Collapsed;
+        ArtBackdrop.Live = blurred && MusicView.Visibility == Visibility.Visible && Settings.Bool("ui.livebg") && !Motion.Lite;
+        if (mode == "Cover color" && ArtImage.Source != null && TryFindResource("StageBg") is SolidColorBrush stage)
+        {
+            var c = Scene.Main;
+            var tone = new SolidColorBrush(Color.FromRgb((byte)(c.R + (stage.Color.R - c.R) * 0.4), (byte)(c.G + (stage.Color.G - c.G) * 0.4), (byte)(c.B + (stage.Color.B - c.B) * 0.4)));
+            tone.Freeze();
+            MusicBg.Fill = tone;
+        }
+        else MusicBg.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "StageBg");
     }
 
     void Video_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateCornerMask();
@@ -2485,11 +2549,50 @@ public partial class MainWindow : Window
 
     void WatchTogether()
     {
-        var pick = DialogWindow.Choose(this, "Watch Together", "Everyone needs the same file on their own computer; Pylon keeps play, pause and position in step.",
+        var pick = DialogWindow.Choose(this, "Watch Together", "Friends follow your play, pause and position. Those who have the same file play their own copy; the others watch your stream.",
             [L.T("Invite friends: they follow you"), L.T("Join a friend")]);
-        if (pick == 0) ShowRemote(); // friends paste the remote's address; pressing pause there pauses everyone
+        if (pick == 0) HostParty();
         if (pick != 1) return;
-        if (DialogWindow.AskName(this, "Watch Together", "Your friend's address", "They find it in ⋯ → Watch Together → Invite friends. Same Wi-Fi, or a shared VPN such as Radmin or ZeroTier.", "http://192.168.1.10:51234/…/") is not { } url) return;
+        if (DialogWindow.AskName(this, "Watch Together", "Your friend's address", "The link from their Pylon (⋯ → Watch Together → Invite friends), or from their room's page.", "https://…/r/…/  ·  http://192.168.1.10:51234/…/") is not { } url) return;
+        JoinParty(url);
+    }
+
+    PartyRelay? _relay;
+
+    /// <summary>
+    /// Hosting: the phone remote's address answers friends (state; pause for everyone), the cast server streams what plays
+    /// for those without the file, and with a Watch Together server set the room reaches friends anywhere (and Discord
+    /// shows a "Watch together" button on the profile).
+    /// </summary>
+    void HostParty()
+    {
+        StartHosting();
+        if (!DialogWindow.Party(this, _relay?.RoomUrl ?? _remote!.Url, _relay != null)) return;
+        _relay?.Dispose();
+        _relay = null;
+        _discordSig = null;
+        StopStreaming();
+        _remote?.Dispose();
+        _remote = null;
+    }
+
+    void StartHosting()
+    {
+        _remote ??= new RemoteServer(RemoteCommand);
+        if (_cast == null)
+        {
+            _cast = new CastServer { Title = _title };
+            if (_index >= 0) PlayAt(_index, startAt: _mp.Time, autoplay: _mp.IsPlaying); // reopen with the stream branch
+        }
+        if (Settings.Str("party.relay").Trim() is { Length: > 0 } server)
+            _relay ??= new PartyRelay(server, () => RemoteCommand("state", 0), c => { if (c == "toggle") TogglePlay(); }, () => _cast?.StreamUrl);
+        _discordSig = null; // the profile gets its button
+    }
+
+    void JoinParty(string url)
+    {
+        if (_relay != null) return; // hosting already
+        _partyTimer?.Stop();
         _party = url.Trim().EndsWith('/') ? url.Trim() : url.Trim() + "/";
         _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         _partyMissing = null;
@@ -2506,6 +2609,7 @@ public partial class MainWindow : Window
     }
 
     bool _partyBusy;
+    long _partyStreamAt;
 
     /// <summary>Follows the host: same file (by name), play / pause, and the position within 1.5 s.</summary>
     async Task FollowParty()
@@ -2522,6 +2626,17 @@ public partial class MainWindow : Window
             if (file == null) return;
             if (!string.Equals(file, mine, StringComparison.OrdinalIgnoreCase))
             {
+                // not the same file here: the host's stream, when it sends one (a live copy: it follows the host by itself)
+                if (host.TryGetProperty("stream", out var st) && st.GetString() is { Length: > 0 } s)
+                {
+                    var stream = s.Contains("://") ? s : _party + s;
+                    if (CurrentPath != stream && Environment.TickCount64 - _partyStreamAt > 10_000) // a stream that failed is tried again later
+                    {
+                        _partyStreamAt = Environment.TickCount64;
+                        PlayList([stream], 0);
+                    }
+                    return;
+                }
                 if (_partyMissing != file) { _partyMissing = file; Osd(L.F("Open “{0}” to watch together", file), 5); }
                 return;
             }
@@ -2558,6 +2673,7 @@ public partial class MainWindow : Window
             title = _index >= 0 ? _title : "Pylon", artist = _index >= 0 ? _artist : null, playing = _mp.IsPlaying,
             file = _index >= 0 && CurrentPath is { } cp ? (cp.Contains("://") ? cp : Path.GetFileName(cp)) : null,
             time = Math.Max(0, _mp.Time), length = Math.Max(0, _mp.Length), volume = (int)Math.Round(Volume.Value * 100),
+            stream = _cast?.StreamUrl, // Watch Together: friends without the file play this
         };
     }
 
@@ -2659,7 +2775,7 @@ public partial class MainWindow : Window
             return;
         }
         var playing = _mp.IsPlaying;
-        var sig = _index >= 0 && CurrentPath is { } p && !Library.Excluded(p) ? $"{p}|{playing}" : "";
+        var sig = _index >= 0 && CurrentPath is { } p && !Library.Excluded(p) ? $"{p}|{playing}|{_relay?.RoomUrl}" : "";
         var now = Environment.TickCount64;
         var expected = _discordPos + (playing ? now - _discordAt : 0);
         if (sig == _discordSig && (!playing || Math.Abs(expected - _mp.Time) < 3000)) return;
@@ -2668,7 +2784,7 @@ public partial class MainWindow : Window
         _discordAt = now;
         _discord ??= new Discord();
         _ = sig.Length == 0 ? _discord.SetAsync(null, null, false, 0, 0, false)
-                            : _discord.SetAsync(_title, _artist, _isAudio, Math.Max(0, _mp.Time), _mp.Length, playing);
+                            : _discord.SetAsync(_title, _artist, _isAudio, Math.Max(0, _mp.Time), _mp.Length, playing, _relay?.RoomUrl);
     }
 
     // ───────── skip intro, next episode ─────────
@@ -2858,6 +2974,18 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    /// <summary>"Add to Music": copies the songs into a music folder (off the UI thread: they can be big), then indexes them.</summary>
+    public async void AddToMusic(List<string> files, string folder)
+    {
+        try
+        {
+            var n = await Task.Run(() => Library.CopyToMusic(files, folder));
+            Osd(n > 0 ? L.F("Added to “{0}”", Path.GetFileName(folder.TrimEnd('\\')) is { Length: > 0 } name ? name : folder) : L.T("Already in that folder"), 3);
+            if (n > 0) Library.IndexMusic(Dispatcher);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Osd(e.Message, 5); }
+    }
+
     /// <summary>What a music listener reaches for: lyrics, playlists, the file itself.</summary>
     List<object> TrackMenuItems()
     {
@@ -2881,10 +3009,12 @@ public partial class MainWindow : Window
                     Settings.Set("ui.spectrumstyle", v);
                 }, check: (Spectrum.On ? Spectrum.Style : "Off") == v)),
             ]),
-            Sub("Full-screen Visualizer", null, [.. new[] { "Off", "Radial", "Aurora", "Horizon" }.Select(v =>
+            Sub("Full-screen Visualizer", null, [.. new[] { "Off", "Bio", "Wave", "Bloom", "Ripple", "Radial", "Aurora", "Horizon" }.Select(v =>
                 (object)Item(v, null, null, () => Settings.Set("ui.scene", v), check: (SceneView.On ? SceneView.Style : "Off") == v))]),
             .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
+            !local || !_isAudio ? Item("Add to Music", null, null, () => { }, enabled: false)
+                : Sub("Add to Music", null, Library.MusicTargets().Select(d => (object)Item(d, "folder", null, () => AddToMusic([path!], d)))),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
             Item("Convert…", null, KeyOf("convert"), OpenConverter, enabled: local),
         ];
@@ -3108,7 +3238,7 @@ public partial class MainWindow : Window
                     await Task.Delay(1500);
                     break;
                 case "state":
-                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile}");
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath}");
                     break;
                 case "settings":
                     OpenSettings(arg.Length > 0 ? arg : null);
@@ -3239,11 +3369,10 @@ public partial class MainWindow : Window
                         break;
                     }
                 case "host": _remote ??= new RemoteServer(RemoteCommand); File.WriteAllText(Path.ChangeExtension(outFile, ".url.txt"), _remote.Url); break;
+                case "partyhost": StartHosting(); File.WriteAllText(Path.ChangeExtension(outFile, ".url.txt"), _relay?.RoomUrl ?? _remote!.Url); break; // Watch Together host, no dialog
                 case "party":
                     {
-                        _party = File.ReadAllText(arg).Trim();
-                        _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-                        _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
+                        JoinParty(File.ReadAllText(arg));
                         break;
                     }
                 case "filetypes":
@@ -3267,6 +3396,14 @@ public partial class MainWindow : Window
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"song {song}{Environment.NewLine}");
                         break;
                     }
+                case "findmusic": // the drives searched for music folders (read only), with the time it took
+                    {
+                        var sw = Stopwatch.StartNew();
+                        var found = await Task.Run(() => Library.FindMusicFolders(null, CancellationToken.None));
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"findmusic {sw.ElapsedMilliseconds} ms: {string.Join(" | ", found.Select(f => $"{f.Folder}={f.Songs}"))}{Environment.NewLine}");
+                        break;
+                    }
+                case "remoteany": RemoteView.DebugAnySession = true; WatchOtherPlayers(); break; // a paused session shows too
                 case "spectrum": MusicSpectrum.DebugFill(1.3); break;
                 case "scene": Scene.DebugFill(); break;
                 case "spotify":

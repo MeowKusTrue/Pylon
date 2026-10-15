@@ -3,6 +3,36 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.7
+
+<!-- ru -->
+**Новое**
+- **Новые полноэкранные визуализации:** «Био» — живые перетекающие волны вокруг обложки, «Волна» — тонкие кольца гнутся под музыку (по мотивам «Моей волны»), «Цветок» — вращающиеся лепестки, «Круги» — каждый удар баса пускает кольцо. В настройках появилась частота кадров визуализатора: 30, 60 или 120 (в лёгком режиме всегда 30).
+- **Пословные стили текста песни:** «Прыжок», «Волна», «Проявление» и «Неон».
+- **Пульт для других плееров.** Пока Pylon ничего не играет, а Spotify, Яндекс Музыка или браузер играют, Pylon показывает их песню, обложку и текст с кнопками, перемоткой, перемешиванием и повтором. После входа в Spotify видна и очередь.
+- **Смотреть вместе — без файла и откуда угодно.** У кого нет того же файла, тот смотрит поток хоста. Через сервер Pylon друзья подключаются из любой сети по ссылке, а в профиле Discord появляется кнопка «Смотреть вместе».
+- **«Добавить в музыку»** в контекстном меню Проводника (подменю с вашими музыкальными папками), в меню трека и в библиотеке. В разделе «Музыка» есть поиск музыки по всему компьютеру.
+- **Фон:** у музыки на выбор размытая обложка, цвет обложки или цвет темы, у видео добавлен цвет темы.
+
+**Исправления**
+- Текст песни больше не пропадает после открытия боковой панели или смены ширины колонки. Перестройка под новую ширину делается один раз, а не на каждом кадре анимации панели.
+- Обложка, вшитая в файл, показывается, даже если libVLC не успел её прочитать.
+- Повреждённый кэш текстов больше не закрывает плеер.
+
+<!-- en -->
+**New**
+- **New full-screen visualizers:** Bio (living, overlapping waves round the cover), Wave (thin rings that bend with the music, after Yandex Music's "My Wave"), Bloom (turning petals) and Ripple (every bass hit sends a ring out). A visualizer frame-rate setting: 30, 60 or 120 (always 30 in light mode).
+- **Word-by-word lyric styles:** Jump, Wave, Rise and Neon.
+- **A remote for other players.** While Pylon plays nothing and Spotify, Yandex Music or a browser does, Pylon shows their song, cover and lyrics with play / pause, skipping, seeking, shuffle and repeat. Signed in to Spotify, you see its queue too.
+- **Watch Together without the file, from anywhere.** Friends without the same file watch the host's stream. Through Pylon's server they join from any network with a link, and your Discord profile gets a "Watch together" button.
+- **Add to Music** in Explorer's right-click menu (a submenu with your music folders), in the track menu and in the library. The Music section can search the whole computer for music.
+- **Background:** music can sit on the blurred cover, the cover's color or the theme's color; video gets the theme's color too.
+
+**Fixes**
+- Lyrics no longer vanish after opening the side panel or resizing the column. They are rebuilt for the new width once, not on every frame of the panel's slide.
+- Cover art embedded in a file shows even when libVLC didn't get to it in time.
+- A damaged lyrics cache no longer closes the player.
+
 ## 1.9.6
 
 <!-- ru -->

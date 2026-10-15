@@ -20,7 +20,8 @@ public sealed class Discord : IDisposable
     readonly SemaphoreSlim _gate = new(1);
 
     /// <summary>Shows the track; null clears it. Quietly does nothing when Discord isn't running.</summary>
-    public async Task SetAsync(string? title, string? artist, bool audio, long positionMs, long lengthMs, bool playing)
+    /// <param name="join">A Watch Together room: the profile shows a "Watch together" button that opens it.</param>
+    public async Task SetAsync(string? title, string? artist, bool audio, long positionMs, long lengthMs, bool playing, string? join = null)
     {
         if (!Possible) return;
         await _gate.WaitAsync();
@@ -36,6 +37,7 @@ public sealed class Discord : IDisposable
                     ? new { start = DateTimeOffset.UtcNow.AddMilliseconds(-positionMs).ToUnixTimeMilliseconds(), end = DateTimeOffset.UtcNow.AddMilliseconds(lengthMs - positionMs).ToUnixTimeMilliseconds() }
                     : null,
                 assets = new { large_image = "pylon", large_text = "Pylon", small_image = playing ? "play" : "pause" },
+                buttons = join == null ? null : new[] { new { label = Trim(L.T("Watch together")), url = join } },
             };
             await SendAsync(1, new { cmd = "SET_ACTIVITY", nonce = Guid.NewGuid().ToString(), args = new { pid = Environment.ProcessId, activity } });
         }

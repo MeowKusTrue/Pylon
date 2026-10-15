@@ -295,6 +295,7 @@ public partial class LibraryPanel : UserControl
     Page Music() => new(Section.Music, Crumbs1("Music"), () =>
     [
         ActionRow("Add", AddMusicFolder),
+        ActionRow("Find music on this computer", FindMusic),
         IconRow(L.T("Songs"), "music-note", () => Navigate(Songs()), sortable: false,
             menu: () => FilesMenu([.. Library.Data.MusicFolders.SelectMany(f => Library.MediaFiles(f, true))])),
         IconRow(L.T("Albums"), "vinyl-record", () => Navigate(Group("Albums", m => m.Album)), sortable: false),
@@ -577,6 +578,10 @@ public partial class LibraryPanel : UserControl
         if (add.Items.Count > 0) add.Items.Add(new Separator());
         add.Items.Add(Item("New Playlist…", "plus", () => CreatePlaylist(Resolve())));
 
+        var music = Item("Add to Music", "music-notes", () => { });
+        foreach (var d in Library.MusicTargets())
+            music.Items.Add(Item(d, "folder", () => Player.AddToMusic([.. Resolve().Where(Library.IsAudio)], d)));
+
         var target = folder ?? files![0];
         return
         [
@@ -584,6 +589,7 @@ public partial class LibraryPanel : UserControl
             Item("Play Next", "skip-forward", () => Player.PlayNext(Resolve())),
             Item("Add to Queue", "queue", () => Player.Enqueue(Resolve())),
             add,
+            .. folder != null || files!.Any(Library.IsAudio) ? new object[] { music } : [],
             new Separator(),
             Item("Show in Explorer", "folder-open", () => Reveal(target)),
         ];
@@ -625,6 +631,14 @@ public partial class LibraryPanel : UserControl
     void AddMusicFolder()
     {
         AddFolder(Library.Data.MusicFolders);
+        Library.IndexMusic(Dispatcher);
+    }
+
+    void FindMusic()
+    {
+        if (DialogWindow.FindMusic(Player) is not { Count: > 0 } found) return;
+        Library.Data.MusicFolders.AddRange(found.Where(f => !Library.Data.MusicFolders.Contains(f, StringComparer.OrdinalIgnoreCase)));
+        Library.Touch();
         Library.IndexMusic(Dispatcher);
     }
 

@@ -156,7 +156,7 @@ public sealed class SpotifyLyricsWindow : Window
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException or UnauthorizedAccessException) { }
     }
 
-    static async Task<ImageSource?> Thumbnail(GlobalSystemMediaTransportControlsSessionMediaProperties props)
+    internal static async Task<ImageSource?> Thumbnail(GlobalSystemMediaTransportControlsSessionMediaProperties props)
     {
         if (props.Thumbnail == null) return null;
         try

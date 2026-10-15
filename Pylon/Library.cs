@@ -120,6 +120,7 @@ public static class Library
     {
         Save();
         Changed?.Invoke();
+        ShellRegistration.MusicMenu(); // Explorer's "Add to Music" follows the music folders (nothing to do when they're the same)
     }
 
     // ───────── media helpers ─────────
@@ -237,6 +238,8 @@ public static class Library
     {
         if (Interlocked.Exchange(ref _indexing, 1) == 1) return;
         var folders = Data.MusicFolders.ToList();
+        // Meta is a plain Dictionary the UI thread writes to: this thread only reads a copy of the stamps
+        var stamps = Data.Meta.ToDictionary(m => m.Key, m => m.Value.Stamp);
         Task.Run(async () =>
         {
             var vlc = new LibVLC("--no-video", "--no-audio", "--quiet"); // own instance: keeps tag parsing away from playback
@@ -246,7 +249,7 @@ public static class Library
                 foreach (var file in folders.SelectMany(f => MediaFiles(f, true)).Where(IsAudio))
                 {
                     var stamp = File.GetLastWriteTimeUtc(file).Ticks;
-                    if (Data.Meta.TryGetValue(file, out var m) && m.Stamp == stamp) continue;
+                    if (stamps.GetValueOrDefault(file) == stamp) continue;
                     var media = new Media(vlc, file, FromType.FromPath);
                     await media.Parse(MediaParseOptions.ParseLocal | MediaParseOptions.FetchLocal, 2000);
                     var meta = new TrackMeta
@@ -278,6 +281,89 @@ public static class Library
     /// inside its "parsed" callback (native crash in ntdll, reproduced 6/6 on a fresh library with video playing).
     /// </summary>
     public static void DisposeLater(Media media) => Task.Delay(2000).ContinueWith(_ => media.Dispose());
+
+    // ───────── "Add to Music" and finding music ─────────
+
+    /// <summary>Where "Add to Music" copies to: the library's music folders, else Windows' Music folder.</summary>
+    public static List<string> MusicTargets() =>
+        Data.MusicFolders.Count > 0 ? [.. Data.MusicFolders] : [Environment.GetFolderPath(Environment.SpecialFolder.MyMusic)];
+
+    /// <summary>
+    /// Copies songs, with their .lrc / .ttml, into a music folder. One of the same name and size already there counts as
+    /// done; a different one of that name gets " (2)". Returns how many were copied.
+    /// </summary>
+    public static int CopyToMusic(IEnumerable<string> files, string folder)
+    {
+        Directory.CreateDirectory(folder);
+        var into = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        var n = 0;
+        foreach (var f in files.Where(File.Exists))
+        {
+            if (string.Equals(Path.GetDirectoryName(Path.GetFullPath(f)), into, StringComparison.OrdinalIgnoreCase)) continue; // already in it
+            var dst = Path.Combine(into, Path.GetFileName(f));
+            if (File.Exists(dst) && new FileInfo(dst).Length == new FileInfo(f).Length) continue;
+            for (var k = 2; File.Exists(dst); k++) dst = Path.Combine(into, $"{Path.GetFileNameWithoutExtension(f)} ({k}){Path.GetExtension(f)}");
+            File.Copy(f, dst);
+            foreach (var side in new[] { ".lrc", ".ttml" })
+                if (File.Exists(Path.ChangeExtension(f, side)) && !File.Exists(Path.ChangeExtension(dst, side)))
+                    File.Copy(Path.ChangeExtension(f, side), Path.ChangeExtension(dst, side));
+            n++;
+        }
+        return n;
+    }
+
+    static readonly HashSet<string> NotMusic = new(StringComparer.OrdinalIgnoreCase)
+        { "Windows", "Program Files", "Program Files (x86)", "ProgramData", "AppData", "$Recycle.Bin", "System Volume Information", "node_modules", ".git", "steamapps", "WindowsApps" };
+
+    /// <summary>
+    /// Folders with songs on the fixed drives, outermost first: a folder holding 3+ songs (audio of 1 MB or more: game
+    /// sound effects are smaller) counts, and the count moves up through parents that hold nothing but folders and
+    /// covers (Music\Artist\Album → Music). Program folders (any .dll inside) and system folders are skipped, and so
+    /// is anything already in the library. Off the UI thread; <paramref name="progress"/> gets the folder being read.
+    /// </summary>
+    public static List<(string Folder, int Songs)> FindMusicFolders(IProgress<string>? progress, CancellationToken ct)
+    {
+        var opts = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint };
+        var songs = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase); // folder → songs in it and below (pure containers only)
+        var known = Data.MusicFolders.Select(f => Path.TrimEndingDirectorySeparator(f) + "\\").ToList();
+        var last = Environment.TickCount64;
+
+        // returns the songs under dir if dir can be part of a music folder, -1 when it holds other things (a stop)
+        int Walk(string dir)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Environment.TickCount64 - last > 150) { last = Environment.TickCount64; progress?.Report(dir); }
+            int own = 0, below = 0;
+            var pure = true;
+            foreach (var f in Directory.EnumerateFiles(dir, "*", opts))
+            {
+                var ext = Path.GetExtension(f);
+                if (ext.Equals(".dll", StringComparison.OrdinalIgnoreCase)) return -1; // a program (Downloads has .exe installers, not .dll)
+                if (IsAudio(f)) { if (new FileInfo(f).Length >= 1 << 20) own++; }
+                else if (ext.ToLowerInvariant() is not (".jpg" or ".jpeg" or ".png" or ".lrc" or ".ttml" or ".cue" or ".m3u" or ".m3u8" or ".nfo" or ".txt" or ".log")) pure = false;
+            }
+            var stops = new List<(string, int)>();
+            foreach (var sub in Directory.EnumerateDirectories(dir, "*", opts))
+            {
+                if (NotMusic.Contains(Path.GetFileName(sub)) || known.Any(k => (sub + "\\").StartsWith(k, StringComparison.OrdinalIgnoreCase))) continue;
+                var s = Walk(sub);
+                if (s > 0) { below += s; stops.Add((sub, s)); }
+            }
+            var total = own + below;
+            if (pure && Path.GetDirectoryName(dir) != null) return total; // a container: the parent decides (a drive root never is one)
+            // this folder holds other things: its own songs make it a music folder, its pure subfolders are ones of their own
+            if (own >= 3) songs[dir] = own;
+            foreach (var (sub, s) in stops) if (s >= 3 && !songs.Keys.Any(k => k.StartsWith(sub + "\\", StringComparison.OrdinalIgnoreCase) || k == sub)) songs[sub] = s;
+            return -1;
+        }
+
+        foreach (var drive in DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+            try { Walk(drive.RootDirectory.FullName); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        // a pure folder that held songs was reported by its first non-pure parent; nested ones go to the outermost
+        return [.. songs.Where(s => !songs.Keys.Any(k => k != s.Key && s.Key.StartsWith(k + "\\", StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(s => s.Value).Select(s => (s.Key, s.Value))];
+    }
 
     // ───────── thumbnails ─────────
 
@@ -322,7 +408,7 @@ public static class Library
         catch { return null; } // missing/corrupt art: caller shows a placeholder
     }
 
-    static ImageSource? ShellThumbnail(string path, int size)
+    public static BitmapSource? ShellThumbnail(string path, int size)
     {
         try
         {

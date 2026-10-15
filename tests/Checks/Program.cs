@@ -43,6 +43,23 @@ Check("LRC bilingual", lrc.Lines.Length == 2 && lrc.Lines[0].Translation == "П�
 Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Ориентация Север.mp3", "01. Лолита - Ориентация Север.mp3") == ("Ориентация Север", "Лолита")
     && Library.FromFileName(@"C:\m\AC-DC - Thunderstruck.mp3", "AC-DC - Thunderstruck.mp3") == ("Thunderstruck", "AC-DC")
     && Library.FromFileName(@"C:\m\x.mp3", "Real Title") == ("Real Title", null));
+// ── "Add to Music": the same song twice is copied once, another one of that name gets " (2)", its .lrc comes along
+{
+    var root = Path.Combine(Path.GetTempPath(), "pylon-check-music-" + Environment.ProcessId);
+    Directory.CreateDirectory(Path.Combine(root, "a"));
+    Directory.CreateDirectory(Path.Combine(root, "b"));
+    File.WriteAllText(Path.Combine(root, "a", "song.mp3"), "one");
+    File.WriteAllText(Path.Combine(root, "a", "song.lrc"), "[00:01.00]hi");
+    File.WriteAllText(Path.Combine(root, "b", "song.mp3"), "other");
+    var into = Path.Combine(root, "music");
+    var first = Library.CopyToMusic([Path.Combine(root, "a", "song.mp3")], into);
+    var again = Library.CopyToMusic([Path.Combine(root, "a", "song.mp3")], into);
+    var clash = Library.CopyToMusic([Path.Combine(root, "b", "song.mp3")], into);
+    Check("add to music", first == 1 && again == 0 && clash == 1 && File.Exists(Path.Combine(into, "song (2).mp3")) && File.Exists(Path.Combine(into, "song.lrc")),
+        $"{first} {again} {clash}");
+    Directory.Delete(root, true);
+}
+
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
 // ── default player: every format that doesn't open in Pylon yet is taken, ours are left alone
