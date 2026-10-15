@@ -7,13 +7,12 @@ using LibVLCSharp.Shared;
 namespace Pylon;
 
 /// <summary>
-/// Real waveforms for the music seek bar. libVLC transcodes the track to 8 kHz mono WAV (stream output runs
-/// faster than real time), we reduce it to <see cref="Bins"/> loudness values and cache them on disk.
+/// Real waveforms for the music seek bar. libVLC transcodes the track to 8 kHz mono WAV (2 kHz past an hour: audiobooks;
+/// stream output runs faster than real time), we reduce it to <see cref="Bins"/> loudness values and cache them on disk.
 /// </summary>
 public static class Waveform
 {
     public const int Bins = 400;
-    const int Rate = 8000;
     static readonly string CacheDir = Path.Combine(Library.Dir, "waves");
     static readonly ConcurrentDictionary<string, byte[]> Memory = new(StringComparer.OrdinalIgnoreCase);
     static readonly SemaphoreSlim Gate = new(1);
@@ -46,7 +45,8 @@ public static class Waveform
         try
         {
             if (!Decode(path, wav)) return null;
-            var peaks = Reduce(File.ReadAllBytes(wav));
+            byte[]? peaks;
+            using (var f = File.OpenRead(wav)) peaks = Reduce(f);
             if (peaks == null) return null;
             Directory.CreateDirectory(CacheDir);
             File.WriteAllBytes(cached, peaks);
@@ -60,7 +60,10 @@ public static class Waveform
     {
         _vlc ??= new LibVLC("--quiet", "--no-video", "--no-sout-video", "--no-spu");
         using var media = new Media(_vlc, path, FromType.FromPath);
-        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={Rate}}}:std{{access=file,mux=wav,dst='{wav.Replace("'", "")}'}}");
+        media.Parse(MediaParseOptions.ParseLocal).Wait(5000);
+        var seconds = media.Duration / 1000.0;
+        var rate = seconds > 3600 ? 2000 : 8000; // a loudness outline needs no more; keeps a 10-hour book at 144 MB of temp WAV
+        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={rate}}}:std{{access=file,mux=wav,dst='{wav.Replace("'", "")}'}}");
         media.AddOption(":sout-keep");
         using var player = new MediaPlayer(media);
         var done = new ManualResetEventSlim();
@@ -68,25 +71,30 @@ public static class Waveform
         player.EndReached += (_, _) => done.Set();
         player.EncounteredError += (_, _) => { ok = false; done.Set(); };
         if (!player.Play()) return false;
-        var finished = done.Wait(TimeSpan.FromMinutes(2)); // ponytail: very long files (audiobooks) just keep the decorative bars
+        var finished = done.Wait(TimeSpan.FromSeconds(Math.Max(120, seconds / 40))); // decoding runs well over 40× real time
         player.Stop(); // not on a libVLC event thread, so this is safe
         return ok && finished && File.Exists(wav);
     }
 
-    /// <summary>RMS per bin from a 16-bit mono WAV, normalized to the loudest bin.</summary>
-    static byte[]? Reduce(byte[] wav)
+    /// <summary>RMS per bin from a 16-bit mono WAV (read as a stream: long books make big files), normalized to the loudest bin.</summary>
+    static byte[]? Reduce(Stream wav)
     {
-        var data = FindChunk(wav, "data");
-        if (data.Length < Bins * 4) return null;
-        var samples = data.Length / 2;
+        var head = new byte[4096];
+        var got = wav.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+        var start = DataOffset(head.AsSpan(0, got));
+        if (start < 0) return null;
+        var samples = (wav.Length - start) / 2; // an unfinished WAV may carry a bogus size: trust the file length
+        if (samples < Bins * 2) return null;
+        wav.Position = start;
+        using var reader = new BinaryReader(new BufferedStream(wav, 1 << 16));
         var rms = new double[Bins];
         for (var b = 0; b < Bins; b++)
         {
-            long from = (long)samples * b / Bins, to = (long)samples * (b + 1) / Bins;
+            long from = samples * b / Bins, to = samples * (b + 1) / Bins;
             double sum = 0;
             for (var i = from; i < to; i++)
             {
-                double s = BitConverter.ToInt16(data.Slice((int)i * 2, 2));
+                double s = reader.ReadInt16();
                 sum += s * s;
             }
             rms[b] = Math.Sqrt(sum / Math.Max(1, to - from));
@@ -96,15 +104,15 @@ public static class Waveform
         return rms.Select(r => (byte)Math.Round(255 * Math.Pow(r / max, 0.7))).ToArray(); // slight lift so quiet passages stay visible
     }
 
-    static ReadOnlySpan<byte> FindChunk(byte[] wav, string id)
+    /// <summary>Where the samples of the "data" chunk start, -1 if the header doesn't show one.</summary>
+    static int DataOffset(ReadOnlySpan<byte> head)
     {
-        for (var p = 12; p + 8 <= wav.Length;)
+        for (var p = 12; p + 8 <= head.Length;)
         {
-            var size = BitConverter.ToInt32(wav, p + 4);
-            if (Encoding.ASCII.GetString(wav, p, 4) == id)
-                return wav.AsSpan(p + 8, size <= 0 || size > wav.Length - p - 8 ? wav.Length - p - 8 : size); // an unfinished WAV may carry a bogus size
+            var size = BitConverter.ToInt32(head.Slice(p + 4, 4));
+            if (Encoding.ASCII.GetString(head.Slice(p, 4)) == "data") return p + 8;
             p += 8 + Math.Max(0, size) + (size & 1);
         }
-        return default;
+        return -1;
     }
 }

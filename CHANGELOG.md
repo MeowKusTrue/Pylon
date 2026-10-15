@@ -3,6 +3,34 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.5.0
+
+<!-- ru -->
+**Новое**
+- **Иконка в трее** (Настройки → Интерфейс): свёрнутый Pylon прячется в трей; щелчок возвращает окно, правый щелчок — пауза, следующий, предыдущий, выход. Можно запускаться сразу в трее.
+- **Карточка трека в углу экрана** при смене песни: обложка, название, исполнитель. Когда показывать — никогда, если окно свёрнуто, или всегда; длительность настраивается.
+- **Пауза, когда звучит другое приложение** (Настройки → Воспроизведение): Pylon ставит паузу, пока в другом приложении есть звук (по его индикатору уровня, а не просто открытому потоку), и продолжает через три секунды тишины.
+- Закреплённые папки на боковой панели — плитки с первой буквой и своим цветом; порядок меняется через «Выше» и «Ниже».
+
+**Улучшения**
+- Спектр подстраивается под громкость записи: тихие мастеринги больше не выглядят плоскими.
+- Волна на шкале строится и для очень длинных файлов (аудиокниги): 70-минутный файл готов примерно за 25 секунд, раньше он оставался с декоративной волной.
+- Превью на шкале перемотки декодирует видеокарта и прыгает к ключевым кадрам; уже увиденные кадры показываются сразу.
+- Убраны настройки, которые ничего не делали (статистика, скины, дерево плейлиста и т. п.).
+
+<!-- en -->
+**New**
+- **Tray icon** (Settings → Interface): minimizing hides Pylon to the tray; click brings it back, right-click for pause, next, previous, quit. Can start in the tray.
+- **Track card in the corner of the screen** when the song changes: cover, title, artist. Never / when minimized / always, with an adjustable duration.
+- **Pause while another app plays sound** (Settings → Playback): Pylon pauses while another app makes sound (by its level meter, not just an open stream) and resumes after three quiet seconds.
+- Pinned sidebar folders are tiles with their first letter in their own color; reorder them with Move Up / Move Down.
+
+**Improvements**
+- The spectrum follows the recording's loudness, so quiet masters no longer look flat.
+- The seek bar waveform works for very long files (audiobooks): a 70-minute file is ready in about 25 seconds instead of staying decorative.
+- Seek bar previews decode on the GPU and jump to keyframes; frames already seen show at once.
+- Settings that did nothing are gone (statistics, skins, playlist tree and the like).
+
 ## 1.4.0
 
 <!-- ru -->

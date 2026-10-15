@@ -118,6 +118,12 @@ public partial class MainWindow : Window
         _osdTimer = new DispatcherTimer(TimeSpan.FromSeconds(1.2), DispatcherPriority.Normal, (_, _) => { Motion.FadeOut(OsdBorder); Motion.FadeOut(StageOsd); _osdTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); var wasPlaying = _mp.IsPlaying; TogglePlay(); FlashPlayState(!wasPlaying); }, Dispatcher) { IsEnabled = false };
         _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
+        _duck = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => DuckTick(), Dispatcher);
+        if (Settings.Bool("ui.tray") && Settings.Bool("ui.traymin") && !SnapMode && Environment.GetCommandLineArgs().Length <= 1)
+        {
+            WindowState = WindowState.Minimized; // start in the tray: hidden once loaded
+            ShowInTaskbar = false;
+        }
         _engineTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => { _engineTimer!.Stop(); ReloadEngine(); }, Dispatcher) { IsEnabled = false };
 
         SourceInitialized += (_, _) =>
@@ -138,6 +144,8 @@ public partial class MainWindow : Window
         };
         Loaded += (_, _) =>
         {
+            ApplyTray();
+            if (!ShowInTaskbar && _tray != null) Hide();
             Perf.Mark("loaded");
             // VideoView creates its video HWND in OnApplyTemplate, which a Collapsed element never gets until first shown.
             // Without it the first video plays with Hwnd = 0 and libVLC opens its own "Direct3D11 output" window.
@@ -169,6 +177,7 @@ public partial class MainWindow : Window
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
         StateChanged += (_, _) =>
         {
+            if (WindowState == WindowState.Minimized && _tray != null) Hide(); // minimized to the tray
             FitMaximized();
             MaxBtn.Tag = WindowState == WindowState.Maximized ? "copy" : "square";
             if (_mini && WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
@@ -191,6 +200,8 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _tick.Stop();
+            _duck.Stop();
+            _tray?.Dispose();
             _preview.Dispose();
             _cast?.Dispose();
             _renderers?.Stop();
@@ -254,6 +265,83 @@ public partial class MainWindow : Window
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
         mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
         return mp;
+    }
+
+    // ───────── tray, track card, ducking ─────────
+
+    TrayIcon? _tray;
+    readonly DispatcherTimer _duck;
+    bool _duckPaused;
+    int _quietTicks;
+
+    void ApplyTray()
+    {
+        if (!Settings.Bool("ui.tray") || SnapMode)
+        {
+            _tray?.Dispose();
+            _tray = null;
+            if (!IsVisible && IsLoaded) ShowFromTray(); // never leave the window unreachable
+            return;
+        }
+        if (_tray != null) return;
+        _tray = new TrayIcon(_index >= 0 ? MiniTitle.Text : "Pylon");
+        _tray.Click += ShowFromTray;
+        _tray.RightClick += () =>
+        {
+            SetForegroundWindow(new WindowInteropHelper(this).Handle); // lets the menu close when clicking elsewhere
+            var cm = new ContextMenu { Placement = PlacementMode.MousePoint };
+            foreach (var item in new object[]
+            {
+                Item(_mp.IsPlaying ? "Pause" : "Play", _mp.IsPlaying ? "pause" : "play", null, TogglePlay),
+                Item("Previous Item", "skip-back", null, Previous, enabled: _index > 0),
+                Item("Next Item", "skip-forward", null, Next, enabled: _index >= 0 && _index < _queue.Count - 1),
+                new Separator(),
+                Item("Show Pylon", "app-window", null, ShowFromTray),
+                Item("Quit Pylon", "sign-out", null, Close),
+            }) cm.Items.Add(item);
+            cm.IsOpen = true;
+        };
+    }
+
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    void ShowFromTray()
+    {
+        Show();
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    /// <summary>Settings → Interface → "Show a popup when the track changes", once the cover has had a moment to load.</summary>
+    async void MaybeTrackPopup(int index)
+    {
+        var mode = Settings.Str("ui.popup");
+        if (mode == "Never") return;
+        await Task.Delay(800);
+        if (_index != index || (mode == "When minimized" && IsVisible && WindowState != WindowState.Minimized)) return;
+        TrackPopup.Show(ArtImage.Source, _title, _artist, Settings.Num("ui.popuptime"), ShowFromTray);
+    }
+
+    /// <summary>"Pause when another app uses audio": pauses while something else makes sound, resumes 3 s after it stops.</summary>
+    void DuckTick()
+    {
+        if (!Settings.Bool("playback.duck")) { _duckPaused = false; return; }
+        if (!_mp.IsPlaying && !_duckPaused) return;
+        var others = OtherAudio.Playing();
+        if (_mp.IsPlaying && others)
+        {
+            _mp.SetPause(true);
+            _duckPaused = true;
+            _quietTicks = 0;
+            Osd(L.T("Paused while another app plays sound"));
+        }
+        else if (_duckPaused && !others && ++_quietTicks >= 3)
+        {
+            _duckPaused = false;
+            _mp.SetPause(false);
+        }
+        else if (others) _quietTicks = 0;
     }
 
     // ───────── crossfade ─────────
@@ -519,6 +607,7 @@ public partial class MainWindow : Window
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
         Title = $"{title} - Pylon";
         MusicCaption.Text = MiniTitle.Text;
+        if (_tray != null) _tray.Tip = MiniTitle.Text;
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
         if (!parsed) return;
         if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
@@ -583,6 +672,7 @@ public partial class MainWindow : Window
         if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
         Perf.Mark($"play, video hwnd {_mp.Hwnd}");
         _mp.Play(media);
+        MaybeTrackPopup(_index);
         Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
         _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
         if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
@@ -732,6 +822,7 @@ public partial class MainWindow : Window
     {
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
+        _duckPaused = false;
         if (_mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
         else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
         else _mp.SetPause(false);
@@ -1048,6 +1139,7 @@ public partial class MainWindow : Window
             case "net.file" or "net.disc" or "net.stream" or "net.live": if (!_netPresetApplying) Settings.Set("net.preset", "Custom"); break;
             case "perf.realtime" or "perf.priority": ApplyPriority(); break;
             case "rec.cast": StartCastDiscovery(); break;
+            case "ui.tray": ApplyTray(); break;
             case "ui.hideafter": _hideTimer.Interval = TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num(key))); break;
         }
         if (key.StartsWith("fx.eq.")) ApplyEqualizer(edited: true);
@@ -2531,6 +2623,27 @@ public partial class MainWindow : Window
                     for (var k = 0; k < double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * 60; k++) { Motion.DebugFrame(); LyricsPane.DebugFrame(); await Task.Delay(16); }
                     break;
                 case "flash": FlashPlayState(false); break;
+                case "desktop": // tray icon added and removed at once, other apps' sound, the track card
+                    {
+                        using var tray = new TrayIcon("Pylon test");
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"tray added={tray.Added} othersPlaying={OtherAudio.Playing()}{Environment.NewLine}");
+                        break;
+                    }
+                case "popup":
+                    TrackPopup.Show(ArtImage.Source, _title, _artist, 10, () => { });
+                    await Task.Delay(1200);
+                    Snap(Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible && w != _overlayWindow), outFile);
+                    Application.Current.Shutdown();
+                    return;
+                case "previewdump": // the seek-bar preview frame, as a PNG next to the snapshot
+                    {
+                        var enc = new PngBitmapEncoder();
+                        enc.Frames.Add(BitmapFrame.Create(_preview.Bitmap));
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"preview{arg}: {_preview.DebugState()}{Environment.NewLine}");
+                        using var f = File.Create(Path.ChangeExtension(outFile, $".preview{arg}.png"));
+                        enc.Save(f);
+                        break;
+                    }
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

@@ -322,7 +322,6 @@ public static class Settings
                 T("general.minor", "Show minor warnings", false, "Include notices in the log."),
                 Txt("general.cmdline", "Additional command line options", "", "e.g., --no-sub-autodetect-file", engine: true),
                 C("general.logformat", "Log format", "Plain text", ["Plain text", "HTML"]),
-                T("general.stats", "Collect playback statistics", false).Off(),
                 Act("Open configurations folder", "Open", _ => System.Diagnostics.Process.Start("explorer.exe", $"\"{Library.Dir}\"")),
                 Act("Reset all settings", "Reset", w =>
                 {
@@ -338,9 +337,6 @@ public static class Settings
 
         new("Interface", "cursor", "Interface Settings", "App",
         [
-            Sec("Skin",
-                T("ui.skin", "Use a custom skin", false).Off(),
-                FileOpt("ui.skinfile", "Skin file", "").Off()),
             Sec("Window",
                 T("ui.inside", "Play video inside main window", true).Off("Video always plays inside the player"),
                 C("ui.fit", "Resize window to fit video", "Never", ["Never", "On first video", "Always"]),
@@ -355,13 +351,10 @@ public static class Settings
                 S("ui.hideafter", "Hide after", 3, 0, 10, 0.5, " s"),
                 T("ui.fscontrols", "Show controls in fullscreen", true)),
             Sec("Notifications and System Tray",
-                T("ui.tray", "Show a system tray icon", false).Off(),
-                T("ui.traymin", "Start minimized to the tray", false).Off(),
-                C("ui.popup", "Show a popup when the track changes", "When minimized", ["Never", "When minimized", "Always"]).Off(),
-                S("ui.popuptime", "Popup duration", 5, 0, 10, 1, " s")
-                    .Off()),
-            Sec("Playlist",
-                T("ui.tree", "Show the playlist as a tree", false).Off()),
+                T("ui.tray", "Show a system tray icon", false, "Minimizing hides Pylon to the tray; click the icon to bring it back."),
+                T("ui.traymin", "Start minimized to the tray", false),
+                C("ui.popup", "Show a popup when the track changes", "When minimized", ["Never", "When minimized", "Always"]),
+                S("ui.popuptime", "Popup duration", 5, 0, 10, 1, " s")),
         ],
         [
             Sec("",
@@ -381,8 +374,6 @@ public static class Settings
                           Info = "Optional. Pylon finds a song's Spotify id by its name through ListenBrainz; for songs it misses, a free app from developer.spotify.com helps." },
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" }),
             Sec("",
-                T("ui.browser", "Show the file browser inside the open dialog", true).Off(),
-                T("ui.appicon", "Allow the app icon to change", true).Off(),
                 S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),
                 C("ui.sensitivity", "Fullscreen controls sensitivity", "Medium", ["Low", "Medium", "High"])),
         ]),
@@ -431,7 +422,7 @@ public static class Settings
                 C("playback.resume", "Continue where you left off", "Ask", ["Never", "Ask", "Always"]),
                 T("playback.autoplay", "Start playing as soon as a file opens", true),
                 S("playback.speed", "Default playback speed", 1, 0.25, 2, 0.25, "×"),
-                T("playback.duck", "Pause when another app uses audio", false).Off()),
+                T("playback.duck", "Pause when another app uses audio", false, "Resumes a few seconds after the other sound stops.")),
             Sec("Tracks",
                 C("playback.quality", "Preferred video quality", "Best available", ["Best available", "2160p", "1440p", "1080p", "720p", "480p", "360p"], "For adaptive streams.", engine: true),
                 C("playback.menulang", "Preferred menu language", "System language", LanguageNames, "For DVD and Blu-ray menus.", engine: true),

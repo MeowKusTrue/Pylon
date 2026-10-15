@@ -106,6 +106,7 @@ public static class AudioTap
         Fft(buf);
 
         var result = new double[count];
+        var dbs = new double[count];
         const double lo = 40, hi = 16000;
         for (var b = 0; b < count; b++)
         {
@@ -113,12 +114,18 @@ public static class AudioTap
             var k1 = Math.Max(k0 + 1, (int)(lo * Math.Pow(hi / lo, (double)(b + 1) / count) * N / Rate));
             double peak = 0;
             for (var k = k0; k < k1 && k < N / 2; k++) peak = Math.Max(peak, buf[k].Magnitude);
-            var db = 20 * Math.Log10(peak / (N / 4.0) / Math.Max(Math.Pow(Volume, 3), 1e-6) + 1e-9); // 0 dB = full-scale sine at 100%
-            // ponytail: fixed -60..-6 dB window, add auto-gain if quiet masters look flat
-            result[b] = Math.Clamp((db + 60) / 54, 0, 1);
+            dbs[b] = 20 * Math.Log10(peak / (N / 4.0) / Math.Max(Math.Pow(Volume, 3), 1e-6) + 1e-9); // 0 dB = full-scale sine at 100%
         }
+        // a 54 dB window whose top follows the music's recent peak (jumps up, sinks ~3 dB/s), so quiet masters move too;
+        // it never drops below -30 dB, or silence would show its noise
+        var loudest = dbs.Max();
+        _top = loudest > _top ? loudest : Math.Max(-30, _top - 0.05);
+        _top = Math.Min(_top, -6);
+        for (var b = 0; b < count; b++) result[b] = Math.Clamp((dbs[b] - (_top - 54)) / 54, 0, 1);
         return result;
     }
+
+    static double _top = -6;
 
     static void Fft(Complex[] a)
     {

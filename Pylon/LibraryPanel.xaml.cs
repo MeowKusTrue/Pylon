@@ -89,7 +89,7 @@ public partial class LibraryPanel : UserControl
         Rail.Children.Add(add);
         RenderPins();
         Library.Changed += () => { RenderPins(); if (IsVisible) Render(); };
-        IsVisibleChanged += (_, _) => { if (IsVisible) Render(); };
+        IsVisibleChanged += (_, _) => { if (IsVisible) { RenderPins(); Render(); } }; // the library may load after this panel is built
     }
 
     /// <summary>Pinned folders as rail buttons between the sections and "+".</summary>
@@ -102,18 +102,49 @@ public partial class LibraryPanel : UserControl
         var line = new Border { Height = 1, Width = 22, Margin = new Thickness(0, 0, 0, 14), Tag = "pin" };
         line.SetResourceReference(Border.BackgroundProperty, "DividerDim");
         Rail.Children.Insert(at++, line);
-        foreach (var dir in pins)
+        for (var k = 0; k < pins.Count; k++)
         {
-            var b = new Button { Style = (Style)FindResource("IconButton"), Tag = "folder", ToolTip = Library.DisplayName(dir), Width = 30, Margin = new Thickness(0, 0, 0, 14), DataContext = dir };
+            var dir = pins[k];
+            var name = Library.DisplayName(dir);
+            // a tile with the folder's first letter in its own color, so pins tell apart at a glance
+            var hue = (uint)name.ToLowerInvariant().Aggregate(17, (h, c) => h * 31 + c) % 360;
+            var tile = new Border
+            {
+                Width = 26, Height = 26, CornerRadius = new CornerRadius(7), Background = new SolidColorBrush(FromHue(hue)),
+                Child = new TextBlock { Text = name[..1].ToUpperInvariant(), FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White,
+                                        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+            };
+            var b = new Button { Content = tile, ToolTip = name, Width = 30, Height = 30, Margin = new Thickness(0, 0, 0, 14), DataContext = dir,
+                                 Cursor = Cursors.Hand, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Template = PlainButton };
             b.Click += (_, _) => ShowFolder(dir);
+            var index = k;
             b.MouseRightButtonUp += (_, e) =>
             {
                 ShowMenu(b, [Item("Open", "folder-open", () => ShowFolder(dir)), Item("Play All", "play", () => PlayFolder(dir)),
-                             Item("Show in Explorer", "arrow-square-out", () => Reveal(dir)), new Separator(), PinItem(dir)], PlacementMode.Right);
+                             Item("Show in Explorer", "arrow-square-out", () => Reveal(dir)), new Separator(),
+                             Item("Move Up", "arrow-up", () => MovePin(index, -1)), Item("Move Down", "arrow-down", () => MovePin(index, +1)), PinItem(dir)], PlacementMode.Right);
                 e.Handled = true;
             };
             Rail.Children.Insert(at++, b);
         }
+    }
+
+    static readonly ControlTemplate PlainButton = new(typeof(Button)) { VisualTree = new FrameworkElementFactory(typeof(ContentPresenter)) };
+
+    static Color FromHue(double h)
+    {
+        // soft, readable under white text: saturation 45 %, lightness 42 %
+        double c = (1 - Math.Abs(2 * 0.42 - 1)) * 0.45, x = c * (1 - Math.Abs(h / 60 % 2 - 1)), m = 0.42 - c / 2;
+        var (r, g, b) = h < 60 ? (c, x, 0d) : h < 120 ? (x, c, 0d) : h < 180 ? (0d, c, x) : h < 240 ? (0d, x, c) : h < 300 ? (x, 0d, c) : (c, 0d, x);
+        return Color.FromRgb((byte)((r + m) * 255), (byte)((g + m) * 255), (byte)((b + m) * 255));
+    }
+
+    static void MovePin(int index, int by)
+    {
+        var pins = Library.Data.Pinned;
+        if (index + by < 0 || index + by >= pins.Count) return;
+        (pins[index], pins[index + by]) = (pins[index + by], pins[index]);
+        Library.Touch();
     }
 
     static MenuItem PinItem(string dir)
