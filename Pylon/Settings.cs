@@ -315,7 +315,7 @@ public static class Settings
                 Seg("ui.corners", "Corner rounding", "Moderate", "Off", "Slight", "Moderate", "Strong")),
             Sec("Startup",
                 T("general.errors", "Show confirmation and error dialogs", false, "Pop up a message when a file can't be played."),
-                T("general.updates", "Check for updates automatically", true, "Checks GitHub releases once a day."),
+                T("general.updates", "Check for updates automatically", true, "Checks GitHub releases at startup."),
                 Act("Check for updates", "Check now", w => CheckUpdates?.Invoke(w))),
             Sec("Diagnostics",
                 T("general.dev", "Developer mode", false, "Shows developer options under Advanced."),

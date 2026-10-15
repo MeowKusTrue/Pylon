@@ -21,11 +21,15 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
+      - name: Install Inno Setup and Velopack
+        run: |
+          choco install innosetup -y --no-progress
+          dotnet tool install -g vpk
 
       - name: Build
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # lets build.ps1 fetch the previous release for the delta package
         run: ./build.ps1 -Version ($env:GITHUB_REF_NAME -replace '^v', '')
 
       - name: Publish release
@@ -33,13 +37,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = Get-ChildItem dist -File | ForEach-Object FullName
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          # notes = this version's section of CHANGELOG.md (both languages; the app picks one), else GitHub's generated list
-          $section = [regex]::Match((Get-Content CHANGELOG.md -Raw), "(?ms)^## $([regex]::Escape($version))\s*\r?\n(.*?)(?=^## |\z)")
-          if ($section.Success) {
-            Set-Content notes.md $section.Groups[1].Value.Trim() -Encoding utf8
-            gh release create $env:GITHUB_REF_NAME @files --title "Pylon $version" --notes-file notes.md
-          } else {
-            gh release create $env:GITHUB_REF_NAME @files --title "Pylon $version" --generate-notes
-          }
+          # Velopack: setup, portable zip, full + delta packages and the update feed (releases.win.json)
+          vpk upload github -o dist\releases --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
+            --publish --tag $env:GITHUB_REF_NAME --releaseName "Pylon $version"
+          # bridge for 1.0-1.2 (their updater looks for *-setup-win-x64.exe) and the changelog as the release notes
+          $bridge = "dist\releases\Pylon-$version-setup-win-x64.exe"
+          if (Test-Path $bridge) { gh release upload $env:GITHUB_REF_NAME $bridge --clobber }
+          gh release edit $env:GITHUB_REF_NAME --notes-file dist\notes.md

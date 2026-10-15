@@ -26,7 +26,7 @@ public static class SingleInstance
             w.WriteLine(); // end of message (also just brings the window forward when empty)
             return true;
         }
-        catch (Exception e) when (e is TimeoutException or IOException) { return false; }
+        catch (Exception e) when (e is TimeoutException or IOException or UnauthorizedAccessException) { return false; } // can't reach that copy: just start
     }
 
     /// <summary>Lets a fresh copy of the app start while this one is still closing (language change, updates).</summary>

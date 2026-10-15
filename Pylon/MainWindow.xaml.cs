@@ -895,6 +895,8 @@ public partial class MainWindow : Window
         var current = Updater.Current;
         var last = Settings.Str("app.lastversion");
         Settings.Set("app.lastversion", current.ToString(3));
+        // moved over from the Inno installer (the bridge installs silently, so "first run" isn't flagged): drop the old copy
+        if (Updater.IsVelopackInstall && ShellRegistration.HasInnoInstall) _ = Task.Run(ShellRegistration.RemoveInnoInstall);
         if (!Version.TryParse(last, out var previous) || previous >= current) return;
         string? notes;
         try { notes = await Updater.NotesForAsync(current); }

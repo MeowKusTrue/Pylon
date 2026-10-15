@@ -7,8 +7,9 @@ using Microsoft.Win32;
 namespace Pylon;
 
 /// <summary>
-/// Updates from GitHub Releases: the release workflow publishes Pylon-x.y.z-setup-win-x64.exe on every "v*" tag;
-/// installed copies download it and run it silently, portable copies get the release page.
+/// Updates from GitHub Releases. Copies installed by Velopack update in place with delta packages (only what changed is
+/// downloaded) and restart; a copy from the old Inno Setup installer downloads the Velopack setup (that is how it moves
+/// over); portable copies get the release page.
 /// </summary>
 public static class Updater
 {
@@ -23,10 +24,36 @@ public static class Updater
 
     public record Release(Version Version, string Tag, string Notes, string? SetupUrl, string PageUrl);
 
+    static Velopack.UpdateManager? _velopack;
+    static bool _velopackChecked;
+    static Velopack.UpdateInfo? _pending;
+
+    /// <summary>Velopack's manager when this copy was installed by it, else null.</summary>
+    static Velopack.UpdateManager? Velopack
+    {
+        get
+        {
+            if (_velopackChecked) return _velopack;
+            _velopackChecked = true;
+            try
+            {
+                // PYLON_UPDATE_FEED: a local folder with packages, for testing updates without GitHub
+                var m = Environment.GetEnvironmentVariable("PYLON_UPDATE_FEED") is { Length: > 0 } feed
+                    ? new Velopack.UpdateManager(feed)
+                    : new Velopack.UpdateManager(new Velopack.Sources.GithubSource($"https://github.com/{Repo}", null, false));
+                if (m.IsInstalled) _velopack = m;
+            }
+            catch (Exception) { } // not a Velopack install (dev build, portable, Inno)
+            return _velopack;
+        }
+    }
+
     public static Version Current => typeof(Updater).Assembly.GetName().Version ?? new Version(0, 0);
 
-    /// <summary>Installed with the setup (vs. the portable zip): only then can we update in place.</summary>
-    public static bool IsInstalled =>
+    public static bool IsVelopackInstall => Velopack != null;
+
+    /// <summary>Installed with a setup (vs. the portable zip): only then can we update in place.</summary>
+    public static bool IsInstalled => Velopack != null ||
         new[] { Registry.CurrentUser, Registry.LocalMachine }.Any(root =>
             root.OpenSubKey($@"Software\Microsoft\Windows\CurrentVersion\Uninstall\{AppId}") is { } key
             && key.GetValue("InstallLocation") is string dir
@@ -35,6 +62,14 @@ public static class Updater
     /// <summary>The latest release when it's newer than this build, otherwise null. Throws on network errors.</summary>
     public static async Task<Release?> CheckAsync()
     {
+        if (Velopack is { } velo)
+        {
+            _pending = await velo.CheckForUpdatesAsync();
+            if (_pending == null) return null;
+            var t = _pending.TargetFullRelease;
+            var v = new Version(t.Version.Major, t.Version.Minor, t.Version.Patch);
+            return new Release(v, $"v{v.ToString(3)}", t.NotesMarkdown ?? "", "velopack", $"https://github.com/{Repo}/releases/tag/v{v.ToString(3)}");
+        }
         using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest"));
         var root = doc.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? "";
@@ -66,9 +101,19 @@ public static class Updater
 
     public static void MarkChecked() => Settings.Set("app.lastupdatecheck", DateTime.UtcNow.ToString("o"));
 
-    /// <summary>Downloads the setup and starts it silently; the installer relaunches Pylon when it's done.</summary>
+    /// <summary>
+    /// Velopack: downloads the update (deltas when possible) and hands it to Velopack's updater, which waits for Pylon to
+    /// close, applies it and starts the new version. Inno copies: downloads the setup and starts it silently.
+    /// The caller closes Pylon afterwards (so settings and position get saved).
+    /// </summary>
     public static async Task DownloadAndRunAsync(Release r, IProgress<double>? progress)
     {
+        if (Velopack is { } velo && _pending != null)
+        {
+            await velo.DownloadUpdatesAsync(_pending, p => progress?.Report(p / 100.0));
+            velo.WaitExitThenApplyUpdates(_pending, silent: true, restart: true);
+            return;
+        }
         var file = Path.Combine(Path.GetTempPath(), $"Pylon-{r.Version}-setup.exe");
         using (var resp = await Http.GetAsync(r.SetupUrl, HttpCompletionOption.ResponseHeadersRead))
         {

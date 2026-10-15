@@ -29,15 +29,15 @@ Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC R
 - **Themes:** dark, light, follow Windows, OLED black, Midnight, Nord and Sepia, plus 9 accent colors and adjustable corner rounding (including the window corners on Windows 11).
 - **Lyrics:** syllable-by-syllable karaoke in the style of Spicy Lyrics (glow, blur by distance, click a line to jump). Reads `.ttml` (Apple / Spicy Lyrics / spicy-translate, with background vocals and duets) and `.lrc` next to the track, or finds synced lyrics on LRCLIB.
 - **Video:** NVIDIA RTX / Intel Super Resolution and RTX Video HDR, chapters on the seek bar, bookmarks (`Ctrl+B`), 360° video you look around with the mouse, a blurred backdrop of the video's own frames instead of black bars.
-- **Windows:** media session (track and cover in the volume flyout and on the lock screen, media keys), taskbar thumbnail buttons, own icons for video and audio files.
+- **Windows:** media session (track and cover in the volume flyout and on the lock screen, media keys), taskbar thumbnail buttons, own icon for every file format.
 - **Playback tools:** A-B loop (`Shift+L`, range shown on the seek bar), sleep timer with a gentle fade-out, a real waveform on the music seek bar (decoded once in the background, cached).
 - **Motion:** quick ease-out transitions for panels, menus, dialogs and library pages; hotkey actions stay instant, and Windows' "Animation effects" switch turns them off.
 - **Audio spectrum:** live bars under the cover art, optionally over video too. Only Pylon's own sound is captured (WASAPI process loopback, Windows 10 2004+).
 - **Languages:** English and Russian (Settings → General → Interface language).
-- **Updates:** checks GitHub Releases once a day and updates itself in place.
+- **Updates:** checks GitHub Releases at startup and updates itself in place, downloading only what changed (delta updates). After an update it shows what's new.
 - **Controls:** keyboard shortcuts you can rebind (also system-wide), mouse-wheel and click actions, and a control bar you choose the buttons for.
 - **Also:** record (`Shift+R`), snapshots (`Shift+S`), Chromecast, subtitle matching across a whole season, profiles, and a single instance.
-- **Windows integration:** the installer registers audio and video file types and adds "Play with Pylon" to folders.
+- **Windows integration:** the installer registers audio and video file types, each with its own icon, and adds "Play with Pylon" to folders.
 
 | | |
 |---|---|
@@ -48,27 +48,28 @@ Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC R
 
 Download from [Releases](../../releases):
 
-- `Pylon-x.y.z-setup-win-x64.exe` is the installer. It installs per user, without admin rights, and sets up file associations.
-- `Pylon-x.y.z-win-x64-portable.zip` runs from any folder, but doesn't register file types.
+- `Pylon-win-Setup.exe` is the installer. It installs per user into `%LocalAppData%\Pylon`, without admin rights, and registers file types.
+- `Pylon-win-Portable.zip` runs from any folder and updates itself too, but doesn't register file types.
 
-Windows doesn't let apps set themselves as the default player. To choose Pylon, tick the last box in the installer, or go to **Settings → Library → Default player**.
+Windows doesn't let apps set themselves as the default player. To choose Pylon, go to **Settings → Library → Default player**.
+
+Coming from Pylon 1.0–1.2? Update from the app as usual. It moves to the new installer and removes the old copy; your settings and library stay.
 
 Requires Windows 10 or 11, x64. The .NET runtime is bundled.
 
 ## Updates
 
-Pylon checks [the latest release](../../releases/latest) once a day. You can turn this off in **Settings → General → Check for updates automatically**, or check yourself with **… → Check for Updates…**.
+Pylon checks [the latest release](../../releases/latest) at startup. You can turn this off in **Settings → General → Check for updates automatically**, or check yourself with **… → Check for Updates…**.
 
-- **Installed copy:** click **Update now**. Pylon downloads the new setup, installs it silently, and restarts.
-- **Portable copy:** the update opens the release page so you can download the new zip.
+Click **Update now**: Pylon downloads only the files that changed (usually a few hundred KB), restarts into the new version and shows what's new in it.
 
 ## Build
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The installer also needs [Inno Setup 6](https://jrsoftware.org/isdl.php).
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). Packaging needs [Velopack](https://velopack.io) (`dotnet tool install -g vpk`); [Inno Setup 6](https://jrsoftware.org/isdl.php) builds the small bridge that moves 1.0–1.2 installs over.
 
 ```powershell
 dotnet run --project Pylon          # run from source
-.\build.ps1                         # dist\: portable zip + installer
+.\build.ps1                         # dist\releases\: installer, portable zip, update packages
 .\build.ps1 -Version 1.1.0
 ```
 
@@ -82,8 +83,8 @@ Releases are built by GitHub Actions (`.github/workflows/release.yml`). Every pu
    git tag v1.1.0
    git push origin v1.1.0
    ```
-3. The workflow builds the installer and the portable zip and publishes the GitHub release. The release notes are generated from commits since the previous tag.
-4. Installed copies see the update within a day, or right away through **Check for Updates…**.
+3. The workflow builds the installer, the portable zip and the full and delta update packages, and publishes the GitHub release. The release notes are this version's section of [CHANGELOG.md](CHANGELOG.md), so write it before tagging.
+4. Installed copies see the update the next time they start, or right away through **Check for Updates…**.
 
 The version number comes from the tag; you don't need to edit `Pylon.csproj`.
 

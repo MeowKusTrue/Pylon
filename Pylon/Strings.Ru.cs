@@ -545,7 +545,7 @@ public static partial class Strings
         ["Show confirmation and error dialogs"] = "Показывать подтверждения и ошибки",
         ["Pop up a message when a file can't be played."] = "Показывать сообщение, если файл не воспроизводится.",
         ["Check for updates automatically"] = "Проверять обновления автоматически",
-        ["Checks GitHub releases once a day."] = "Раз в день проверяет релизы на GitHub.",
+        ["Checks GitHub releases at startup."] = "Проверяет релизы на GitHub при запуске.",
         ["Check now"] = "Проверить",
         ["Diagnostics"] = "Диагностика",
         ["Developer mode"] = "Режим разработчика",
