@@ -213,15 +213,6 @@ public static class Settings
         Add($"--audio-replay-gain-preamp={Inv(Num("audio.preamp"))}");
         Add($"--audio-replay-gain-default={Inv(Num("audio.rgdefault"))}");
         Add($"--audio-language={Lang("audio.lang")}");
-        switch (Str("audio.visualizer"))
-        {
-            case "Goom": Add("--audio-visual=goom"); break;
-            case "Spectrum" or "Scope" or "Spectrometer" or "VU meter" or "Wave":
-                Add("--audio-visual=visual");
-                Add("--effect-list=" + Str("audio.visualizer").ToLowerInvariant() switch { "vu meter" => "vuMeter", var v => v });
-                break;
-        }
-        if (Str("audio.vissize") is var vs && vs.Contains('x')) { Add($"--effect-width={vs.Split('x')[0]}"); Add($"--effect-height={vs.Split('x')[1]}"); }
         if (Bool("audio.spdif")) Add("--spdif");
         Add($"--force-dolby-surround={Str("audio.dolby") switch { "On" => 1, "Off" => 2, _ => 0 }}");
         // this libVLC build has no soxr, and speex has priority 0, so "any" picked the "ugly" resampler (no filtering at all):
@@ -385,6 +376,8 @@ public static class Settings
                 T("ui.pausemin", "Pause video when window is minimized", false),
                 T("ui.front", "Bring Pylon to the front when playback starts", false),
                 T("ui.cover", "Show cover art in the window when playing audio", true),
+                C("ui.scene", "Full-screen visualizer", "Off", ["Off", "Radial", "Aurora", "Horizon"],
+                    "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection."),
                 C("ui.spectrumstyle", "Visualizer", "Bars", ["Off", "Bars", "Mirror", "Wave", "Pulse"], "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music."),
                 T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
                 Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
@@ -557,16 +550,13 @@ public static class Settings
             Sec("Tracks",
                 C("audio.lang", "Preferred audio language", "System language", LanguageNames, engine: true),
                 N("audio.delay", "Audio delay", 0, -10, 10, " s", step: 0.05)),
-            Sec("Visualization",
-                C("audio.visualizer", "VLC visualization instead of the cover", "Off", ["Off", "Spectrum", "Scope", "Spectrometer", "VU meter", "Goom"], "Shown instead of cover art when playing music.", engine: true)),
         ],
         [
             Sec("",
                 T("audio.spdif", "Pass compressed audio to the receiver", false, "S/PDIF or HDMI passthrough.", engine: true),
                 C("audio.dolby", "Detect Dolby Surround", "Automatic", ["Automatic", "On", "Off"], engine: true),
                 C("audio.resampler", "Resampling quality", "Balanced", ["Fast", "Balanced", "Best"], engine: true),
-                C("audio.role", "Media role", "Video", ["Video", "Music", "Communication", "Game", "Notification", "Animation", "Production", "Accessibility", "Test"], engine: true),
-                C("audio.vissize", "Visualization size", "Match window", ["Match window", "640x360", "1280x720", "1920x1080"], engine: true)),
+                C("audio.role", "Media role", "Video", ["Video", "Music", "Communication", "Game", "Notification", "Animation", "Production", "Accessibility", "Test"], engine: true)),
         ]),
 
         new("Subtitles", "subtitles", "Subtitle Defaults", "Media",

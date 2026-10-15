@@ -821,7 +821,6 @@
   "Pylon opens {0} of {1} formats.": "Pylon opens {0} of {1} formats.",
   "Took {0} formats nobody had chosen an app for.": "Took {0} formats nobody had chosen an app for.",
   "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.": "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.",
-  "VLC visualization instead of the cover": "VLC visualization instead of the cover",
   "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.": "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.",
   "Skip buttons on the bar (−15 / +15)": "Skip buttons on the bar (−15 / +15)",
   "Very short jump (Shift + ← / →)": "Very short jump (Shift + ← / →)",
@@ -908,7 +907,6 @@
   "Preferred audio language": "Preferred audio language",
   "Audio delay": "Audio delay",
   "Visualization": "Visualization",
-  "Shown instead of cover art when playing music.": "Shown instead of cover art when playing music.",
   "Spectrum": "Spectrum",
   "Scope": "Scope",
   "Spectrometer": "Spectrometer",
@@ -925,7 +923,6 @@
   "Production": "Production",
   "Accessibility": "Accessibility",
   "Test": "Test",
-  "Visualization size": "Visualization size",
   "Match window": "Match window",
   "Tracks & Languages": "Tracks & Languages",
   "Enable subtitles": "Enable subtitles",
@@ -1066,5 +1063,11 @@
   "{0} items": "{0} items",
   "{0} items (few)": "{0} items",
   "Help translate Pylon": "Help translate Pylon",
-  "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.": "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there."
+  "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.": "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.",
+  "Full-screen visualizer": "Full-screen visualizer",
+  "Full-screen Visualizer": "Full-screen Visualizer",
+  "Radial": "Radial",
+  "Aurora": "Aurora",
+  "Horizon": "Horizon",
+  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection."
 }

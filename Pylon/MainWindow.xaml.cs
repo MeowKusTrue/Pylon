@@ -138,6 +138,7 @@ public partial class MainWindow : Window
         // 30 updates a second move the bar smoothly; a Rendering hook ran at the monitor's rate (144+ Hz) for the whole session
         // and kept WPF redrawing the waveform bar all the time, which cost more than a core
         new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher).Start();
+        Scene.Cover = () => ArtFrame.IsVisible && ArtFrame.ActualWidth > 0 ? ArtFrame.TransformToVisual(Scene).TransformBounds(new Rect(ArtFrame.RenderSize)) : null;
         // the preview card's shadow reaches down over the bar; with a hit-testable popup window the pointer "left" the bar,
         // the popup closed, the pointer was back on the bar, it reopened... (flickering cursor and card). Make it click-through.
         SeekPreview.Opened += (_, _) =>
@@ -161,7 +162,7 @@ public partial class MainWindow : Window
             StartCastDiscovery();
             ApplyPriority();
             UpdateControlButtons();
-            SingleInstance.Listen(this);
+            if (Environment.GetEnvironmentVariable("PYLON_DATA") == null) SingleInstance.Listen(this); // an isolated copy never takes files meant for the main one
             var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
             if (args.Length > 0) Open(args);
             if (Settings.Bool("ui.compact")) ToggleMiniplayer();
@@ -815,6 +816,7 @@ public partial class MainWindow : Window
         var bmp = url == null ? null : LoadFull(url);
         ArtImage.Source = bmp;
         ArtBackdrop.SetImage(bmp);
+        Scene.SetCover(bmp);
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -927,6 +929,8 @@ public partial class MainWindow : Window
         AudioTap.Volume = _mp.Volume / 100.0;
         MusicSpectrum.Active = _mp.IsPlaying && spectrum; // music only: video has no visualizer
         MusicSpectrum.Idle = !_mp.IsPlaying && _index >= 0 && spectrum; // paused: keeps breathing
+        Scene.Active = _mp.IsPlaying && _isAudio && SceneView.On;
+        Scene.Idle = !_mp.IsPlaying && _index >= 0 && _isAudio && SceneView.On;
         SpeedText.Text = $"{_mp.Rate:0.##}×";
         if (++_ticks % 25 == 0 && _mp.IsPlaying) SaveProgress(); // every ~5 s
     }
@@ -1247,7 +1251,8 @@ public partial class MainWindow : Window
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.lite": ApplyLayout(); LyricsPane.Reblur(); break;
             case "lyrics.style": LyricsPane.Restyle(); break;
-            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "ui.scene": Scene.Restyle(); break;
+            case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
@@ -1382,10 +1387,9 @@ public partial class MainWindow : Window
     void ApplyLayout()
     {
         var hasMedia = _index >= 0;
-        var visualizer = Settings.Str("audio.visualizer") != "Off";
-        bool video = hasMedia && (!_isAudio || visualizer);
+        bool video = hasMedia && !_isAudio;
         IdleView.Visibility = hasMedia ? Visibility.Collapsed : Visibility.Visible;
-        MusicView.Visibility = hasMedia && _isAudio && !visualizer ? Visibility.Visible : Visibility.Collapsed;
+        MusicView.Visibility = hasMedia && _isAudio ? Visibility.Visible : Visibility.Collapsed;
         ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
         MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
         var spectrum = Spectrum.On;
@@ -2876,6 +2880,8 @@ public partial class MainWindow : Window
                     Settings.Set("ui.spectrumstyle", v);
                 }, check: (Spectrum.On ? Spectrum.Style : "Off") == v)),
             ]),
+            Sub("Full-screen Visualizer", null, [.. new[] { "Off", "Radial", "Aurora", "Horizon" }.Select(v =>
+                (object)Item(v, null, null, () => Settings.Set("ui.scene", v), check: (SceneView.On ? SceneView.Style : "Off") == v))]),
             .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
@@ -3261,6 +3267,7 @@ public partial class MainWindow : Window
                         break;
                     }
                 case "spectrum": MusicSpectrum.DebugFill(1.3); break;
+                case "scene": Scene.DebugFill(); break;
                 case "spotify":
                     {
                         var list = await SpotifyImport.ReadAsync(arg);

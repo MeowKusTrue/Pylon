@@ -821,7 +821,6 @@
   "Pylon opens {0} of {1} formats.": "Pylon открывает {0} из {1} форматов.",
   "Took {0} formats nobody had chosen an app for.": "Забрал {0} форматов, для которых ещё не было выбрано приложение.",
   "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.": "Остальные Windows просит подтвердить: в открывшемся окне нажмите «Установить по умолчанию» рядом с Pylon.",
-  "VLC visualization instead of the cover": "Визуализация VLC вместо обложки",
   "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.": "Под обложкой, пока играет музыка (то же, что правый клик → «Визуализация»). Пульс: мягкие волны, которые дышат с музыкой.",
   "Skip buttons on the bar (−15 / +15)": "Кнопки перемотки на панели (−15 / +15)",
   "Very short jump (Shift + ← / →)": "Очень короткий прыжок (Shift + ← / →)",
@@ -908,7 +907,6 @@
   "Preferred audio language": "Предпочтительный язык аудио",
   "Audio delay": "Задержка звука",
   "Visualization": "Визуализация",
-  "Shown instead of cover art when playing music.": "Показывается вместо обложки при воспроизведении музыки.",
   "Spectrum": "Спектр",
   "Scope": "Осциллограф",
   "Spectrometer": "Спектрометр",
@@ -925,7 +923,6 @@
   "Production": "Производство",
   "Accessibility": "Специальные возможности",
   "Test": "Тест",
-  "Visualization size": "Размер визуализации",
   "Match window": "По размеру окна",
   "Tracks & Languages": "Дорожки и языки",
   "Enable subtitles": "Включить субтитры",
@@ -1066,5 +1063,11 @@
   "{0} items": "",
   "{0} items (few)": "",
   "Help translate Pylon": "Помочь с переводом Pylon",
-  "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.": "Pylon переводят его пользователи на Weblate, прямо в браузере. Вашего языка нет или в переводе ошибка? Исправьте там."
+  "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.": "Pylon переводят его пользователи на Weblate, прямо в браузере. Вашего языка нет или в переводе ошибка? Исправьте там.",
+  "Full-screen visualizer": "Полноэкранная визуализация",
+  "Full-screen Visualizer": "Полноэкранная визуализация",
+  "Radial": "Круг",
+  "Aurora": "Сияние",
+  "Horizon": "Горизонт",
+  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "За обложкой, пока играет музыка, в цветах обложки. Круг: лучи вокруг обложки. Сияние: мягкие ленты. Горизонт: широкие столбики с отражением."
 }

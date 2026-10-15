@@ -230,13 +230,18 @@ public static class AudioTap
     public static double[] Bands(int count)
     {
         var buf = Buf; // reused: a fresh 2048-value array every frame kept the garbage collector busy
-        lock (Gate)
-            for (var i = 0; i < N; i++)
-                buf[i] = Ring[(_pos + i) % N] * (0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (N - 1))); // Hann window
-        Fft(buf);
+        // the strip under the cover and the full-screen scene ask in the same frame: one FFT serves both
+        if (Environment.TickCount64 - _fftAt > 12)
+        {
+            _fftAt = Environment.TickCount64;
+            lock (Gate)
+                for (var i = 0; i < N; i++)
+                    buf[i] = Ring[(_pos + i) % N] * (0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (N - 1))); // Hann window
+            Fft(buf);
+        }
 
         var result = new double[count];
-        var dbs = Dbs.Length == count ? Dbs : Dbs = new double[count];
+        var dbs = new double[count];
         const double lo = 40, hi = 16000;
         for (var b = 0; b < count; b++)
         {
@@ -249,15 +254,16 @@ public static class AudioTap
         // a 54 dB window whose top follows the music's recent peak (jumps up, sinks ~3 dB/s), so quiet masters move too;
         // it never drops below -30 dB, or silence would show its noise
         var loudest = dbs.Max();
-        _top = loudest > _top ? loudest : Math.Max(-30, _top - 0.05);
-        _top = Math.Min(_top, -6);
-        for (var b = 0; b < count; b++) result[b] = Math.Clamp((dbs[b] - (_top - 54)) / 54, 0, 1);
+        var top = Tops.GetValueOrDefault(count, -6);
+        top = loudest > top ? loudest : Math.Max(-30, top - 0.05);
+        Tops[count] = top = Math.Min(top, -6);
+        for (var b = 0; b < count; b++) result[b] = Math.Clamp((dbs[b] - (top - 54)) / 54, 0, 1);
         return result;
     }
 
-    static double _top = -6;
+    static readonly Dictionary<int, double> Tops = []; // per caller (band count): each follows the peak at its own pace
+    static long _fftAt;
     static readonly Complex[] Buf = new Complex[N];
-    static double[] Dbs = [];
 
     static void Fft(Complex[] a)
     {

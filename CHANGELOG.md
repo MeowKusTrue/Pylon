@@ -3,6 +3,26 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.5
+
+<!-- ru -->
+**Новое**
+- **Полноэкранная визуализация** за обложкой, в цветах обложки: «Круг» — лучи вокруг обложки, «Сияние» — мягкие волнистые ленты, «Горизонт» — широкие столбики с отражением. На паузе она тихо «дышит». Включается в Настройки → Интерфейс или правым кликом → «Полноэкранная визуализация». Работает экономно: 30 кадров в секунду, а в свёрнутом окне не рисует ничего.
+- Встроенная визуализация VLC (Goom, «Осциллограф» и прочие) убрана: её заменила новая.
+
+**Исправления**
+- Полоса спектра и полноэкранная визуализация используют один и тот же анализ звука на кадр.
+- Подпись под обложкой читается поверх визуализации.
+
+<!-- en -->
+**New**
+- **Full-screen visualizer** behind the cover, in the cover's colors: Radial (rays round the cover), Aurora (soft ribbons) and Horizon (wide bars with a reflection). It breathes quietly while paused. Turn it on in Settings → Interface or right-click → Full-screen Visualizer. Kept light: 30 frames a second, nothing while minimized.
+- VLC's own visualizations (Goom, scope and the rest) are gone: the new one replaces them.
+
+**Fixes**
+- The spectrum strip and the full-screen visualizer share one sound analysis per frame.
+- The caption under the cover stays readable over the visualizer.
+
 ## 1.9.4
 
 <!-- ru -->
