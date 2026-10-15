@@ -366,6 +366,7 @@ public static class Settings
                 T("ui.front", "Bring Pylon to the front when playback starts", false),
                 T("ui.cover", "Show cover art in the window when playing audio", true),
                 Seg("ui.spectrum", "Audio spectrum", "Music", "Off", "Music", "Music and video"),
+                C("ui.spectrumstyle", "Spectrum style", "Bars", ["Bars", "Mirror", "Wave", "Pulse"], "Pulse: soft waves that breathe with the music."),
                 T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
                 Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Blurred frame"),
                 T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts.")),

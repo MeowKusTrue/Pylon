@@ -44,26 +44,122 @@ public class Spectrum : FrameworkElement
         }
     }
 
+    readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    double _phase, _last;
+
     void Tick(object? sender, EventArgs e)
     {
         var bands = AudioTap.Bands(Bars);
         for (var i = 0; i < Bars; i++)
             _levels[i] = bands[i] > _levels[i] ? _levels[i] + (bands[i] - _levels[i]) * 0.6 : Math.Max(bands[i], _levels[i] - 0.025); // quick rise, slow fall
+        var now = _clock.Elapsed.TotalSeconds;
+        _phase += (now - _last) * (0.6 + 2.4 * _levels.Average()); // "Pulse" drifts faster when the music is loud
+        _last = now;
         InvalidateVisual();
     }
+
+#if DEBUG
+    /// <summary>A fixed pattern instead of captured sound (snapshot tests have no audio to capture).</summary>
+    public void DebugFill(double phase)
+    {
+        for (var i = 0; i < Bars; i++) _levels[i] = 0.25 + 0.6 * Math.Abs(Math.Sin(i * 0.23 + phase)) * (1 - i / (double)Bars * 0.6);
+        _phase = phase * 3;
+        CompositionTarget.Rendering -= Tick; // the silent test capture would zero it again
+        _hooked = true;
+        InvalidateVisual();
+    }
+#endif
+
+    /// <summary>Settings → Interface → Spectrum style: Bars, Mirror, Wave or Pulse.</summary>
+    public static string Style => Settings.Str("ui.spectrumstyle");
 
     protected override void OnRender(DrawingContext dc)
     {
         if (!_hooked || ActualWidth <= 0) return;
-        var brush = TryFindResource("Accent") as Brush ?? Brushes.Orange;
-        var slot = ActualWidth / Bars;
+        var color = (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
+        double w = ActualWidth, h = ActualHeight;
+        switch (Style)
+        {
+            case "Mirror": Mirror(dc, new SolidColorBrush(color), w, h); break;
+            case "Wave": Wave(dc, color, w, h); break;
+            case "Pulse": Pulse(dc, color, w, h); break;
+            default: BarsFromBottom(dc, new SolidColorBrush(color), w, h); break;
+        }
+    }
+
+    void BarsFromBottom(DrawingContext dc, Brush brush, double width, double height)
+    {
+        var slot = width / Bars;
         var w = Math.Max(1, slot * 0.62);
         var r = Math.Min(w / 2, 3);
         for (var i = 0; i < Bars; i++)
         {
-            var h = _levels[i] * ActualHeight;
+            var h = _levels[i] * height;
             if (h < 1) continue; // silence draws nothing, not a dotted baseline
-            dc.DrawRoundedRectangle(brush, null, new Rect(i * slot + (slot - w) / 2, ActualHeight - h, w, h), r, r);
+            dc.DrawRoundedRectangle(brush, null, new Rect(i * slot + (slot - w) / 2, height - h, w, h), r, r);
+        }
+    }
+
+    /// <summary>Bars grow both ways from the middle line.</summary>
+    void Mirror(DrawingContext dc, Brush brush, double width, double height)
+    {
+        var slot = width / Bars;
+        var w = Math.Max(1, slot * 0.5);
+        for (var i = 0; i < Bars; i++)
+        {
+            var h = Math.Max(2, _levels[i] * height);
+            dc.DrawRoundedRectangle(brush, null, new Rect(i * slot + (slot - w) / 2, (height - h) / 2, w, h), w / 2, w / 2);
+        }
+    }
+
+    /// <summary>A smooth curve through the bands (Catmull-Rom), filled with a fading gradient.</summary>
+    void Wave(DrawingContext dc, Color color, double width, double height)
+    {
+        var slot = width / (Bars - 1);
+        var pts = Enumerable.Range(0, Bars).Select(i => new Point(i * slot, height - 2 - _levels[i] * (height - 4))).ToArray();
+        StreamGeometry Curve(bool closed)
+        {
+            var geo = new StreamGeometry();
+            using var g = geo.Open();
+            g.BeginFigure(closed ? new Point(0, height) : pts[0], closed, closed);
+            if (closed) g.LineTo(pts[0], false, false);
+            for (var i = 0; i < Bars - 1; i++)
+            {
+                Point p0 = pts[Math.Max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.Min(Bars - 1, i + 2)];
+                g.BezierTo(new Point(p1.X + (p2.X - p0.X) / 6, p1.Y + (p2.Y - p0.Y) / 6), new Point(p2.X - (p3.X - p1.X) / 6, p2.Y - (p3.Y - p1.Y) / 6), p2, true, true);
+            }
+            if (closed) g.LineTo(new Point(width, height), false, false);
+            return geo;
+        }
+        dc.DrawGeometry(new LinearGradientBrush(Color.FromArgb(150, color.R, color.G, color.B), Color.FromArgb(0, color.R, color.G, color.B), 90), null, Curve(true));
+        dc.DrawGeometry(null, new Pen(new SolidColorBrush(color), 2) { LineJoin = PenLineJoin.Round }, Curve(false));
+    }
+
+    /// <summary>
+    /// Soft overlapping waves that breathe with the bass, the mids and the highs (in the spirit of Yandex Music's "My Wave"):
+    /// each layer's height follows its band, and they drift faster when the music is loud.
+    /// </summary>
+    void Pulse(DrawingContext dc, Color color, double width, double height)
+    {
+        double Band(int from, int to) => _levels.Skip(from).Take(to - from).Average();
+        (double Energy, double Freq, double Speed, byte Alpha)[] layers =
+            [(Band(0, 8), 1.2, 0.7, 170), (Band(8, 26), 2.1, -1.1, 135), (Band(26, Bars), 3.3, 1.6, 110)];
+        foreach (var (energy, freq, speed, alpha) in layers)
+        {
+            var amp = height * (0.12 + 0.8 * energy);
+            var geo = new StreamGeometry();
+            using (var g = geo.Open())
+            {
+                g.BeginFigure(new Point(0, height), true, true);
+                for (var x = 0.0; x <= width + 1; x += 6)
+                {
+                    var t = x / width;
+                    var y = height - amp * (0.55 + 0.45 * Math.Sin(t * Math.PI * 2 * freq + _phase * speed)) * Math.Sin(Math.PI * t); // fades out at both ends
+                    g.LineTo(new Point(x, y), true, true);
+                }
+                g.LineTo(new Point(width, height), true, true);
+            }
+            dc.DrawGeometry(new LinearGradientBrush(Color.FromArgb(alpha, color.R, color.G, color.B), Color.FromArgb(0, color.R, color.G, color.B), 90), null, geo);
         }
     }
 }

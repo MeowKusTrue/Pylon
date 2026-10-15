@@ -44,6 +44,7 @@ public class TrackMeta
     public string? Album { get; set; }
     public string? Genre { get; set; }
     public string? Art { get; set; }
+    public string? SpotifyId { get; set; } // from a Spotify import: lyrics by exact id
 }
 
 /// <summary>Everything the library sidebar shows, persisted as JSON in %APPDATA%\Pylon.</summary>

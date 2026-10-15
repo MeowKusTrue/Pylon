@@ -599,8 +599,9 @@ public partial class MainWindow : Window
             if (s.Audio != null) media.AddSlave(MediaSlaveType.Audio, 4, s.Audio);
             if (s.UserAgent != null) media.AddOption(":http-user-agent=" + s.UserAgent);
             if (s.Referer != null) media.AddOption(":http-referrer=" + s.Referer);
-            media.SetMeta(MetadataType.Title, s.Title);
-            if (s.Artist != null) media.SetMeta(MetadataType.Artist, s.Artist);
+            var known = Library.Data.Meta.GetValueOrDefault(src);
+            media.SetMeta(MetadataType.Title, known?.Title ?? s.Title);
+            if ((known?.Artist ?? s.Artist) is { } by) media.SetMeta(MetadataType.Artist, by);
             if (s.Thumbnail != null) media.SetMeta(MetadataType.ArtworkURL, s.Thumbnail);
             Osd("", 0);
             StartMedia(media, src, isUrl: true, s.Live ? -1 : startAt, autoplay ?? Settings.Bool("playback.autoplay"), audio: !s.HasVideo);
@@ -1211,6 +1212,7 @@ public partial class MainWindow : Window
             case "ui.corners": ApplyCorners(); break;
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
+            case "ui.spectrumstyle": MusicSpectrum.InvalidateVisual(); VideoSpectrum.InvalidateVisual(); break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
@@ -1462,7 +1464,8 @@ public partial class MainWindow : Window
             LyricsPane.Seek += s => { if (_mp.IsSeekable) _mp.Time = (long)(s * 1000); };
         }
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
-        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration, _tags);
+        var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
+        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration, tags);
         if (CurrentPath != path) return;
         if (doc != null) LyricsPane.Show(doc);
         else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
@@ -1820,8 +1823,8 @@ public partial class MainWindow : Window
     [
         ("stop", "Stop", false), ("skip15", "Skip back / forward", true), ("time", "Elapsed time", true), ("duration", "Duration", true),
         ("frame", "Next frame", false), ("speed", "Playback speed", false), ("snapshot", "Snapshot", false), ("record", "Record", false),
-        ("abloop", "A-B loop", false), ("loop", "Repeat", false), ("shuffle", "Shuffle", false), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
-        ("lyrics", "Lyrics", true), ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", false), ("queue", "Queue", true), ("mini", "Miniplayer", false),
+        ("abloop", "A-B loop", false), ("loop", "Repeat", true), ("shuffle", "Shuffle", true), ("volume", "Volume", true), ("audio", "Audio", true), ("subs", "Subtitles", true),
+        ("lyrics", "Lyrics", true), ("psettings", "Playback settings", true), ("fullscreen", "Fullscreen", true), ("queue", "Queue", true), ("mini", "Miniplayer", true),
     ];
 
     static MainWindow()
@@ -1921,6 +1924,7 @@ public partial class MainWindow : Window
     public void OpenStream()
     {
         if (DialogWindow.NetworkStream(this) is not { } r) return;
+        if (r.Urls.FirstOrDefault(SpotifyImport.IsLink) is { } spotify) { ImportSpotify(spotify); return; }
         if (r.Playlist != null)
         {
             Library.Data.Playlists.Add(new Playlist { Name = r.Playlist, Items = r.Urls });
@@ -2184,6 +2188,12 @@ public partial class MainWindow : Window
         CastMenu(),
         Item(_cast != null ? "Streaming to TV / Phone…" : "Stream to TV / Phone…", "broadcast-duotone", null, StreamToNetwork, check: _cast != null, enabled: _index >= 0 || _cast != null),
         Item("Phone Remote…", "device-mobile-duotone", null, ShowRemote, check: _remote != null),
+        Item("Import from Spotify…", "spotify-logo-duotone", null, () =>
+        {
+            if (DialogWindow.AskName(this, "Import from Spotify", "Playlist, album or track link", "Copy it in Spotify: Share → Copy link. Songs you have play from disk, the rest from YouTube.", "https://open.spotify.com/playlist/…") is { } link)
+                ImportSpotify(link);
+        }),
+        Item("Lyrics for Spotify", "microphone-stage-duotone", null, () => new SpotifyLyricsWindow(this).Show()),
         _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true) : Item("Watch Together…", "users-three-duotone", null, WatchTogether),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
@@ -2412,6 +2422,19 @@ public partial class MainWindow : Window
 
     /// <summary>Starts streaming the current item to the local network (or shows the running stream) with a QR code to join.</summary>
     RemoteServer? _remote;
+
+    /// <summary>A Spotify link becomes a Pylon playlist and starts playing (yt-dlp is offered for songs not on disk).</summary>
+    async void ImportSpotify(string link)
+    {
+        Osd(L.T("Reading the Spotify list…"), 10);
+        if (await SpotifyImport.ReadAsync(link) is not { Tracks.Count: > 0 } list) { Osd(L.T("Couldn't read that Spotify link"), 3); return; }
+        var items = SpotifyImport.Resolve(list.Tracks);
+        Library.Data.Playlists.Add(new Playlist { Name = list.Name, Items = items });
+        Library.Touch();
+        var local = items.Count(i => !i.StartsWith("ytsearch://"));
+        Osd(L.F("{0}: {1} songs, {2} from your library", list.Name, items.Count, local), 4);
+        PlayList(items, 0);
+    }
 
     // ───────── watch together ─────────
 
@@ -2811,6 +2834,14 @@ public partial class MainWindow : Window
         return
         [
             LyricsMenu(),
+            Sub("Visualizer", null, [
+                Item("Off", null, null, () => Settings.Set("ui.spectrum", "Off"), check: Settings.Str("ui.spectrum") == "Off"),
+                .. new[] { "Bars", "Mirror", "Wave", "Pulse" }.Select(v => (object)Item(v, null, null, () =>
+                {
+                    if (Settings.Str("ui.spectrum") == "Off") Settings.Set("ui.spectrum", "Music");
+                    Settings.Set("ui.spectrumstyle", v);
+                }, check: Settings.Str("ui.spectrum") != "Off" && Spectrum.Style == v)),
+            ]),
             .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
@@ -3043,6 +3074,15 @@ public partial class MainWindow : Window
                     shot = _settings;
                     break;
                 case "settingssearch": _settings!.SearchBox.Text = arg; _settings.SearchBox.Focus(); break;
+                case "wheel": // two notches down on the settings page, then the offset over time
+                    {
+                        var sv = _settings!.Scroller;
+                        for (var k = 0; k < 2; k++) sv.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = PreviewMouseWheelEvent, Source = sv });
+                        var trace = new List<string>();
+                        for (var k = 0; k < 12; k++) { trace.Add(sv.VerticalOffset.ToString("0")); await Task.Delay(40); }
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), "scroll " + string.Join(" ", trace) + Environment.NewLine);
+                        break;
+                    }
                 case "listsd":
                     File.WriteAllLines(Path.ChangeExtension(outFile, ".txt"), Enum.GetValues<MediaDiscovererCategory>()
                         .SelectMany(c => Vlc.MediaDiscoverers(c).Select(d => $"{c}: {d.Name} | {d.LongName}"))
@@ -3169,6 +3209,43 @@ public partial class MainWindow : Window
                     });
                     DialogWindow.FileTypes(this);
                     return;
+                case "subsearch":
+                    {
+                        var found = await OnlineSubtitles.SearchAsync(CurrentPath!, "ru,en");
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"subs {found.Count}: {string.Join(" | ", found.Take(3).Select(r => $"{r.Language} {r.Name} hash={r.HashMatch}"))}{Environment.NewLine}");
+                        break;
+                    }
+                case "recognize":
+                    {
+                        var song = await Recognize.IdentifyAsync(CurrentPath!);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"song {song}{Environment.NewLine}");
+                        break;
+                    }
+                case "spectrum": MusicSpectrum.DebugFill(1.3); break;
+                case "spotify":
+                    {
+                        var list = await SpotifyImport.ReadAsync(arg);
+                        var items = list is { } l ? SpotifyImport.Resolve(l.Tracks) : [];
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"spotify '{list?.Name}' {items.Count}: {string.Join(" | ", items.Take(3).Select(i => Library.TitleOf(i) + " <- " + i))} id={Library.Data.Meta.GetValueOrDefault(items.FirstOrDefault() ?? "")?.SpotifyId}{Environment.NewLine}");
+                        break;
+                    }
+                case "sessions":
+                    {
+                        var manager = await Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+                        var list = new List<string>();
+                        foreach (var ses in manager.GetSessions()) { var pr = await ses.TryGetMediaPropertiesAsync(); list.Add($"{ses.SourceAppUserModelId}: {pr.Artist} - {pr.Title} @ {ses.GetTimelineProperties().Position.TotalSeconds:0}s"); }
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), "sessions: " + string.Join(" | ", list) + Environment.NewLine);
+                        break;
+                    }
+                case "spotifylyrics":
+                    {
+                        var w = new SpotifyLyricsWindow(this);
+                        w.Show();
+                        await Task.Delay(9000);
+                        Snap(w, outFile);
+                        Application.Current.Shutdown();
+                        return;
+                    }
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

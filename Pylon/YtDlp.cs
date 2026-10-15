@@ -24,7 +24,7 @@ public static class YtDlp
     static readonly string[] MediaExt = [.. MainWindow.VideoExt, .. MainWindow.AudioExt, ".m3u8", ".mpd", ".m3u", ".pls", ".xspf"];
 
     /// <summary>A web page rather than a media file or stream: worth asking yt-dlp.</summary>
-    public static bool Handles(string url) =>
+    public static bool Handles(string url) => url.StartsWith("ytsearch://") ||
         Uri.TryCreate(url, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
         && !MediaExt.Contains(Path.GetExtension(u.AbsolutePath), StringComparer.OrdinalIgnoreCase);
 
@@ -47,6 +47,8 @@ public static class YtDlp
     /// <summary>Stream addresses for one item, best quality up to <paramref name="maxHeight"/> (0 = no limit); null when yt-dlp can't.</summary>
     public static async Task<Stream?> ResolveAsync(string url, int maxHeight, bool audioOnly)
     {
+        // "ytsearch://Artist - Title" (Spotify imports): the first YouTube result, sound only
+        if (url.StartsWith("ytsearch://")) (url, audioOnly) = ("ytsearch1:" + Uri.UnescapeDataString(url["ytsearch://".Length..]), true);
         // H.264 first (hardware decoding everywhere), then whatever is best; m4a audio pairs with it in one MP4 world
         var sort = audioOnly ? "acodec:m4a" : $"res{(maxHeight > 0 ? ":" + maxHeight : "")},vcodec:avc1,acodec:m4a";
         using var doc = await RunJson("--no-playlist", "-f", audioOnly ? "ba/b" : "bv*+ba/b", "-S", sort, url);

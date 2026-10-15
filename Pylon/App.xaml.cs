@@ -17,6 +17,7 @@ public partial class App : Application
             return;
         }
         Perf.Mark("startup");
+        SmoothScroll.Install();
         Motion.HookMenus();
         Motion.HookPress();
         Motion.HookSwitches();

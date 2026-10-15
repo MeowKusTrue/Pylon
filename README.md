@@ -33,6 +33,8 @@ Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC R
 - **Websites:** YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites through [yt-dlp](https://github.com/yt-dlp/yt-dlp) (downloaded on first use, kept up to date). Paste a playlist or channel and its videos join the queue.
 - **Crossfade:** songs blend into each other (Settings → Playback → Crossfade between songs).
 - **Phone remote:** scan a QR code and the phone's browser controls playback (⋯ → Phone Remote).
+- **Spotify:** import playlists by link (your files first, YouTube for the rest), and Spicy-style lyrics for what the Spotify app is playing.
+- **Connected:** Last.fm scrobbling, Discord status, subtitles from OpenSubtitles, songs recognized by their sound (AcoustID), watch together.
 - **Playback tools:** A-B loop (`Shift+L`, range shown on the seek bar), sleep timer with a gentle fade-out, a real waveform on the music seek bar (decoded once in the background, cached).
 - **Motion:** quick ease-out transitions for panels, menus, dialogs and library pages; hotkey actions stay instant, and Windows' "Animation effects" switch turns them off.
 - **Audio spectrum:** live bars under the cover art, optionally over video too. Only Pylon's own sound is captured (WASAPI process loopback, Windows 10 2004+).
@@ -126,6 +128,7 @@ Pylon has no telemetry, analytics, ads or accounts of its own. It doesn't send y
 - **Updates:** GitHub (github.com, api.github.com), checked at startup to find and download new versions. Turn off in Settings → General.
 - **Lyrics** (on by default, Settings → Interface → Lyrics): the track's artist, title, album and length go to [LRCLIB](https://lrclib.net), [ListenBrainz](https://listenbrainz.org) (to find the Spotify id) and [Spicy Lyrics](https://spicylyrics.org). Only if you add your own Spotify app keys: the Spotify Web API and Deezer, for the same lookup.
 - **Titles and cover art** (off by default, Settings → Privacy): artist and album or title go to the iTunes Search API for missing covers, and libVLC runs its own metadata lookups. Songs without any tags are recognized by an audio fingerprint (not the audio itself) through [AcoustID](https://acoustid.org), with covers from the Cover Art Archive; the fingerprint tool fpcalc is downloaded from GitHub once.
+- **Spotify:** an import reads the public Spotify page of the link you paste; songs not in your library are searched on YouTube by artist and title. Lyrics for Spotify read what the Spotify app plays from Windows' media session on this computer.
 - **What you open:** network streams, radio (the [radio-browser.info](https://www.radio-browser.info) directory), podcasts you add, and web pages played through yt-dlp, which talks to the site of that page.
 - **Sign in to websites with cookies from a browser** (off by default, Settings → Network): only when you pick a browser, yt-dlp reads that browser's cookies on this computer and uses them for the page you're playing, to get past "confirm you're not a bot" and age checks. Pylon doesn't store, copy or send those cookies anywhere else.
 - **Tools downloaded only after Pylon asks you:** yt-dlp (github.com/yt-dlp), ffmpeg for joining files (github.com/BtbN/FFmpeg-Builds) and the Icaros previews installer (github.com/Xanashi/Icaros).

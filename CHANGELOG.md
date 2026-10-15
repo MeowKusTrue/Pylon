@@ -7,31 +7,49 @@ Each version's section becomes its GitHub release notes (`.github/workflows/rele
 
 <!-- ru -->
 **Новое**
-- **Склейка файлов** (Конвертировать → «Склеить в один файл»): несколько видео или песен в один файл. «Копировать потоки» — мгновенно и без потери качества для файлов одного вида (например, записи из одной программы), MP4 — для любых. Для склейки один раз скачивается ffmpeg (около 200 МБ, Pylon спросит).
-- **Смотреть вместе** («⋯» → «Смотреть вместе»): друзья в той же сети или общем VPN (Radmin, ZeroTier) открывают ваш адрес, и их Pylon повторяет за вашим паузу, воспроизведение и позицию. Пауза у любого — пауза у всех.
+- **Spotify.** «⋯» → «Импорт из Spotify» (или ссылка в «Открыть сетевой поток»): плейлист, альбом или трек по ссылке становится плейлистом Pylon. Песни из вашей библиотеки играют с диска, остальные — звуком с YouTube. «⋯» → «Текст для Spotify» — окно с текстом в стиле Spicy Lyrics для того, что сейчас играет в приложении Spotify на этом компьютере; клик по строке перематывает Spotify.
+- **Узнавание песни по звуку**, как Shazam: песни без тегов получают название, исполнителя, альбом и обложку (AcoustID + MusicBrainz). Вручную — правый клик → «Узнать песню». Нужно «Загружать названия и обложки из интернета».
+- **Субтитры из интернета** (Субтитры → «Найти субтитры в интернете…»): OpenSubtitles, точные совпадения для вашего файла сверху; файл сохраняется рядом с видео.
+- **Last.fm**: скробблинг прослушанного, вход через сайт Last.fm (Настройки → Приватность).
+- **Статус в Discord**: «Слушает …» / «Смотрит …» в профиле (Настройки → Приватность).
+- **Виды визуализации**: столбики, зеркало, волна и «пульс» — мягкие волны, которые дышат с музыкой; выключается и переключается правым кликом → «Визуализация» или в Настройки → Интерфейс.
+- **Склейка файлов** (Конвертировать → «Склеить в один файл») через ffmpeg (скачивается при первом использовании, около 200 МБ).
+- **Смотреть вместе** («⋯» → «Смотреть вместе»): друзья в той же сети или общем VPN повторяют за вами паузу и позицию.
+- **Типы файлов**: окно со всеми значками форматов и кнопкой «Сделать Pylon по умолчанию» (после установки и в Настройки → Библиотека); там же превью в Проводнике для любых форматов через Icaros.
+- Плавная прокрутка колесом во всех списках и тонкие полосы прокрутки, которые расширяются под курсором.
 
 **Исправления**
 - Поля ввода: текст больше не обрезается и не уезжает от подсказки, поиск в настройках снова виден.
 - Эффекты и эквалайзер применяются сразу, без перезапуска движка: больше не дёргаются звук и картинка при каждом движении ползунка.
-- Открытие больших папок не подвешивает окно: подпапки видны сразу, пустые отсеиваются в фоне.
+- Открытие больших папок не подвешивает окно.
 - Обновление скачивается с прогрессом прямо в окне «Доступно обновление».
 - Переход со старого установщика сохраняет закреплённый в «Пуске» ярлык.
-- В настройках нет тёмной полосы сверху и пунктов, которые ничего не делали; ключи для текстов песен убраны в «Дополнительно» — они необязательны.
-- Spicy Lyrics находит больше песен (название без «feat.» и «Remastered», первый исполнитель) и перепроверяет ненайденные через неделю.
+- Настройки: «Дополнительно» показано сразу, без кнопки внизу; нет тёмной полосы сверху и пунктов, которые ничего не делали; ключи для текстов песен — необязательные и убраны в «Дополнительно».
+- Spicy Lyrics находит больше песен и перепроверяет ненайденные через неделю.
+- Кнопки на панели по умолчанию: добавлены «Повтор», «Перемешать», «Во весь экран» и «Мини-плеер».
 
 <!-- en -->
 **New**
-- **Join files** (Convert → Join into one file): several videos or songs into one. "Copy streams" is instant and lossless for files of one kind (say, from the same recorder); MP4 works for any. Joining fetches ffmpeg once (about 200 MB, Pylon asks first).
-- **Watch together** (⋯ → Watch Together): friends on the same network or a shared VPN (Radmin, ZeroTier) open your address, and their Pylon follows your play, pause and position. Anyone pausing pauses everyone.
+- **Spotify.** ⋯ → Import from Spotify (or a link in Open Network Stream): a playlist, album or track link becomes a Pylon playlist. Songs in your library play from disk, the rest as sound from YouTube. ⋯ → Lyrics for Spotify: a window with Spicy-style lyrics for what the Spotify app on this PC is playing; click a line to seek Spotify.
+- **Recognize songs by their sound**, like Shazam: songs without tags get title, artist, album and cover (AcoustID + MusicBrainz). By hand: right-click → Recognize Song. Needs "Fetch titles and cover art from the internet".
+- **Subtitles from the internet** (Subtitles → Find Subtitles Online…): OpenSubtitles, exact matches for your file first; saved next to the video.
+- **Last.fm** scrobbling, signing in on the Last.fm website (Settings → Privacy).
+- **Discord status**: "Listening to …" / "Watching …" on your profile (Settings → Privacy).
+- **Visualizer styles**: bars, mirror, wave and pulse (soft waves that breathe with the music); switch or turn off with right-click → Visualizer, or in Settings → Interface.
+- **Join files** (Convert → Join into one file) through ffmpeg (fetched on first use, about 200 MB).
+- **Watch together** (⋯ → Watch Together): friends on the same network or a shared VPN follow your play, pause and position.
+- **File types**: a window with every format's icon and "Make Pylon the default" (after installing and in Settings → Library), plus Explorer previews for any format through Icaros.
+- Smooth wheel scrolling in every list, and slim scrollbars that widen under the pointer.
 
 **Fixes**
-- Text fields: text is no longer clipped or shifted off the placeholder, and the settings search shows what you type again.
+- Text fields: text is no longer clipped or shifted off the placeholder, and the settings search shows what you type.
 - Effects and the equalizer apply at once, without restarting the engine: no more stutter on every slider move.
-- Opening big folders no longer freezes the window: subfolders show at once, empty ones are filtered out in the background.
+- Opening big folders no longer freezes the window.
 - Updates download with a progress bar right in the "Update available" window.
 - Moving over from the old installer keeps your Start menu pin working.
-- Settings lose the dark band at the top and the options that did nothing; lyrics keys moved to Advanced, as they're optional.
-- Spicy Lyrics finds more songs (title without "feat." and "Remastered", first artist) and checks songs it missed again after a week.
+- Settings: Advanced options show right away instead of behind a button; no dark band at the top or options that did nothing; lyrics keys are optional and moved to Advanced.
+- Spicy Lyrics finds more songs and checks songs it missed again after a week.
+- Default control bar: Repeat, Shuffle, Fullscreen and Miniplayer added.
 
 ## 1.8.0
 

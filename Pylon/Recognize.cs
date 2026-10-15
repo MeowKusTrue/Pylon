@@ -13,7 +13,7 @@ namespace Pylon;
 public static class Recognize
 {
     /// <summary>Pylon's application key from acoustid.org/new-application (meant to ship inside apps). Empty = off.</summary>
-    public const string ApiKey = "";
+    public const string ApiKey = "ipVDcde5dp";
 
     public static bool Possible => ApiKey.Length > 0;
 
@@ -33,8 +33,12 @@ public static class Recognize
         {
             var (duration, fingerprint) = await FingerprintAsync(path);
             if (fingerprint == null) return null;
-            var url = $"https://api.acoustid.org/v2/lookup?client={ApiKey}&meta=recordings+releasegroups+compress&duration={duration}&fingerprint={fingerprint}";
-            using var doc = JsonDocument.Parse(await Http.GetStringAsync(url));
+            // POST: a fingerprint of a long song is too long for a URL
+            using var res = await Http.PostAsync("https://api.acoustid.org/v2/lookup", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["client"] = ApiKey, ["meta"] = "recordings releasegroups compress", ["duration"] = duration.ToString(), ["fingerprint"] = fingerprint,
+            }));
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
             var best = doc.RootElement.GetProperty("results").EnumerateArray()
                 .Where(r => r.GetProperty("score").GetDouble() > 0.6 && r.TryGetProperty("recordings", out _))
                 .OrderByDescending(r => r.GetProperty("score").GetDouble())

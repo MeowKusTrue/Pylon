@@ -12,7 +12,7 @@ namespace Pylon;
 public static class OnlineSubtitles
 {
     /// <summary>Pylon's consumer key from opensubtitles.com/consumers. Empty = the menu item stays hidden.</summary>
-    public const string ApiKey = "";
+    public const string ApiKey = "A4UPZMJicwEDXiCwkswANXRDFlpQ6M4N";
 
     public static bool Possible => ApiKey.Length > 0;
 
@@ -26,9 +26,18 @@ public static class OnlineSubtitles
 
     public static async Task<List<Result>> SearchAsync(string video, string languages)
     {
-        var q = $"subtitles?languages={Uri.EscapeDataString(languages)}&query={Uri.EscapeDataString(Path.GetFileNameWithoutExtension(video))}";
-        if (Hash(video) is { } hash) q += "&moviehash=" + hash;
-        using var doc = JsonDocument.Parse(await Http.GetStringAsync(q));
+        // the API wants its parameters (and the languages) in alphabetical order, or it answers with a redirect
+        var langs = string.Join(",", languages.Split(',').Select(l => l.Trim().ToLowerInvariant()).Order());
+        // two searches: by hash (exact matches for this copy) and by name; together the hash narrowed the name search wrongly
+        var byHash = Hash(video) is { } hash ? FetchAsync($"subtitles?languages={langs}&moviehash={hash}") : Task.FromResult(new List<Result>());
+        var byName = FetchAsync($"subtitles?languages={langs}&query={Uri.EscapeDataString(Query(video))}");
+        var exact = (await byHash).Where(r => r.HashMatch).ToList();
+        return [.. exact.Concat((await byName).Where(r => exact.All(e => e.FileId != r.FileId))).Take(20)];
+    }
+
+    static async Task<List<Result>> FetchAsync(string query)
+    {
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync(query));
         return [.. doc.RootElement.GetProperty("data").EnumerateArray().Select(d => d.GetProperty("attributes"))
             .Where(a => a.TryGetProperty("files", out var f) && f.GetArrayLength() > 0)
             .Select(a => new Result(
@@ -37,7 +46,7 @@ public static class OnlineSubtitles
                 a.GetProperty("language").GetString() ?? "",
                 a.TryGetProperty("download_count", out var dc) ? dc.GetInt32() : 0,
                 a.TryGetProperty("moviehash_match", out var m) && m.ValueKind == JsonValueKind.True))
-            .OrderByDescending(x => x.HashMatch).ThenByDescending(x => x.Downloads).Take(20)];
+            .OrderByDescending(x => x.Downloads)];
     }
 
     /// <summary>Downloads the subtitle next to the video ("Movie.ru.srt") and returns its path.</summary>
@@ -51,6 +60,17 @@ public static class OnlineSubtitles
         var path = Path.ChangeExtension(video, $"{r.Language}{(ext.Length > 0 ? ext : ".srt")}");
         await File.WriteAllBytesAsync(path, await Http.GetByteArrayAsync(link));
         return path;
+    }
+
+    static readonly System.Text.RegularExpressions.Regex Noise = new(
+        @"\b(\d{3,4}p|[48]k|x26[45]|h\.?26[45]|hevc|av1|web-?(dl|rip)|bluray|brrip|bdrip|hdtv|hdrip|dvdrip|aac|ac3|dts|ddp?5\.1|surround|hdr|10bit|proper|repack)\b.*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>The file name as people search it: words, no release tags ("Big Buck Bunny", "Show S01E02").</summary>
+    static string Query(string video)
+    {
+        var name = System.Text.RegularExpressions.Regex.Replace(Path.GetFileNameWithoutExtension(video), @"[._\[\]()]+", " ");
+        return System.Text.RegularExpressions.Regex.Replace(Noise.Replace(name, ""), @"\s+", " ").Trim().ToLowerInvariant();
     }
 
     /// <summary>OpenSubtitles hash: file size plus the 64-bit sums of its first and last 64 KB.</summary>

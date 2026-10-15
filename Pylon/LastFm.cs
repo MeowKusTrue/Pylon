@@ -13,7 +13,7 @@ namespace Pylon;
 public static class LastFm
 {
     /// <summary>Pylon's API account from last.fm/api/account/create. Empty = the feature stays hidden.</summary>
-    public const string ApiKey = "", Secret = "";
+    public const string ApiKey = "846e998a76df8dd3f80fa7619239781b", Secret = "f4b8d05fdd0e12533fcf8b4a99df4f41"; // desktop apps ship both, as Last.fm expects
 
     public static bool Possible => ApiKey.Length > 0 && Secret.Length > 0;
     public static bool SignedIn => Settings.Str("lastfm.session").Length > 0;

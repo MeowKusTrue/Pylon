@@ -12,7 +12,7 @@ namespace Pylon;
 public sealed class Discord : IDisposable
 {
     /// <summary>The Pylon application's id from discord.com/developers (public; images "pylon" uploaded there). Empty = off.</summary>
-    public const string ClientId = "";
+    public const string ClientId = "1560301390394298471";
 
     public static bool Possible => ClientId.Length > 0;
 

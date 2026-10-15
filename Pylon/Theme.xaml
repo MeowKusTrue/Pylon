@@ -235,24 +235,49 @@
         <Setter Property="Background" Value="{DynamicResource AccentBright}"/>
     </Style>
 
-    <!-- Slim dark scrollbars -->
+    <!-- Slim overlay-style scrollbars: a 4 px pill that widens to 8 px and brightens under the pointer, accent while dragged;
+         the 12 px strip around it is all grab area -->
     <Style TargetType="ScrollBar">
-        <Setter Property="Width" Value="6"/>
-        <Setter Property="MinWidth" Value="6"/>
+        <Setter Property="Width" Value="12"/>
+        <Setter Property="MinWidth" Value="12"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollBar">
-                    <Track x:Name="PART_Track" IsDirectionReversed="True">
-                        <Track.Thumb>
-                            <Thumb>
-                                <Thumb.Template>
-                                    <ControlTemplate TargetType="Thumb">
-                                        <Border Background="{DynamicResource DividerBright}" CornerRadius="3"/>
-                                    </ControlTemplate>
-                                </Thumb.Template>
-                            </Thumb>
-                        </Track.Thumb>
-                    </Track>
+                    <Grid Background="Transparent">
+                        <Track x:Name="PART_Track" IsDirectionReversed="True">
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Grid Background="Transparent">
+                                                <Border x:Name="pill" Width="4" Margin="0,2,2,2" HorizontalAlignment="Right" CornerRadius="2"
+                                                        Background="{DynamicResource DividerBright}" Opacity="0.6"/>
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="pill" Property="Width" Value="8"/>
+                                                    <Setter TargetName="pill" Property="CornerRadius" Value="4"/>
+                                                    <Setter TargetName="pill" Property="Opacity" Value="1"/>
+                                                </Trigger>
+                                                <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="pill" Property="Width" Value="8"/>
+                                                    <Setter TargetName="pill" Property="CornerRadius" Value="4"/>
+                                                    <Setter TargetName="pill" Property="Opacity" Value="1"/>
+                                                    <Setter TargetName="pill" Property="Background" Value="{DynamicResource Accent}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <!-- the whole bar wakes up when the pointer comes near -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Opacity" Value="1"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
