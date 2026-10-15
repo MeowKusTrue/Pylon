@@ -9,7 +9,6 @@ namespace Pylon;
 public partial class SettingsWindow : Window
 {
     Category _current;
-    bool _advanced;
 
     public SettingsWindow(Window owner, string? category = null)
     {
@@ -51,7 +50,6 @@ public partial class SettingsWindow : Window
                 rb.Checked += (_, _) =>
                 {
                     _current = c;
-                    _advanced = false;
                     if (SearchBox.Text.Length > 0) SearchBox.Text = ""; // also re-renders
                     else Render();
                     Scroller.ScrollToTop();
@@ -70,21 +68,13 @@ public partial class SettingsWindow : Window
 
         PageTitle.Text = L.T(_current.Title);
         foreach (var s in _current.Sections.Where(s => s.Visible?.Invoke() != false)) AddSection(s);
-        if (_current.Advanced.Count > 0)
+        // advanced options are part of the page, under their own heading: a collapsed button at the bottom was easy to miss
+        var advanced = _current.Advanced.Where(s => s.Visible?.Invoke() != false && s.Opts.Any(o => o.Unavailable == null)).ToList();
+        if (advanced.Count > 0)
         {
-            var bar = new Button { Style = (Style)FindResource("SecondaryButton"), Height = 36, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 10, 0, 16), Background = (Brush)FindResource("BgRaised") };
-            bar.Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Children =
-                {
-                    new TextBlock { Text = L.T("Advanced Options"), FontWeight = FontWeights.Normal, Foreground = (Brush)FindResource("FgA2"), VerticalAlignment = VerticalAlignment.Center },
-                    new Icon { Glyph = _advanced ? "caret-down" : "caret-right", Width = 18, Height = 18, Margin = new Thickness(8, 0, 0, 0) },
-                },
-            };
-            bar.Click += (_, _) => { _advanced = !_advanced; Render(); };
-            Page.Children.Add(bar);
-            if (_advanced) foreach (var s in _current.Advanced.Where(s => s.Visible?.Invoke() != false)) AddSection(s);
+            Page.Children.Add(new Border { Height = 1, Background = (Brush)FindResource("DividerDim"), Margin = new Thickness(0, 18, 0, 0) });
+            Page.Children.Add(new TextBlock { Text = L.T("Advanced Options"), FontSize = 13, Foreground = (Brush)FindResource("FgA3"), Margin = new Thickness(0, 14, 0, 0) });
+            foreach (var s in advanced) AddSection(s);
         }
     }
 

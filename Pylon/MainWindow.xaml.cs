@@ -171,6 +171,7 @@ public partial class MainWindow : Window
             else
             {
                 ShowWhatsNewIfUpdated();
+                AskFileTypesOnce();
                 if (Settings.Bool("general.updates")) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
                 YtDlp.UpdateIfDue();
             }
@@ -1169,6 +1170,16 @@ public partial class MainWindow : Window
         SaveProgress();
         SingleInstance.Release();
         Close(); // the updater applies the new version and starts it
+    }
+
+    /// <summary>Once, after installing (or updating to) this version: offer to make Pylon the default player, icons shown.</summary>
+    async void AskFileTypesOnce()
+    {
+        if (Settings.Bool("app.assocasked") || !Updater.IsVelopackInstall || SnapMode) return;
+        Settings.Set("app.assocasked", true);
+        await Task.Delay(1500);
+        while (OwnedWindows.Count > 0) await Task.Delay(500); // after "What's new" and the like
+        DialogWindow.FileTypes(this);
     }
 
     /// <summary>First start after an update: show what this version brought (the release notes on GitHub).</summary>
@@ -3149,6 +3160,15 @@ public partial class MainWindow : Window
                         _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
                         break;
                     }
+                case "filetypes":
+                    _ = Dispatcher.BeginInvoke(async () =>
+                    {
+                        await Task.Delay(1500);
+                        Snap(Application.Current.Windows.OfType<Window>().First(w => w != this && w.IsVisible && w != _overlayWindow), outFile);
+                        Application.Current.Shutdown();
+                    });
+                    DialogWindow.FileTypes(this);
+                    return;
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

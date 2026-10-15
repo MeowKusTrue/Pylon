@@ -10,7 +10,7 @@ namespace Pylon;
 /// user, HKCU): ProgIDs with our file icons, "Open with", the Default Apps entry and "Play with Pylon" on folders.
 /// It never takes over an extension by itself — Windows asks the user (Settings → Default apps).
 /// </summary>
-public static class ShellRegistration
+public static partial class ShellRegistration
 {
     const string Classes = @"Software\Classes";
     const string Capabilities = @"Software\Pylon\Capabilities";

@@ -109,6 +109,29 @@ Pylon exists because **Juxtopposed** redesigned VLC and shared the whole design 
 Watch how it was made — **[I Redesigned VLC After 25 Years](https://youtu.be/ERFeOgqk324)** — and see the original
 **[VLC Redesign Figma file](https://www.figma.com/community/file/1691465999134370980/vlc-redesign)**. Thank you, Juxtopposed, for the thoughtful design and for making it free to build on! 💛
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Team roles:
+- Committers and reviewers: [MeowKusTrue](https://github.com/MeowKusTrue)
+- Approvers: [MeowKusTrue](https://github.com/MeowKusTrue)
+
+Only binaries built by GitHub Actions from this repository's source (`.github/workflows/release.yml`) are signed. Third-party components shipped with Pylon (libVLC, the .NET runtime and other libraries listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) are not signed with this certificate.
+
+## Privacy policy
+
+Pylon has no telemetry, analytics, ads or accounts of its own. It doesn't send your files, your library or your history anywhere; they stay in `%AppData%\Pylon` on your computer. It goes online only for the features below, and only with the data each one needs:
+
+- **Updates:** GitHub (github.com, api.github.com), checked at startup to find and download new versions. Turn off in Settings → General.
+- **Lyrics** (on by default, Settings → Interface → Lyrics): the track's artist, title, album and length go to [LRCLIB](https://lrclib.net), [ListenBrainz](https://listenbrainz.org) (to find the Spotify id) and [Spicy Lyrics](https://spicylyrics.org). Only if you add your own Spotify app keys: the Spotify Web API and Deezer, for the same lookup.
+- **Titles and cover art** (off by default, Settings → Privacy): artist and album or title go to the iTunes Search API for missing covers, and libVLC runs its own metadata lookups. Songs without any tags are recognized by an audio fingerprint (not the audio itself) through [AcoustID](https://acoustid.org), with covers from the Cover Art Archive; the fingerprint tool fpcalc is downloaded from GitHub once.
+- **What you open:** network streams, radio (the [radio-browser.info](https://www.radio-browser.info) directory), podcasts you add, and web pages played through yt-dlp, which talks to the site of that page.
+- **Sign in to websites with cookies from a browser** (off by default, Settings → Network): only when you pick a browser, yt-dlp reads that browser's cookies on this computer and uses them for the page you're playing, to get past "confirm you're not a bot" and age checks. Pylon doesn't store, copy or send those cookies anywhere else.
+- **Tools downloaded only after Pylon asks you:** yt-dlp (github.com/yt-dlp), ffmpeg for joining files (github.com/BtbN/FFmpeg-Builds) and the Icaros previews installer (github.com/Xanashi/Icaros).
+- **Only if you turn them on or use them:** Last.fm scrobbling (artist, title, album, time; you sign in on the Last.fm website, Pylon never sees your password), OpenSubtitles search (the file's name and hash), and Discord status (the track or video name, passed to the Discord app running on your computer).
+- **Local network, only while you use them:** Phone Remote, Stream to TV / Phone and Watch Together listen on your local network; their addresses carry a random key. Looking for Chromecast devices on the local network is on by default (Settings → Recording → Discover cast devices); other local-network discovery runs when you open Network → Local Network.
+
 ## Support the project
 
 Pylon is free and stays free. If you enjoy it and would like to say thanks, you can leave a donation. It's a gift: it doesn't unlock features, priority support or any bonuses, and the player is the same for everyone either way.
