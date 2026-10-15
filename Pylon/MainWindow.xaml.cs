@@ -135,7 +135,9 @@ public partial class MainWindow : Window
         };
         ContentRendered += (_, _) => Perf.Mark("first frame");
         SetupThumbButtons();
-        CompositionTarget.Rendering += SmoothSeek;
+        // 30 updates a second move the bar smoothly; a Rendering hook ran at the monitor's rate (144+ Hz) for the whole session
+        // and kept WPF redrawing the waveform bar all the time, which cost more than a core
+        new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher).Start();
         // the preview card's shadow reaches down over the bar; with a hit-testable popup window the pointer "left" the bar,
         // the popup closed, the pointer was back on the bar, it reopened... (flickering cursor and card). Make it click-through.
         SeekPreview.Opened += (_, _) =>
@@ -263,6 +265,10 @@ public partial class MainWindow : Window
     {
         var mp = new MediaPlayer(Vlc);
         AudioChain.Apply(mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
+        // the output device is chosen before anything plays: switching it on a playing stream left libVLC's clock off by a
+        // quarter second for good, so it dropped and resampled audio every 200 ms (crackling sound, a busy core)
+        var device = Settings.Str("audio.device");
+        if (device != "System default" && mp.AudioOutputDeviceEnum.FirstOrDefault(d => d.Description == device) is { DeviceIdentifier: { } id }) mp.SetOutputDevice(id);
         // libVLC raises events on its own thread; never call back into libVLC from there. A song fading out in a
         // crossfade is no longer the main player: its events are ignored.
         mp.EndReached += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
@@ -406,8 +412,12 @@ public partial class MainWindow : Window
         Task.Run(() => { tail.Stop(); tail.Dispose(); }); // Stop() blocks on the decoder threads
     }
 
+    EventHandler<LogEventArgs>? _logHandler;
+
     void HookLog()
     {
+        if (_logHandler != null) Vlc.Log -= _logHandler; // one handler at a time: an old one kept writing to a closed file
+        _logHandler = null;
         _log?.Dispose();
         _log = null;
         if (!Settings.Bool("general.log")) return;
@@ -425,12 +435,14 @@ public partial class MainWindow : Window
         };
         var html = Settings.Str("general.logformat") == "HTML";
         var log = _log;
-        Vlc.Log += (_, e) =>
+        _logHandler = (_, e) =>
         {
             if (e.Level < min) return;
             var line = $"{DateTime.Now:HH:mm:ss.fff} [{e.Level}] {e.Module}: {e.Message}";
-            lock (log) log.WriteLine(html ? $"<div>{System.Net.WebUtility.HtmlEncode(line)}</div>" : line);
+            try { lock (log) log.WriteLine(html ? $"<div>{System.Net.WebUtility.HtmlEncode(line)}</div>" : line); }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException) { } // disk full, or the log was just switched
         };
+        Vlc.Log += _logHandler;
     }
 
     // ───────────────────────── queue / playback API ─────────────────────────
@@ -577,8 +589,10 @@ public partial class MainWindow : Window
     /// </summary>
     async Task<bool> PlaySite(int i, string src, long startAt, bool? autoplay)
     {
-        if (!YtDlp.Available && (_ytDlpDeclined || !await OfferYtDlp())) return false;
-        Osd(L.T("Loading…"), 30);
+        // a song from a Spotify import that isn't on disk: only yt-dlp can find it (libVLC can't open "ytsearch://")
+        var search = src.StartsWith("ytsearch://");
+        if (!YtDlp.Available && (_ytDlpDeclined || !await OfferYtDlp())) return search;
+        Osd(search ? L.F("Looking for it on YouTube: {0}", Uri.UnescapeDataString(src["ytsearch://".Length..])) : L.T("Loading…"), 30);
         if (await YtDlp.ExpandAsync(src) is { Count: > 0 } items)
         {
             if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
@@ -592,7 +606,9 @@ public partial class MainWindow : Window
         var q = Settings.Str("playback.quality");
         var s = await YtDlp.ResolveAsync(src, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
         if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
-        if (s == null) { Osd(YtDlp.LastError ?? L.T("yt-dlp couldn't open this page"), 5); return false; }
+        // a failed search stops here with the reason (YouTube blocked, "confirm you're not a bot"…) instead of handing
+        // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
+        if (s == null) { Osd(YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 6); return search; }
         var media = new Media(Vlc, new Uri(s.Url));
         try
         {
@@ -614,7 +630,7 @@ public partial class MainWindow : Window
     {
         if (!DialogWindow.OfferYtDlp(this)) { _ytDlpDeclined = true; return false; }
         var ok = await YtDlp.InstallAsync(new Progress<double>(p => Osd(L.F("Downloading yt-dlp… {0}%", (int)(p * 100)), 5)));
-        if (!ok) Osd(L.T("Couldn't download yt-dlp"), 3);
+        if (!ok) Osd(L.T("Couldn't download yt-dlp from GitHub. Check the connection (or VPN) and try again."), 6);
         return ok;
     }
 
@@ -631,6 +647,13 @@ public partial class MainWindow : Window
         var title = media.Meta(MetadataType.Title);
         if (string.IsNullOrWhiteSpace(title)) title = Library.DisplayName(src);
         var artist = media.Meta(MetadataType.Artist);
+        var tagless = string.IsNullOrWhiteSpace(artist);
+        if (tagless && !isUrl)
+        {
+            // recognized earlier (kept in the library), else "Artist - Title" from the file name
+            if (Library.Data.Meta.GetValueOrDefault(src) is { Artist.Length: > 0 } known) (title, artist) = (known.Title ?? title, known.Artist);
+            else (title, artist) = Library.FromFileName(src, title);
+        }
         _title = title;
         _artist = string.IsNullOrWhiteSpace(artist) ? null : artist;
         _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
@@ -645,9 +668,8 @@ public partial class MainWindow : Window
         SetArtwork(media.Meta(MetadataType.ArtworkURL));
         if (!parsed) return;
         if (ArtImage.Source == null && _isAudio && !isUrl && Settings.Bool("library.netmeta")) FetchCover(src);
-        // no tags at all: name it by its sound (AcoustID), once; the result is kept in the library
-        if (_isAudio && !isUrl && string.IsNullOrWhiteSpace(_artist) && Recognize.Possible && Settings.Bool("library.netmeta")
-            && Library.Data.Meta.GetValueOrDefault(src) is not { Artist.Length: > 0 }) RecognizeSong(src);
+        // no tags: name it by its sound (AcoustID); the result is kept in the library
+        if (_isAudio && !isUrl && tagless && Library.Data.Meta.GetValueOrDefault(src) is not { Artist.Length: > 0 } && Settings.Bool("library.netmeta")) RecognizeSong(src, quiet: true);
         if (Library.HistoryOf(src) is { } h) Library.Remember(src, title, _artist, h.Time, media.Duration, _isAudio);
         _lyricsFor = null;
         ApplyLyricsLayout(); // now with the real title and artist
@@ -794,12 +816,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>"Recognize Song" (or a song without tags): title, artist, album and cover from its sound.</summary>
-    async void RecognizeSong(string src)
+    readonly HashSet<string> _recognizeTried = [];
+
+    async void RecognizeSong(string src, bool quiet = false)
     {
-        Osd(L.T("Listening…"), 15);
+        // automatic runs: once per file per session (a song AcoustID doesn't know stays unknown)
+        if (!Recognize.Possible || quiet && !_recognizeTried.Add(src)) return;
+        if (!quiet) Osd(L.T("Listening…"), 15);
         var song = await Recognize.IdentifyAsync(src);
         if (CurrentPath != src) return;
-        if (song == null) { Osd(L.T("Couldn't recognize this song"), 3); return; }
+        if (song == null) { if (!quiet) Osd(L.T("Couldn't recognize this song"), 3); return; }
         // the Cover Art Archive has no picture for many releases: iTunes by the name we now know
         if (song.Cover == null && await Covers.FindAsync(song.Artist, song.Title, song.Album) is { } found) song = song with { Cover = found };
         if (CurrentPath != src) return;
@@ -826,7 +852,10 @@ public partial class MainWindow : Window
     /// <summary>A song without embedded art gets one from iTunes (Covers), on screen and in the Windows media flyout.</summary>
     async void FetchCover(string src)
     {
-        if (await Covers.FindAsync(_track.Artist, _track.Title, _track.Album) is not { } file || CurrentPath != src || ArtImage.Source != null) return;
+        var file = await Covers.FindAsync(_track.Artist, _track.Title, _track.Album);
+        if (CurrentPath != src || ArtImage.Source != null) return;
+        if (file == null) { RecognizeSong(src, quiet: true); return; } // names that find nothing may be wrong: ask the sound
+        
         var url = new Uri(file).AbsoluteUri;
         SetArtwork(url);
         _session?.SetTrack(true, _title, _artist, _track.Album, url);
@@ -1225,7 +1254,8 @@ public partial class MainWindow : Window
             case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(edited: true); break;
             case "audio.eq": ApplyEqualizer(edited: true); break;
             case "audio.maxvol": ApplyVolume(); break;
-            case "audio.device" or "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
+            case "audio.device": ReloadEngine(); break; // a new player on the new device, resuming where it was
+            case "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
             case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
             case "net.preset": ApplyNetworkPreset(); break;
             case "net.file" or "net.disc" or "net.stream" or "net.live": if (!_netPresetApplying) Settings.Set("net.preset", "Custom"); break;
@@ -1269,8 +1299,6 @@ public partial class MainWindow : Window
 
     void ApplyAudioSettings()
     {
-        var device = Settings.Str("audio.device");
-        if (device != "System default" && _mp.AudioOutputDeviceEnum.FirstOrDefault(d => d.Description == device) is { } dev) _mp.SetOutputDevice(dev.DeviceIdentifier);
         var channel = Settings.Str("audio.speakers") switch
         {
             "Stereo" => AudioOutputChannel.Stereo, "Reverse stereo" => AudioOutputChannel.RStereo, "Left" => AudioOutputChannel.Left,
@@ -3250,6 +3278,9 @@ public partial class MainWindow : Window
                         Application.Current.Shutdown();
                         return;
                     }
+                case "hooks":
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"tier={System.Windows.Media.RenderCapability.Tier >> 16} mode={(PresentationSource.FromVisual(this) as HwndSource)?.CompositionTarget.RenderMode} motion=[{Motion.DebugDrivers()}] lyricsHooked={LyricsPane.DebugHooked} musicSpectrum={MusicSpectrum.DebugHooked} videoSpectrum={VideoSpectrum.DebugHooked}{Environment.NewLine}");
+                    break;
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

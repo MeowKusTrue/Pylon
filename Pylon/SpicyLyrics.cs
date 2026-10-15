@@ -52,6 +52,13 @@ public static class SpicyLyrics
     /// ListenBrainz Labs maps artist + title to Spotify ids (no key); up to three, most relevant first. Tags often say more
     /// than Spotify's names ("Song (feat. X) [Remastered]", "A, B & C"), so a cleaned title and the first artist are tried too.
     /// </summary>
+    /// <summary>Spotify ids for a song by its names (ListenBrainz, no key); also used for covers.</summary>
+    public static async Task<string[]> SpotifyIdsAsync(string title, string artist)
+    {
+        try { return await ListenBrainzIdsAsync(title, artist); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException) { return []; }
+    }
+
     static async Task<string[]> ListenBrainzIdsAsync(string title, string artist)
     {
         var ids = await Lookup(title, artist);

@@ -39,7 +39,7 @@ public sealed class Discord : IDisposable
             };
             await SendAsync(1, new { cmd = "SET_ACTIVITY", nonce = Guid.NewGuid().ToString(), args = new { pid = Environment.ProcessId, activity } });
         }
-        catch (IOException) { Close(); } // Discord quit: try again on the next update
+        catch (Exception e) when (e is IOException or OperationCanceledException) { Close(); } // Discord quit or stuck: try again on the next update
         finally { _gate.Release(); }
     }
 
@@ -55,8 +55,7 @@ public sealed class Discord : IDisposable
             try { await pipe.ConnectAsync(150); }
             catch (Exception e) when (e is TimeoutException or IOException) { pipe.Dispose(); continue; }
             _pipe = pipe;
-            await SendAsync(0, new { v = 1, client_id = ClientId });
-            await ReadAsync(); // READY
+            await SendAsync(0, new { v = 1, client_id = ClientId }); // answered by READY (read in SendAsync; a second read hung forever)
             return true;
         }
         return false;
@@ -64,7 +63,7 @@ public sealed class Discord : IDisposable
 
     async Task SendAsync(int op, object payload)
     {
-        var json = JsonSerializer.SerializeToUtf8Bytes(payload);
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload, Json);
         var frame = new byte[8 + json.Length];
         BitConverter.TryWriteBytes(frame.AsSpan(0, 4), op);
         BitConverter.TryWriteBytes(frame.AsSpan(4, 4), json.Length);
@@ -73,12 +72,19 @@ public sealed class Discord : IDisposable
         await ReadAsync(); // every command is answered; reading keeps the pipe from filling up
     }
 
+    static readonly JsonSerializerOptions Json = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+
+    /// <summary>Discord's last answer (READY, the activity it set, or an ERROR event).</summary>
+    public string? LastReply { get; private set; }
+
     async Task ReadAsync()
     {
         var head = new byte[8];
-        await _pipe!.ReadExactlyAsync(head);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5)); // never hold the gate forever
+        await _pipe!.ReadExactlyAsync(head, timeout.Token);
         var body = new byte[BitConverter.ToInt32(head, 4)];
-        await _pipe.ReadExactlyAsync(body);
+        await _pipe.ReadExactlyAsync(body, timeout.Token);
+        LastReply = Encoding.UTF8.GetString(body);
     }
 
     void Close()

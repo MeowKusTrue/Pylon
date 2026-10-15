@@ -114,8 +114,10 @@ public static class YtDlp
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Exe)!);
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5), DefaultRequestHeaders = { { "User-Agent", "Pylon" } } };
-            using (var res = await http.GetAsync("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", HttpCompletionOption.ResponseHeadersRead))
+            using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan, DefaultRequestHeaders = { { "User-Agent", "Pylon" } } };
+            // a stalled connection gives up after 20 s without data (it used to sit there for 5 minutes)
+            using var stall = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using (var res = await http.GetAsync("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe", HttpCompletionOption.ResponseHeadersRead, stall.Token))
             {
                 res.EnsureSuccessStatusCode();
                 var total = res.Content.Headers.ContentLength ?? 0;
@@ -124,8 +126,9 @@ public static class YtDlp
                 var buf = new byte[1 << 16];
                 long done = 0;
                 int n;
-                while ((n = await src.ReadAsync(buf)) > 0)
+                while ((n = await src.ReadAsync(buf, stall.Token)) > 0)
                 {
+                    stall.CancelAfter(TimeSpan.FromSeconds(20));
                     await dst.WriteAsync(buf.AsMemory(0, n));
                     done += n;
                     if (total > 0) progress?.Report((double)done / total);
@@ -134,7 +137,7 @@ public static class YtDlp
             File.Move(tmp, Exe, overwrite: true);
             return true;
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException)
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             try { File.Delete(tmp); } catch (IOException) { }
             return false;

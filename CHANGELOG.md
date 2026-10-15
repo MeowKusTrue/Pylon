@@ -3,6 +3,30 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.2
+
+<!-- ru -->
+**Исправления**
+- **Звук без «радиопомех».** Если частота файла не совпадала с частотой звуковой карты (обычные 44,1 кГц на выходе 48 кГц), libVLC пересчитывал её самым грубым способом, без фильтрации, и музыка звучала как радио с плохим сигналом. Теперь используется качественный ресемплер.
+- **Выбранное устройство вывода** включается до начала воспроизведения. Раньше переключение на ходу сбивало часы libVLC: он каждые 0,2 секунды выбрасывал куски звука и загружал целое ядро процессора. Смена устройства в настройках теперь продолжает трек с того же места.
+- **Меньше нагрузки на процессор.** Текст песни и спектр обновляются 60 раз в секунду, а не с частотой монитора (на 144–240 Гц это было втрое дороже). Полоса перемотки больше не перерисовывает окно на каждом кадре. Всё вместе в 3–5 раз меньше нагрузки во время воспроизведения.
+- **Статус в Discord** снова появляется: Pylon ждал ответа, который Discord не присылает, и зависал на подключении.
+- **Обложки и тексты** находятся чаще: исполнитель кириллицей теперь совпадает с латиницей в iTunes («Лолита» = «Lolita»), а если iTunes ничего не знает, обложка берётся из Spotify. Файлы без тегов получают исполнителя и название из имени файла («Исполнитель - Название»).
+- **Узнавание песни** запускается и для файлов, у которых не нашлась обложка, и не повторяется по кругу.
+- **«Что нового»** больше не показывается при каждом запуске, если диск был переполнен: настройки и библиотека записываются через временный файл, и неудачная запись не портит их.
+- **yt-dlp**: зависшее скачивание прерывается через 20 секунд с понятной ошибкой. Песня из импорта Spotify, которая не нашлась на YouTube, показывает причину, а не запускает цепочку ожиданий по всему плейлисту.
+
+<!-- en -->
+**Fixes**
+- **No more "bad radio" sound.** When a file's sample rate differed from the sound card's (the usual 44.1 kHz on a 48 kHz output), libVLC converted it the crudest way, with no filtering. A proper resampler is used now.
+- **The chosen output device** is set before playback starts. Switching it on a playing stream threw libVLC's clock off: it dropped audio every 0.2 s and kept a CPU core busy. Changing the device in Settings now carries on from the same spot.
+- **Lower CPU use.** Lyrics and the spectrum update 60 times a second instead of at the monitor's rate (three times the work at 144–240 Hz), and the seek bar no longer redraws the window every frame: 3–5× less CPU while playing.
+- **Discord status** shows up again: Pylon waited for a reply Discord never sends and hung while connecting.
+- **Covers and lyrics** are found more often: a Cyrillic artist now matches iTunes' Latin spelling ("Лолита" = "Lolita"), and when iTunes has nothing the cover comes from Spotify. Untagged files take artist and title from the file name ("Artist - Title").
+- **Song recognition** also runs for files whose cover wasn't found, and doesn't repeat over and over.
+- **"What's new"** no longer appears at every start after the disk was full: settings and the library are written through a temporary file, so a failed write can't damage them.
+- **yt-dlp**: a stalled download stops after 20 s with a clear message, and a Spotify-imported song that isn't on YouTube shows why instead of starting a chain of waits through the whole playlist.
+
 ## 1.9.1
 
 <!-- ru -->

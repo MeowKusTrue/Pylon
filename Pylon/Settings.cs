@@ -56,8 +56,19 @@ public static class Settings
     public static void Save()
     {
         SaveTimer.Stop();
-        Directory.CreateDirectory(Library.Dir);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(_values, new JsonSerializerOptions { WriteIndented = true }));
+        // through a temp file: a full disk or a crash mid-write must not leave a cut-off settings.json (that reset everything)
+        var tmp = FilePath + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(Library.Dir);
+            File.WriteAllText(tmp, JsonSerializer.Serialize(_values, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, FilePath, true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(tmp); } catch (IOException) { }
+            SaveTimer.Start(); // try again shortly (space may have been freed)
+        }
     }
 
     public static string Str(string key) => _values.TryGetValue(key, out var v) ? v : Find(key)?.Default ?? "";
@@ -212,7 +223,10 @@ public static class Settings
         if (Str("audio.vissize") is var vs && vs.Contains('x')) { Add($"--effect-width={vs.Split('x')[0]}"); Add($"--effect-height={vs.Split('x')[1]}"); }
         if (Bool("audio.spdif")) Add("--spdif");
         Add($"--force-dolby-surround={Str("audio.dolby") switch { "On" => 1, "Off" => 2, _ => 0 }}");
-        Add($"--speex-resampler-quality={Str("audio.resampler") switch { "Fast" => 0, "Best" => 10, _ => 4 }}");
+        // this libVLC build has no soxr, and speex has priority 0, so "any" picked the "ugly" resampler (no filtering at all):
+        // every file whose rate differs from the device's (44.1 kHz songs on a 48 kHz output) sounded like a bad radio
+        Add("--audio-resampler=speex_resampler");
+        Add($"--speex-resampler-quality={Str("audio.resampler") switch { "Fast" => 3, "Best" => 10, _ => 7 }}");
         Add($"--role={Str("audio.role").ToLowerInvariant()}");
 
         // Subtitles

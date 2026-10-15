@@ -11,6 +11,7 @@ public class Spectrum : FrameworkElement
     const int Bars = 56;
     readonly double[] _levels = new double[Bars];
     bool _active, _hooked;
+    internal bool DebugHooked => _hooked;
 
     public Spectrum()
     {
@@ -49,10 +50,12 @@ public class Spectrum : FrameworkElement
 
     void Tick(object? sender, EventArgs e)
     {
+        var now = _clock.Elapsed.TotalSeconds;
+        if (now - _last < 1 / 62.0) return; // 60 updates a second, whatever the monitor's rate (an FFT and a redraw each)
+        var fall = 0.025 * Math.Min(4, (now - _last) * 60);
         var bands = AudioTap.Bands(Bars);
         for (var i = 0; i < Bars; i++)
-            _levels[i] = bands[i] > _levels[i] ? _levels[i] + (bands[i] - _levels[i]) * 0.6 : Math.Max(bands[i], _levels[i] - 0.025); // quick rise, slow fall
-        var now = _clock.Elapsed.TotalSeconds;
+            _levels[i] = bands[i] > _levels[i] ? _levels[i] + (bands[i] - _levels[i]) * 0.6 : Math.Max(bands[i], _levels[i] - fall); // quick rise, slow fall
         _phase += (now - _last) * (0.6 + 2.4 * _levels.Average()); // "Pulse" drifts faster when the music is loud
         _last = now;
         InvalidateVisual();

@@ -89,6 +89,8 @@ public static class Motion
 #if DEBUG
     /// <summary>Off-screen test windows get few Rendering frames: probes drive them by hand.</summary>
     internal static void DebugFrame() => Tick(null, EventArgs.Empty);
+
+    internal static string DebugDrivers() => string.Join(", ", Drivers.Values.Select(d => $"{(d.Target as FrameworkElement)?.Name}{d.Target.GetType().Name}.{d.Property.Name} {d.Value:0.###}->{d.To:0.###}"));
 #endif
 
     static void Tick(object? sender, EventArgs e)

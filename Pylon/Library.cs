@@ -103,10 +103,17 @@ public static class Library
 
     public static void Save()
     {
-        Directory.CreateDirectory(Dir);
         var tmp = FilePath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(Data, Json));
-        File.Move(tmp, FilePath, true); // atomic replace: a crash mid-write can't eat the library
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            File.WriteAllText(tmp, JsonSerializer.Serialize(Data, Json));
+            File.Move(tmp, FilePath, true); // atomic replace: a crash mid-write can't eat the library
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(tmp); } catch (IOException) { } // disk full: keep the last good file, the next save tries again
+        }
     }
 
     public static void Touch()
@@ -161,6 +168,16 @@ public static class Library
             FoldersScanned?.Invoke();
         });
         return all;
+    }
+
+    /// <summary>A file without tags: "01. Artist - Title.mp3" → (Title, Artist); the name alone when it has no " - ".</summary>
+    public static (string Title, string? Artist) FromFileName(string path, string title)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        if (title != Path.GetFileName(path) && title != name) return (title, null); // a real title tag
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"^\d{1,3}[\s.\-_]+(?=\D)", "").Replace('_', ' ').Trim();
+        var dash = new[] { " - ", " – ", " — " }.Select(d => name.IndexOf(d, StringComparison.Ordinal)).Where(i => i > 0).DefaultIfEmpty(-1).Min();
+        return dash > 0 ? (name[(dash + 3)..].Trim(), name[..dash].Trim()) : (name, null);
     }
 
     public static string DisplayName(string path) =>

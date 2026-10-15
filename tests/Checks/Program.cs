@@ -39,6 +39,12 @@ Check("Spicy background vocals", bgSpicy.Lines.Length == 2 && bgSpicy.Lines[0].B
 var lrc = Lyrics.ParseLrc("[00:01.00]Hello\n[00:01.00]Привет\n[00:04.00]Next\n", "l")!;
 Check("LRC bilingual", lrc.Lines.Length == 2 && lrc.Lines[0].Translation == "Привет" && lrc.Lines[0].End == 4, $"{lrc.Lines[0].Start}-{lrc.Lines[0].End}");
 
+// ── names: untagged files are named from "Artist - Title"; iTunes' Latin spelling of a Cyrillic artist still matches
+Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Ориентация Север.mp3", "01. Лолита - Ориентация Север.mp3") == ("Ориентация Север", "Лолита")
+    && Library.FromFileName(@"C:\m\AC-DC - Thunderstruck.mp3", "AC-DC - Thunderstruck.mp3") == ("Thunderstruck", "AC-DC")
+    && Library.FromFileName(@"C:\m\x.mp3", "Real Title") == ("Real Title", null));
+Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
+
 // ── shortcuts: every layout works and gives no key two jobs
 foreach (var layout in Hotkeys.Layouts.Keys)
 {
@@ -131,6 +137,23 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     before = Level(switchedAt - 22050, switchedAt);
     after = Level(all.Length - 22050, all.Length);
     Check("slider changes without a rebuild", !rebuilt && before > 0.05 && after < before * 0.3, $"{before:0.000} -> {after:0.000}, rebuilt={rebuilt}");
+}
+
+// ── audio: a 44.1 kHz file on a 48 kHz output is resampled by speex, not by "ugly" (which sounded like a bad radio)
+{
+    var used = new List<string>();
+    using var vlc = new LibVLC([.. Settings.EngineArgs(), "--no-video"]);
+    vlc.Log += (_, e) => { if (e.Message.Contains("audio resampler module")) lock (used) used.Add(e.Message); };
+    using var mp = new MediaPlayer(vlc);
+    mp.SetAudioFormat("S16N", 48000, 2);
+    mp.SetAudioCallbacks((_, _, _, _) => { }, null, null, null, null);
+    using var media = new Media(vlc, tone, FromType.FromPath);
+    mp.Play(media);
+    Thread.Sleep(1000);
+    mp.Stop();
+    string picked;
+    lock (used) picked = string.Join("; ", used);
+    Check("resampler is speex", picked.Contains("speex_resampler") && !picked.Contains("\"ugly\""), picked);
 }
 
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
