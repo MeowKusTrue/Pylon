@@ -179,8 +179,11 @@ public partial class MainWindow : Window
             }
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
+        // minimized or in the tray: nothing on screen to animate, so lyrics, spectrum, seek bar and backgrounds rest
+        IsVisibleChanged += (_, _) => Motion.SetAsleep(WindowState == WindowState.Minimized || !IsVisible);
         StateChanged += (_, _) =>
         {
+            Motion.SetAsleep(WindowState == WindowState.Minimized || !IsVisible);
             if (WindowState == WindowState.Minimized && _tray != null) Hide(); // minimized to the tray
             FitMaximized();
             MaxBtn.Tag = WindowState == WindowState.Maximized ? "copy" : "square";
@@ -1216,18 +1219,16 @@ public partial class MainWindow : Window
     }
 
     /// <summary>First start after an update: show what this version brought (the release notes on GitHub).</summary>
-    async void ShowWhatsNewIfUpdated()
+    void ShowWhatsNewIfUpdated()
     {
         var current = Updater.Current;
         var last = Settings.Str("app.lastversion");
         Settings.Set("app.lastversion", current.ToString(3));
+        Settings.Save(); // at once: the note shows on the first start after an update and never again
         // moved over from the Inno installer (the bridge installs silently, so "first run" isn't flagged): drop the old copy
         if (Updater.IsVelopackInstall && ShellRegistration.HasInnoInstall) _ = Task.Run(ShellRegistration.RemoveInnoInstall);
-        if (!Version.TryParse(last, out var previous) || previous >= current) return;
-        string? notes;
-        try { notes = await Updater.NotesForAsync(current); }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException) { return; }
-        if (notes != null) DialogWindow.WhatsNew(this, current, notes);
+        // the "Update available" window already showed what's new: after updating, a short note is enough
+        if (Version.TryParse(last, out var previous) && previous < current) Osd(L.F("Pylon updated to {0}", current.ToString(3)), 4);
     }
 
     public void ShowAbout() => DialogWindow.About(this, Vlc.Version);
@@ -1245,6 +1246,7 @@ public partial class MainWindow : Window
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.spectrumstyle": MusicSpectrum.InvalidateVisual(); VideoSpectrum.InvalidateVisual(); break;
+            case "ui.lite": ApplyLayout(); LyricsPane.Reblur(); break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.videobg" or "ui.livebg" or "ui.lyrics" or "audio.visualizer" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
@@ -1450,6 +1452,7 @@ public partial class MainWindow : Window
     /// </summary>
     void SmoothSeek(object? sender, EventArgs e)
     {
+        if (Motion.Asleep) { _lastFrame = 0; return; }
         var now = Stopwatch.GetTimestamp();
         var dt = _lastFrame == 0 ? 0 : Math.Min(0.1, (now - _lastFrame) / (double)Stopwatch.Frequency);
         _lastFrame = now;
@@ -1574,8 +1577,8 @@ public partial class MainWindow : Window
     {
         var on = AmbientOn;
         VideoBackdrop.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-        Ambient.Live = on && Settings.Bool("ui.livebg");
-        ArtBackdrop.Live = MusicView.Visibility == Visibility.Visible && Settings.Bool("ui.livebg");
+        Ambient.Live = on && Settings.Bool("ui.livebg") && !Motion.Lite;
+        ArtBackdrop.Live = MusicView.Visibility == Visibility.Visible && Settings.Bool("ui.livebg") && !Motion.Lite;
         FitVideo();
         _ambientTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => { if (AmbientOn && _mp.IsPlaying) GrabAmbient(); }, Dispatcher);
         _ambientTimer.IsEnabled = on;

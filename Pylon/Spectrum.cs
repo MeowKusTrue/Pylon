@@ -11,12 +11,14 @@ public class Spectrum : FrameworkElement
     const int Bars = 56;
     readonly double[] _levels = new double[Bars];
     bool _active, _hooked;
+    SolidColorBrush? _brush;
     internal bool DebugHooked => _hooked;
 
     public Spectrum()
     {
         IsHitTestVisible = false;
         IsVisibleChanged += (_, _) => Sync();
+        Motion.AsleepChanged += Sync;
     }
 
     /// <summary>Set while media is playing; the capture only runs when an active spectrum is on screen.</summary>
@@ -28,7 +30,7 @@ public class Spectrum : FrameworkElement
 
     void Sync()
     {
-        var on = _active && IsVisible;
+        var on = _active && IsVisible && !Motion.Asleep;
         if (on == _hooked) return;
         _hooked = on;
         if (on)
@@ -51,8 +53,8 @@ public class Spectrum : FrameworkElement
     void Tick(object? sender, EventArgs e)
     {
         var now = _clock.Elapsed.TotalSeconds;
-        if (now - _last < 1 / 62.0) return; // 60 updates a second, whatever the monitor's rate (an FFT and a redraw each)
-        var fall = 0.025 * Math.Min(4, (now - _last) * 60);
+        if (now - _last < 1 / 31.0) return; // 30 updates a second, whatever the monitor's rate (an FFT and a redraw each)
+        var fall = 0.025 * Math.Min(8, (now - _last) * 60);
         var bands = AudioTap.Bands(Bars);
         for (var i = 0; i < Bars; i++)
             _levels[i] = bands[i] > _levels[i] ? _levels[i] + (bands[i] - _levels[i]) * 0.6 : Math.Max(bands[i], _levels[i] - fall); // quick rise, slow fall
@@ -80,13 +82,14 @@ public class Spectrum : FrameworkElement
     {
         if (!_hooked || ActualWidth <= 0) return;
         var color = (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
+        if (_brush?.Color != color) { _brush = new SolidColorBrush(color); _brush.Freeze(); } // not a new brush 30 times a second
         double w = ActualWidth, h = ActualHeight;
         switch (Style)
         {
-            case "Mirror": Mirror(dc, new SolidColorBrush(color), w, h); break;
+            case "Mirror": Mirror(dc, _brush, w, h); break;
             case "Wave": Wave(dc, color, w, h); break;
             case "Pulse": Pulse(dc, color, w, h); break;
-            default: BarsFromBottom(dc, new SolidColorBrush(color), w, h); break;
+            default: BarsFromBottom(dc, _brush, w, h); break;
         }
     }
 
@@ -198,14 +201,14 @@ public static class AudioTap
     /// <summary>Log-spaced band levels 40 Hz … 16 kHz, 0..1.</summary>
     public static double[] Bands(int count)
     {
-        var buf = new Complex[N];
+        var buf = Buf; // reused: a fresh 2048-value array every frame kept the garbage collector busy
         lock (Gate)
             for (var i = 0; i < N; i++)
                 buf[i] = Ring[(_pos + i) % N] * (0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (N - 1))); // Hann window
         Fft(buf);
 
         var result = new double[count];
-        var dbs = new double[count];
+        var dbs = Dbs.Length == count ? Dbs : Dbs = new double[count];
         const double lo = 40, hi = 16000;
         for (var b = 0; b < count; b++)
         {
@@ -225,6 +228,8 @@ public static class AudioTap
     }
 
     static double _top = -6;
+    static readonly Complex[] Buf = new Complex[N];
+    static double[] Dbs = [];
 
     static void Fft(Complex[] a)
     {

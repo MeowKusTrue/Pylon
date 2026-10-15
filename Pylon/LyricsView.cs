@@ -56,6 +56,7 @@ public class LyricsView : Grid
         public double A, B, Top;
         public int State = -1;              // 0 not yet, 1 being sung, 2 sung
         public bool Hover, Hidden;
+        public int Painted = -1;            // the state an off-screen line was last settled in (-1: paint every frame)
     }
 
     // goals over a word's progress (0 = not sung, 1 = sung); lifts are in font sizes
@@ -99,6 +100,7 @@ public class LyricsView : Grid
         Children.Add(_message);
         _message.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
         IsVisibleChanged += (_, _) => Hook();
+        Motion.AsleepChanged += Hook;
         ThemeManager.Changed += () => { if (_doc != null) Show(_doc); };
         Background = Brushes.Transparent; // the wheel works over the gaps between lines too
         // No OpacityMask for the edge fade: WPF maps it over the content's bounds, which scroll, so it slid along and
@@ -125,6 +127,9 @@ public class LyricsView : Grid
     }
 
     public bool HasLyrics => _doc != null;
+
+    /// <summary>Light mode switched: the blur of every line is worked out again on the next frame.</summary>
+    public void Reblur() => _blurFor = -2;
 
     static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
@@ -347,7 +352,7 @@ public class LyricsView : Grid
 
     void Hook()
     {
-        var on = IsVisible && _doc is { Synced: true };
+        var on = IsVisible && _doc is { Synced: true } && !Motion.Asleep;
         if (on == _hooked) return;
         _hooked = on;
         _lastFrame = _clock.Elapsed.TotalSeconds;
@@ -358,7 +363,7 @@ public class LyricsView : Grid
     // 60 updates a second look the same as 180 and cost a third: Rendering fires at the monitor's rate
     void Tick(object? sender, EventArgs e)
     {
-        if (_clock.Elapsed.TotalSeconds - _lastFrame < 1 / 62.0) return;
+        if (_clock.Elapsed.TotalSeconds - _lastFrame < (Motion.Lite ? 1 / 31.0 : 1 / 62.0)) return;
         Update();
     }
 
@@ -409,6 +414,10 @@ public class LyricsView : Grid
             if (Math.Abs(lv.Root.Child.Opacity - fade) > 0.005) lv.Root.Child.Opacity = fade;
 
             var visible = y + lv.Root.ActualHeight > -200 && y < ActualHeight + 200;
+            // off-screen lines are settled once per state change, not repainted every frame
+            if (visible) lv.Painted = -1;
+            else if (lv.Painted == state) continue;
+            else lv.Painted = state;
             foreach (var p in lv.Parts) Paint(p, t, dt, state == 1, visible);
         }
 
@@ -419,7 +428,7 @@ public class LyricsView : Grid
             {
                 var d = Math.Abs(k - cur);
                 var line = _lines[k];
-                var r = line.Hover || cur < 0 || d == 0 ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
+                var r = line.Hover || cur < 0 || d == 0 || Motion.Lite ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
                 // an attached effect renders the line off-screen every frame even at radius 0: only lines that are blurred
                 // (or still un-blurring) carry it, and far lines are faint anyway
                 if (d > 8) line.Root.Effect = null;
@@ -535,7 +544,7 @@ public class LyricsView : Grid
     void Glow(Part p, double radius, double opacity)
     {
         if (!Changed(ref p.Go, opacity, 0.01) & !Changed(ref p.Gb, radius, 0.5)) return;
-        if (opacity < 0.02) { p.El.Effect = null; return; }
+        if (opacity < 0.02 || Motion.Lite) { p.El.Effect = null; return; } // a glow is a shadow effect per word: light mode skips it
         if (p.El.Effect is not DropShadowEffect glow)
             p.El.Effect = glow = new DropShadowEffect { ShadowDepth = 0, Color = _fg, RenderingBias = RenderingBias.Performance };
         glow.BlurRadius = radius * 1.5;

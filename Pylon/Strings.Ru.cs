@@ -840,6 +840,8 @@ public static partial class Strings
         ["Skip Intro"] = "Пропустить заставку",
         ["Contact Sheet…"] = "Лист кадров…",
         ["Phone Remote…"] = "Пульт с телефона…",
+        ["Light mode"] = "Лёгкий режим",
+        ["For weak laptops and battery life: no blur on lyrics, no moving background, calmer animation."] = "Для слабых ноутбуков и экономии батареи: без размытия текста, без движущегося фона, анимация спокойнее.",
         ["Looking for it on YouTube: {0}"] = "Ищу на YouTube: {0}",
         ["Not found on YouTube"] = "На YouTube не нашлось",
         ["Default Player & File Types…"] = "Плеер по умолчанию и типы файлов…",

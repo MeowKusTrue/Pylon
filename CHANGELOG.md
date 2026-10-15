@@ -3,6 +3,26 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.3
+
+<!-- ru -->
+**Новое**
+- **Лёгкий режим** (Настройки → Интерфейс): без размытия и свечения текста, без движущегося фона, анимация спокойнее. Для слабых ноутбуков и экономии батареи.
+
+**Исправления**
+- Свёрнутый или убранный в трей Pylon больше ничего не рисует: текст, спектр, полоса перемотки и живой фон останавливаются. Играет только звук.
+- Размытый фон считается в десятки раз дешевле при том же виде, спектр обновляется 30 раз в секунду и не создаёт мусор на каждом кадре, а невидимые строки текста не перерисовываются.
+- Вместо окна «Что нового» после обновления — короткое сообщение «Pylon обновлён до …», один раз при первом запуске. Список изменений по-прежнему виден в окне «Доступно обновление».
+
+<!-- en -->
+**New**
+- **Light mode** (Settings → Interface): no blur or glow on lyrics, no moving background, calmer animation. For weak laptops and battery life.
+
+**Fixes**
+- Minimized or in the tray, Pylon draws nothing: lyrics, spectrum, seek bar and the moving background stop. Only the sound plays.
+- The blurred background costs a fraction of what it did with the same look, the spectrum updates 30 times a second without making garbage every frame, and lyrics lines off screen aren't repainted.
+- Instead of the "What's new" window after an update, a short "Pylon updated to …" note, once, on the first start. The changes are still listed in the "Update available" window.
+
 ## 1.9.2
 
 <!-- ru -->

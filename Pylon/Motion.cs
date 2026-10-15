@@ -28,6 +28,20 @@ public static class Motion
 {
     public static bool Enabled => SystemParameters.ClientAreaAnimation;
 
+    /// <summary>The main window is minimized or in the tray: per-frame work (lyrics, spectrum, seek bar, moving backgrounds) stops.</summary>
+    public static bool Asleep { get; private set; }
+    public static event Action? AsleepChanged;
+
+    public static void SetAsleep(bool asleep)
+    {
+        if (asleep == Asleep) return;
+        Asleep = asleep;
+        AsleepChanged?.Invoke();
+    }
+
+    /// <summary>"Light mode": no blur, no moving backgrounds, lyrics at 30 updates a second (weak laptops, battery).</summary>
+    public static bool Lite => Settings.Bool("ui.lite");
+
     /// <summary>The change came from the mouse (or pen/touch). Hotkey-driven changes don't animate.</summary>
     public static bool ByPointer => InputManager.Current.MostRecentInputDevice is not KeyboardDevice;
 

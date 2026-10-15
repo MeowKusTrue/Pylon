@@ -19,10 +19,11 @@ public class Backdrop : Grid
     readonly Grid _spin = new(), _counter = new();
     readonly RotateTransform _rot = new(), _rot2 = new();
     readonly ScaleTransform _scale = new(1.25, 1.25), _scale2 = new(-2.2, 2.2);
-    bool _aFront = true, _live;
+    bool _aFront = true, _live, _want;
 
     public Backdrop()
     {
+        Motion.AsleepChanged += () => Live = _want; // a minimized window stops turning, and starts again when shown
         ClipToBounds = true;
         IsHitTestVisible = false;
         _spin.RenderTransformOrigin = _counter.RenderTransformOrigin = new Point(0.5, 0.5);
@@ -37,8 +38,10 @@ public class Backdrop : Grid
         Children.Add(_counter);
     }
 
-    static Image Layer() => new() { Stretch = Stretch.UniformToFill, Effect = new BlurEffect { Radius = 90, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Performance } };
-    static Border Cached(Image i) => new() { Child = i, CacheMode = new BitmapCache() };
+    // the picture is blurred at 160×90 and the cached result stretched over the window: the same soft look as a radius-90
+    // blur at full size, at a fraction of the cost (a full-window blur was redrawn whenever anything over it changed)
+    static Image Layer() => new() { Stretch = Stretch.UniformToFill, Effect = new BlurEffect { Radius = 11, KernelType = KernelType.Gaussian, RenderingBias = RenderingBias.Performance } };
+    static Viewbox Cached(Image i) => new() { Stretch = Stretch.UniformToFill, Child = new Border { Width = 160, Height = 90, Child = i, CacheMode = new BitmapCache() } };
 
     /// <summary>Shows a new picture, cross-fading from the current one (instant when <paramref name="fade"/> is off).</summary>
     public void SetImage(ImageSource? source, bool fade = true)
@@ -65,7 +68,8 @@ public class Backdrop : Grid
         get => _live;
         set
         {
-            var on = value && Motion.Enabled;
+            _want = value;
+            var on = value && Motion.Enabled && !Motion.Asleep;
             if (on == _live) return;
             _live = on;
             if (on)
