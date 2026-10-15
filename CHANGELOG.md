@@ -3,6 +3,22 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.8.0
+
+<!-- ru -->
+**Новое**
+- **Пульт с телефона** (меню «⋯» → «Пульт с телефона…»): отсканируйте QR-код телефоном в той же сети — в браузере откроется пульт с паузой, треками, перемоткой на 15 секунд, громкостью и тем, что играет. В адресе секретный ключ: чужие в сети управлять не смогут. Ничего ставить на телефон не нужно.
+
+**Под капотом**
+- Каждая сборка проверяет то, что раньше ломалось незаметно: разбор текстов песен с переводами, включение аудиоэффектов и громкость каждого плеера (для плавного перехода и выравнивания).
+
+<!-- en -->
+**New**
+- **Phone remote** (⋯ menu → Phone Remote…): scan the QR code with a phone on the same network and its browser becomes a remote with play / pause, tracks, 15-second skips, volume and what's playing. The address carries a private key, so others on the network can't take over. Nothing to install on the phone.
+
+**Under the hood**
+- Every build now checks what used to break silently: lyrics parsing with translations, audio effects engaging, and per-player loudness (crossfade, measured replay gain).
+
 ## 1.7.0
 
 <!-- ru -->

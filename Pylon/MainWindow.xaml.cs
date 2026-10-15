@@ -202,6 +202,7 @@ public partial class MainWindow : Window
             _tick.Stop();
             _duck.Stop();
             _tray?.Dispose();
+            _remote?.Dispose();
             _preview.Dispose();
             _cast?.Dispose();
             _renderers?.Stop();
@@ -2132,6 +2133,7 @@ public partial class MainWindow : Window
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
         CastMenu(),
         Item(_cast != null ? "Streaming to TV / Phone…" : "Stream to TV / Phone…", "broadcast-duotone", null, StreamToNetwork, check: _cast != null, enabled: _index >= 0 || _cast != null),
+        Item("Phone Remote…", "device-mobile-duotone", null, ShowRemote, check: _remote != null),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
@@ -2358,6 +2360,34 @@ public partial class MainWindow : Window
     CastServer? _cast;
 
     /// <summary>Starts streaming the current item to the local network (or shows the running stream) with a QR code to join.</summary>
+    RemoteServer? _remote;
+
+    void ShowRemote()
+    {
+        _remote ??= new RemoteServer(RemoteCommand);
+        if (!DialogWindow.Remote(this, _remote.Url)) return;
+        _remote.Dispose();
+        _remote = null;
+    }
+
+    object RemoteCommand(string command, int arg)
+    {
+        switch (command)
+        {
+            case "toggle": TogglePlay(); break;
+            case "prev": Previous(); break;
+            case "next": Next(); break;
+            case "back": Jump(-15_000); break;
+            case "forward": Jump(15_000); break;
+            case "volume": Volume.Value = Math.Clamp(arg / 100.0, 0, 1); ApplyVolume(); break;
+        }
+        return new
+        {
+            title = _index >= 0 ? _title : "Pylon", artist = _index >= 0 ? _artist : null, playing = _mp.IsPlaying,
+            time = Math.Max(0, _mp.Time), length = Math.Max(0, _mp.Length), volume = (int)Math.Round(Volume.Value * 100),
+        };
+    }
+
     public void StreamToNetwork()
     {
         if (_cast == null)
@@ -2908,6 +2938,16 @@ public partial class MainWindow : Window
                 case "skipstate": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"skip={SkipBtn.Visibility} '{SkipBtn.Content}' chapters={_chapters.Length} next={NextInFolder()}{Environment.NewLine}"); break;
                 case "sheet": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"sheet={await Frames.ContactSheetAsync(CurrentPath!, Path.GetDirectoryName(outFile)!)}{Environment.NewLine}"); break;
                 case "tracks": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", _mp.AudioTrackDescription.Select(AudioTrackName)) + Environment.NewLine); break;
+                case "remote": // the remote page and one command, fetched like a phone would
+                    {
+                        _remote ??= new RemoteServer(RemoteCommand);
+                        using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                        var page = await http.GetStringAsync(_remote.Url);
+                        var state = await http.GetStringAsync(_remote.Url + "api/toggle");
+                        var denied = await http.GetAsync(_remote.Url.Replace(_remote.Url.Split('/')[3], "nope") + "api/toggle");
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"page {page.Length} chars; toggle -> {state}; wrong key -> {(int)denied.StatusCode}{Environment.NewLine}");
+                        break;
+                    }
                 case "lyricsstate":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), LyricsPane.DebugState() + Environment.NewLine);
                     break;

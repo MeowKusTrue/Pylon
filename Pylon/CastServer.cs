@@ -105,9 +105,11 @@ public sealed class CastServer : IDisposable
     }
 
     /// <summary>The landing page address as a QR code, drawn in the current theme colors.</summary>
-    public ImageSource QrCode(Brush dark, Brush light)
+    public ImageSource QrCode(Brush dark, Brush light) => Qr(PageUrl, dark, light);
+
+    public static ImageSource Qr(string url, Brush dark, Brush light)
     {
-        using var data = new QRCodeGenerator().CreateQrCode(PageUrl, QRCodeGenerator.ECCLevel.M);
+        using var data = new QRCodeGenerator().CreateQrCode(url, QRCodeGenerator.ECCLevel.M);
         var m = data.ModuleMatrix;
         var g = new GeometryGroup { FillRule = FillRule.Nonzero };
         for (var y = 0; y < m.Count; y++)
