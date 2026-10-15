@@ -819,8 +819,6 @@
   "Pylon opens all {0} formats.": "Pylon opens all {0} formats.",
   "Pylon isn't the default for any of its {0} formats yet.": "Pylon isn't the default for any of its {0} formats yet.",
   "Pylon opens {0} of {1} formats.": "Pylon opens {0} of {1} formats.",
-  "Took {0} formats nobody had chosen an app for.": "Took {0} formats nobody had chosen an app for.",
-  "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.": "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.",
   "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.": "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.",
   "Skip buttons on the bar (−15 / +15)": "Skip buttons on the bar (−15 / +15)",
   "Very short jump (Shift + ← / →)": "Very short jump (Shift + ← / →)",
@@ -914,7 +912,6 @@
   "Pass compressed audio to the receiver": "Pass compressed audio to the receiver",
   "S/PDIF or HDMI passthrough.": "S/PDIF or HDMI passthrough.",
   "Detect Dolby Surround": "Detect Dolby Surround",
-  "Resampling quality": "Resampling quality",
   "Media role": "Media role",
   "Communication": "Communication",
   "Game": "Game",
@@ -1069,5 +1066,8 @@
   "Radial": "Radial",
   "Aurora": "Aurora",
   "Horizon": "Horizon",
-  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection."
+  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.",
+  "{0} of {1} formats now open in Pylon. Windows protects the rest: pick Pylon for them in the window that opened.": "{0} of {1} formats now open in Pylon. Windows protects the rest: pick Pylon for them in the window that opened.",
+  "Done: all {0} formats open in Pylon.": "Done: all {0} formats open in Pylon.",
+  "Every audio and video format Pylon plays will open in Pylon, replacing the app chosen for it now. You can change any of them back in Windows' default apps.": "Every audio and video format Pylon plays will open in Pylon, replacing the app chosen for it now. You can change any of them back in Windows' default apps."
 }

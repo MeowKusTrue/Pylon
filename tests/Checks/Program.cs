@@ -45,9 +45,9 @@ Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Орие�
     && Library.FromFileName(@"C:\m\x.mp3", "Real Title") == ("Real Title", null));
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
-// ── default player: only formats nobody chose an app for are taken (never a user's choice, never ours again)
-var free = ShellRegistration.Unclaimed(ext => ext == ".mp4", ext => ext == ".mkv" ? "Pylon.mkv" : ext == ".mp3" ? "WMP11.AssocFile.MP3" : null);
-Check("default player: unclaimed formats", !free.Contains(".mp4") && !free.Contains(".mkv") && free.Contains(".mp3") && free.Contains(".flac"), string.Join(" ", free.Take(6)));
+// ── default player: every format that doesn't open in Pylon yet is taken, ours are left alone
+var take = ShellRegistration.NotOurs(ext => ext == ".mkv" ? "Pylon.mkv" : ext == ".mp3" ? "WMP11.AssocFile.MP3" : ext == ".flac" ? "KLCP.WMP64.flac" : null);
+Check("default player: formats to take", !take.Contains(".mkv") && take.Contains(".mp3") && take.Contains(".flac") && take.Contains(".mp4"), string.Join(" ", take.Take(6)));
 
 // ── translations: every language file has the English file's keys, and keeps its {0} {1} placeholders
 {
@@ -162,29 +162,36 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     Check("slider changes without a rebuild", !rebuilt && before > 0.05 && after < before * 0.3, $"{before:0.000} -> {after:0.000}, rebuilt={rebuilt}");
 }
 
-// ── audio: a 44.1 kHz file on a 48 kHz output is resampled by speex, not by "ugly" (which sounded like a bad radio)
+// ── audio: seeking keeps playback in sync. With libVLC resampling (mmdevice at 48 kHz + speex) every seek threw the drift
+// correction into a spiral of dropped buffers; DirectSound takes the file's rate. Needs a silent output (VB-Audio CABLE).
 {
-    var used = new List<string>();
+    var warn = 0;
     using var vlc = new LibVLC([.. Settings.EngineArgs(), "--no-video"]);
-    vlc.Log += (_, e) => { if (e.Message.Contains("audio resampler module")) lock (used) used.Add(e.Message); };
+    vlc.Log += (_, e) => { if (e.Message.Contains("too late") || e.Message.Contains("dropped")) Interlocked.Increment(ref warn); };
     using var mp = new MediaPlayer(vlc);
-    mp.SetAudioFormat("S16N", 48000, 2);
-    mp.SetAudioCallbacks((_, _, _, _) => { }, null, null, null, null);
-    using var media = new Media(vlc, tone, FromType.FromPath);
-    mp.Play(media);
-    Thread.Sleep(1000);
-    mp.Stop();
-    string picked;
-    lock (used) picked = string.Join("; ", used);
-    Check("resampler is speex", picked.Contains("speex_resampler") && !picked.Contains("\"ugly\""), picked);
+    AudioChain.Apply(mp, null);
+    var cable = mp.AudioOutputDeviceEnum.FirstOrDefault(d => d.Description.Contains("CABLE Input"));
+    if (cable.DeviceIdentifier == null) Console.WriteLine("skip seeking keeps sync (no silent output device here)");
+    else
+    {
+        mp.SetOutputDevice(cable.DeviceIdentifier);
+        var longTone = Path.Combine(Path.GetTempPath(), "pylon-check-long.wav");
+        WriteTone(longTone, 30);
+        using var media = new Media(vlc, longTone, FromType.FromPath);
+        mp.Play(media);
+        Thread.Sleep(2000);
+        for (var k = 1; k <= 3; k++) { mp.Time = k * 6000; Thread.Sleep(2500); }
+        mp.Stop();
+        Check("seeking keeps sync", warn < 10, $"{warn} sync errors over 3 seeks");
+    }
 }
 
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 
-static void WriteTone(string path) // 3 s of a 440 Hz sine, 16-bit stereo
+static void WriteTone(string path, int seconds = 3) // a 440 Hz sine, 16-bit stereo
 {
-    const int rate = 44100, seconds = 3;
+    const int rate = 44100;
     using var w = new BinaryWriter(File.Create(path));
     int bytes = rate * seconds * 4;
     w.Write("RIFF"u8); w.Write(36 + bytes); w.Write("WAVEfmt "u8); w.Write(16); w.Write((short)1); w.Write((short)2);

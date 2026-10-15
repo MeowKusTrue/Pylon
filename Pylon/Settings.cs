@@ -215,10 +215,9 @@ public static class Settings
         Add($"--audio-language={Lang("audio.lang")}");
         if (Bool("audio.spdif")) Add("--spdif");
         Add($"--force-dolby-surround={Str("audio.dolby") switch { "On" => 1, "Off" => 2, _ => 0 }}");
-        // this libVLC build has no soxr, and speex has priority 0, so "any" picked the "ugly" resampler (no filtering at all):
-        // every file whose rate differs from the device's (44.1 kHz songs on a 48 kHz output) sounded like a bad radio
-        Add("--audio-resampler=speex_resampler");
-        Add($"--speex-resampler-quality={Str("audio.resampler") switch { "Fast" => 3, "Best" => 10, _ => 7 }}");
+        // Sample rates are converted by Windows: the output is DirectSound (see AudioChain.Output). libVLC's own converters
+        // were both wrong here: "ugly" (this build has no soxr) sounded like a bad radio, and speex threw libVLC's drift
+        // correction into a spiral after a seek (buffers dropped every 0.2 s, a core busy). libVLC only nudges the rate now.
         Add($"--role={Str("audio.role").ToLowerInvariant()}");
 
         // Subtitles
@@ -555,7 +554,6 @@ public static class Settings
             Sec("",
                 T("audio.spdif", "Pass compressed audio to the receiver", false, "S/PDIF or HDMI passthrough.", engine: true),
                 C("audio.dolby", "Detect Dolby Surround", "Automatic", ["Automatic", "On", "Off"], engine: true),
-                C("audio.resampler", "Resampling quality", "Balanced", ["Fast", "Balanced", "Best"], engine: true),
                 C("audio.role", "Media role", "Video", ["Video", "Music", "Communication", "Game", "Notification", "Animation", "Production", "Accessibility", "Test"], engine: true)),
         ]),
 

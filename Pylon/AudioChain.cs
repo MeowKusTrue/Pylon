@@ -87,6 +87,13 @@ public static class AudioChain
         return true;
     }
 
+    /// <summary>
+    /// DirectSound, not WASAPI (mmdevice): it takes any sample rate and Windows' engine converts it, so libVLC never has
+    /// to resample. mmdevice only takes the device's rate (48 kHz), and libVLC's converters in this build either sound bad
+    /// (ugly) or break playback after a seek (speex). Measured: 2950 sync errors and a busy core over 7 seeks vs 2 and 2 %.
+    /// </summary>
+    public const string Output = "directsound";
+
     /// <summary>Audio filters other than the equalizer, in chain order.</summary>
     public static List<string> Filters() => Settings.AudioFilterNames();
 
@@ -110,7 +117,7 @@ public static class AudioChain
         SetString(set, mp, "audio-filter", string.Join(":", names));
         Built.AddOrUpdate(mp, ChainKey(Settings.EngineArgs()));
         // drops the kept output so the next one inherits the chain above; must name a real module ("any" is refused)
-        return mp.SetAudioOutput(audioOutput ?? "mmdevice");
+        return mp.SetAudioOutput(audioOutput ?? Output);
     }
 
     /// <summary>True when the chain holds more than the equalizer: then equalizer edits go through an engine restart.</summary>

@@ -819,8 +819,6 @@
   "Pylon opens all {0} formats.": "Pylon открывает все {0} форматов.",
   "Pylon isn't the default for any of its {0} formats yet.": "Pylon пока не выбран ни для одного из {0} форматов.",
   "Pylon opens {0} of {1} formats.": "Pylon открывает {0} из {1} форматов.",
-  "Took {0} formats nobody had chosen an app for.": "Забрал {0} форматов, для которых ещё не было выбрано приложение.",
-  "Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.": "Остальные Windows просит подтвердить: в открывшемся окне нажмите «Установить по умолчанию» рядом с Pylon.",
   "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music.": "Под обложкой, пока играет музыка (то же, что правый клик → «Визуализация»). Пульс: мягкие волны, которые дышат с музыкой.",
   "Skip buttons on the bar (−15 / +15)": "Кнопки перемотки на панели (−15 / +15)",
   "Very short jump (Shift + ← / →)": "Очень короткий прыжок (Shift + ← / →)",
@@ -914,7 +912,6 @@
   "Pass compressed audio to the receiver": "Передавать сжатый звук на ресивер",
   "S/PDIF or HDMI passthrough.": "Сквозной вывод через S/PDIF или HDMI.",
   "Detect Dolby Surround": "Определять Dolby Surround",
-  "Resampling quality": "Качество передискретизации",
   "Media role": "Роль медиа",
   "Communication": "Связь",
   "Game": "Игра",
@@ -1069,5 +1066,8 @@
   "Radial": "Круг",
   "Aurora": "Сияние",
   "Horizon": "Горизонт",
-  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "За обложкой, пока играет музыка, в цветах обложки. Круг: лучи вокруг обложки. Сияние: мягкие ленты. Горизонт: широкие столбики с отражением."
+  "Behind the cover while music plays, in the cover's colors. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection.": "За обложкой, пока играет музыка, в цветах обложки. Круг: лучи вокруг обложки. Сияние: мягкие ленты. Горизонт: широкие столбики с отражением.",
+  "{0} of {1} formats now open in Pylon. Windows protects the rest: pick Pylon for them in the window that opened.": "Теперь {0} из {1} форматов открываются в Pylon. Остальные Windows защищает: выберите для них Pylon в открывшемся окне.",
+  "Done: all {0} formats open in Pylon.": "Готово: все {0} форматов открываются в Pylon.",
+  "Every audio and video format Pylon plays will open in Pylon, replacing the app chosen for it now. You can change any of them back in Windows' default apps.": "Все аудио- и видеоформаты, которые играет Pylon, будут открываться в нём вместо выбранного сейчас приложения. Любой из них можно вернуть в «Приложениях по умолчанию» Windows."
 }

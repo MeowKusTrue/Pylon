@@ -3,6 +3,22 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.6
+
+<!-- ru -->
+**Исправления**
+- **Звук больше не рвётся после перемотки.** Пересчёт частоты внутри libVLC (speex) после перемотки раскачивал синхронизацию: каждые 0,2 секунды выбрасывались куски звука, а процессор был загружен. Теперь звук идёт через DirectSound на частоте файла, и пересчитывает её сама Windows. По замерам — 2 сбоя вместо 2950 за семь перемоток.
+- **Плеер по умолчанию — правда одной кнопкой**, как в 7-Zip: Pylon сам становится программой для всех своих аудио- и видеоформатов, не нужно выбирать каждый формат в настройках Windows. Если Windows какой-то формат защищает, откроется её страница только для него. При удалении Pylon эти привязки убираются.
+- Для музыки libVLC больше не пытается подцепить лежащие рядом файлы (.ttml, .lrc) как субтитры.
+- Настройка «Качество пересчёта» убрана: пересчитывает Windows.
+
+<!-- en -->
+**Fixes**
+- **Sound no longer breaks up after a seek.** libVLC's own sample-rate conversion (speex) threw its sync correction into a spiral after seeking: audio dropped every 0.2 s and a core stayed busy. Sound now goes out through DirectSound at the file's own rate and Windows converts it. Measured: 2 sync errors instead of 2950 over seven seeks.
+- **Default player really is one button now**, like 7-Zip: Pylon becomes the app for all its audio and video formats without picking each one in Windows' settings. If Windows protects a format, its settings page opens just for that. Uninstalling Pylon removes these links.
+- For music, libVLC no longer tries the .ttml and .lrc files beside it as subtitles.
+- The "Resampling quality" setting is gone: Windows does the conversion.
+
 ## 1.9.5
 
 <!-- ru -->

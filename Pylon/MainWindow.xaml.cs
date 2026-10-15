@@ -720,6 +720,7 @@ public partial class MainWindow : Window
 
         if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
         if (!autoplay) media.AddOption(":start-paused");
+        if (_isAudio) media.AddOption(":no-sub-autodetect-file"); // music: libVLC tried every .ttml / .lrc beside it as a subtitle
         foreach (var sub in Library.Data.Subtitles.GetValueOrDefault(src) ?? [])
             if (File.Exists(sub)) media.AddSlave(MediaSlaveType.Subtitle, 4, new Uri(sub).AbsoluteUri);
         // recording and network streaming both duplicate what's playing; local playback stays on the display branch

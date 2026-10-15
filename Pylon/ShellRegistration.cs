@@ -87,12 +87,17 @@ public static partial class ShellRegistration
             hkcu.DeleteSubKeyTree(key, throwOnMissingSubKey: false);
         using (var reg = hkcu.OpenSubKey(@"Software\RegisteredApplications", writable: true)) reg?.DeleteValue("Pylon", throwOnMissingValue: false);
         foreach (var (ext, id) in Extensions())
+        {
+            // the defaults the big button set: an extension left pointing at a deleted ProgID would open with nothing
+            using (var k = hkcu.OpenSubKey($@"{Classes}\{ext}", writable: true))
+                if (k?.GetValue("") is string v && v == id) k.DeleteValue("");
             using (var k = hkcu.OpenSubKey($@"{Classes}\{ext}\OpenWithProgids", writable: true))
             {
                 k?.DeleteValue(id, throwOnMissingValue: false);
                 k?.DeleteValue("Pylon.Audio", throwOnMissingValue: false); // entries written by 1.0-1.2
                 k?.DeleteValue("Pylon.Video", throwOnMissingValue: false);
             }
+        }
         Notify();
     }
 
@@ -166,43 +171,36 @@ public static partial class ShellRegistration
         return AssocQueryString(0, 20 /*ASSOCSTR_PROGID*/, ext, null, buf, ref n) == 0 ? buf.ToString() : null;
     }
 
-    /// <summary>A choice the user made for the extension (Settings, "Always use this app"), or Windows' own default for it.</summary>
-    static bool Chosen(string ext)
-    {
-        using var k = Registry.CurrentUser.OpenSubKey($@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}");
-        return k?.GetSubKeyNames().Any(n => n.StartsWith("UserChoice", StringComparison.OrdinalIgnoreCase)) == true; // UserChoice, UserChoiceLatest
-    }
-
-    /// <summary>Of Pylon's formats, the ones nobody has picked an app for yet (Pylon may take those itself).</summary>
-    public static List<string> Unclaimed(Func<string, bool> chosen, Func<string, string?> progIdOf) =>
-        [.. Extensions().Select(e => e.Ext).Where(ext => !chosen(ext) && !IsOurs(progIdOf(ext)))];
+    /// <summary>Of Pylon's formats, the ones that don't open in Pylon yet.</summary>
+    public static List<string> NotOurs(Func<string, string?> progIdOf) =>
+        [.. Extensions().Select(e => e.Ext).Where(ext => !IsOurs(progIdOf(ext)))];
 
     /// <summary>
-    /// Takes the formats nobody has chosen an app for, the way 7-Zip does: the extension's default in the user's own
-    /// classes points at Pylon. A choice of the user's (or Windows' own default) is protected by Windows and left
-    /// alone: only the user may change it, in Settings. Returns how many were taken.
+    /// The big button, done the way 7-Zip and K-Lite do it, because the user asked for it: for every format that doesn't
+    /// open in Pylon, the app chosen for it (UserChoice, and UserChoiceLatest on newer Windows 11; their hashes can't be
+    /// written, but the keys can be removed) is cleared, the extension's default in the user's own classes points at
+    /// Pylon, and Windows' "new app available" toast for it is marked as seen. Anything Windows still protects (it can
+    /// block some types) is left to its default-apps page, which then opens on Pylon. Returns how many formats open in
+    /// Pylon afterwards, and whether that page was opened.
     /// </summary>
-    public static int ClaimUnclaimed()
-    {
-        var free = Unclaimed(Chosen, ProgIdOf);
-        using var hkcu = Registry.CurrentUser;
-        foreach (var ext in free)
-        {
-            using var k = hkcu.CreateSubKey($@"{Classes}\{ext}");
-            k.SetValue("", "Pylon" + ext);
-        }
-        if (free.Count > 0) Notify();
-        return free.Count;
-    }
-
-    /// <summary>The big button: take what's free, then (if anything is left) Pylon's page in Windows' default apps.</summary>
-    public static (int Taken, bool OpenedSettings) MakeDefault()
+    public static (int Ours, int Total, bool OpenedSettings) MakeDefault()
     {
         Register(); // ProgIDs and icons up to date first
-        var taken = ClaimUnclaimed();
+        using var hkcu = Registry.CurrentUser;
+        foreach (var ext in NotOurs(ProgIdOf))
+        {
+            var fileExts = $@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}";
+            foreach (var choice in new[] { "UserChoice", "UserChoiceLatest" })
+                try { hkcu.DeleteSubKeyTree($@"{fileExts}\{choice}", throwOnMissingSubKey: false); }
+                catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException) { } // protected: settings page
+            using (var k = hkcu.CreateSubKey($@"{Classes}\{ext}")) k.SetValue("", "Pylon" + ext);
+            using (var toasts = hkcu.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts"))
+                toasts.SetValue($"Pylon{ext}_{ext}", 0, RegistryValueKind.DWord);
+        }
+        Notify();
         var (ours, total) = DefaultStatus();
         if (ours < total) OpenDefaultApps();
-        return (taken, ours < total);
+        return (ours, total, ours < total);
     }
 
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]

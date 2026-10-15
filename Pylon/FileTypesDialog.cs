@@ -50,7 +50,8 @@ public partial class DialogWindow
     {
         var status = new TextBlock { FontSize = 13, Foreground = R("FgA2"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
         var note = new TextBlock { FontSize = 12, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), Visibility = Visibility.Collapsed };
-        var make = new Button { Content = L.T("Make Pylon the default"), Style = (Style)Application.Current.FindResource("PrimaryButton"), Height = 36, Padding = new Thickness(18, 0, 18, 0) };
+        var make = new Button { Content = L.T("Make Pylon the default"), Style = (Style)Application.Current.FindResource("PrimaryButton"), Height = 36, Padding = new Thickness(18, 0, 18, 0),
+            ToolTip = L.T("Every audio and video format Pylon plays will open in Pylon, replacing the app chosen for it now. You can change any of them back in Windows' default apps.") };
         var types = new Button { Content = L.T("File types…"), Style = (Style)Application.Current.FindResource("SecondaryButton"), Height = 36, Margin = new Thickness(8, 0, 0, 0), Background = R("BgRaised") };
         var installed = Updater.IsVelopackInstall;
         void Refresh()
@@ -64,11 +65,11 @@ public partial class DialogWindow
         }
         make.Click += (_, _) =>
         {
-            var (taken, opened) = ShellRegistration.MakeDefault();
+            var (ours, total, opened) = ShellRegistration.MakeDefault();
             Refresh();
             note.Visibility = Visibility.Visible;
-            note.Text = (taken > 0 ? L.F("Took {0} formats nobody had chosen an app for.", taken) + " " : "")
-                + (opened ? L.T("Windows asks you to confirm the rest: in the window that opened, press \"Set default\" next to Pylon.") : "");
+            note.Text = opened ? L.F("{0} of {1} formats now open in Pylon. Windows protects the rest: pick Pylon for them in the window that opened.", ours, total)
+                : L.F("Done: all {0} formats open in Pylon.", total);
         };
         types.Click += (_, _) => FileTypes(Window.GetWindow(types));
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children =
