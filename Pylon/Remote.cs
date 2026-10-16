@@ -15,13 +15,13 @@ public sealed class RemoteServer : IDisposable
     readonly TcpListener _listener;
     readonly CancellationTokenSource _stop = new();
     readonly string _key = Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
-    readonly Func<string, int, object> _command;
+    readonly Func<string, int, string?, object> _command;
 
     public string Url { get; }
 
-    /// <param name="command">Runs a command ("state", "toggle", "prev", "next", "back", "forward", "volume") with its number
-    /// argument on the UI thread and returns the state to send back.</param>
-    public RemoteServer(Func<string, int, object> command)
+    /// <param name="command">Runs a command ("state", "toggle", "seek", "prev", "next", "back", "forward", "volume") with its
+    /// number argument and, for a Watch Together guest, their name, on the UI thread; returns the state to send back.</param>
+    public RemoteServer(Func<string, int, string?, object> command)
     {
         _command = command;
         var loopback = Environment.GetEnvironmentVariable("PYLON_CAST_LOOPBACK") != null; // tests: no firewall prompt
@@ -62,9 +62,11 @@ public sealed class RemoteServer : IDisposable
         if (!path.StartsWith($"/{_key}/")) return ("404 Not Found", "text/plain", "Not found"u8.ToArray());
         var rest = path[(_key.Length + 2)..];
         if (!rest.StartsWith("api/")) return ("200 OK", "text/html", Encoding.UTF8.GetBytes(Page()));
-        var q = rest[4..].Split('?');
-        var arg = q.Length > 1 && q[1].StartsWith("v=") && int.TryParse(q[1][2..], out var v) ? v : 0;
-        var state = System.Windows.Application.Current.Dispatcher.Invoke(() => _command(q[0], arg));
+        var q = rest[4..].Split('?', 2);
+        var query = System.Web.HttpUtility.ParseQueryString(q.Length > 1 ? q[1] : "");
+        var arg = int.TryParse(query["v"], out var v) ? v : 0;
+        var who = query["n"] is { Length: > 0 } n ? n[..Math.Min(n.Length, 40)] : null;
+        var state = System.Windows.Application.Current.Dispatcher.Invoke(() => _command(q[0], arg, who));
         return ("200 OK", "application/json", JsonSerializer.SerializeToUtf8Bytes(state));
     }
 

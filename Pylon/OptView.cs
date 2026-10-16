@@ -81,7 +81,9 @@ public static class OptView
         {
             case OptKind.Toggle:
             {
-                var cb = new CheckBox { Style = St("ToggleSwitch") };
+                // the value from the start: set only on Loaded it raised Checked after the knob was placed at "off", and every
+                // switch that was on slid across whenever the page was drawn again (developer mode, theme, presets)
+                var cb = new CheckBox { Style = St("ToggleSwitch"), IsChecked = Settings.Bool(o.Key) };
                 Bind(cb, o.Key, () => cb.IsChecked = Settings.Bool(o.Key));
                 cb.Click += (_, _) => Settings.Set(o.Key, cb.IsChecked == true);
                 return cb;
@@ -106,7 +108,7 @@ public static class OptView
             }
             case OptKind.Segmented:
             {
-                var grid = new UniformGrid { Rows = 1, Width = double.IsNaN(width) ? double.NaN : width };
+                var grid = new UniformGrid { Rows = 1, MinWidth = double.IsNaN(width) ? 0 : width }; // grows for long labels ("Размытая обложка") instead of cutting them
                 var group = "seg-" + o.Key + Guid.NewGuid();
                 foreach (var option in o.Options)
                 {

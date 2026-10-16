@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.8
+
+<!-- ru -->
+**Новое**
+- **Смотреть вместе — как кооператив на одном экране.** Одна шкала на всех: пауза любого ставит паузу всем, перемотка любого двигает всех. Все видят, кто что сделал, а пока кто-то держит паузу, на экране висит «Аня поставила на паузу — ждём». Имя задаётся в Настройки → Онлайн.
+- **Пульт для других плееров можно открыть в любой момент:** «⋯» → «Управлять другим плеером», правый клик или Настройки → Онлайн. У пульта есть кнопка закрытия.
+- **Свой прокси для сайтов:** любой формат (http, https, socks4, socks5, socks5h, с логином и паролем) и кнопка «Проверить», которая показывает, открывается ли YouTube и работает ли yt-dlp.
+- **Настройки разложены по смыслу:** «Внешний вид» (тема, фон, визуализаторы, окно), «Тексты песен», «Онлайн» (пульт, Spotify, Смотреть вместе, Discord, Last.fm) и так далее. Фон музыки и видео меняется ещё и правым кликом.
+
+**Исправления**
+- Песни из плейлистов Spotify снова играют: они находились на YouTube, но через прокси или VPN YouTube отдавал ошибку 403. Теперь поток идёт через тот же прокси.
+- Перемотка видео больше не отстаёт от ползунка, а удержание стрелки складывает прыжки.
+- Быстрое переключение файлов больше не подвешивает окно.
+- Переключатели в настройках больше не дёргаются при перерисовке страницы (режим разработчика, смена темы).
+- «Смотреть вместе» больше не показывает себя как включённый пульт телефона.
+- Если что-то пошло не так, Pylon не закрывается: ошибка записывается в errors.log, а на экране появляется короткое сообщение.
+
+<!-- en -->
+**New**
+- **Watch Together plays like split-screen co-op.** One timeline for everyone: anyone's pause pauses all, anyone's seek moves all. Everyone sees who did what, and while someone holds the pause, "Ann paused — waiting for them" stays on screen. Set your name in Settings → Online.
+- **The remote for other players opens any time:** ⋯ → Control Another Player, right-click, or Settings → Online. It has a close button.
+- **Your own proxy for websites:** any format (http, https, socks4, socks5, socks5h, with a user and password), and a Check button that tells whether YouTube opens and yt-dlp works through it.
+- **Settings grouped the way you look for things:** Look & Feel (theme, backgrounds, visualizers, window), Lyrics, Online (the remote, Spotify, Watch Together, Discord, Last.fm) and so on. The music and video background can also be changed with a right-click.
+
+**Fixes**
+- Songs from Spotify playlists play again: YouTube had them, but through a proxy or VPN it answered 403. The stream now goes through the same proxy.
+- Seeking a video no longer lags behind the slider, and holding an arrow key adds the jumps up.
+- Switching files quickly no longer freezes the window.
+- Switches in Settings no longer twitch when the page is drawn again (developer mode, theme change).
+- Watch Together no longer shows up as the phone remote being on.
+- When something goes wrong, Pylon keeps running: the error goes to errors.log with a short note on screen.
+
 ## 1.9.7
 
 <!-- ru -->

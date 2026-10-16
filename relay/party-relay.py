@@ -7,7 +7,8 @@ The host's Pylon sends, per room:
 Guests (Pylon, or VLC with the stream address) use:
   GET  /r/<room>/                   a page with "Open in Pylon" (pylon://join) and the stream address for VLC
   GET  /r/<room>/api/state          the host's state, with "stream": "stream.ts"
-  GET  /r/<room>/api/toggle         pause / play for everyone (the host's Pylon carries it out)
+  GET  /r/<room>/api/toggle?n=Ann   pause / play for everyone (the host's Pylon carries it out and says who did it)
+  GET  /r/<room>/api/seek?v=MS&n=Ann  move everyone to MS milliseconds
   GET  /r/<room>/stream.ts          the live stream
 The first key a room is created with owns it; a room closes 2 minutes after its host stops sending.
 
@@ -158,9 +159,12 @@ async def handle(reader, writer):
             proto = headers.get("x-forwarded-proto", "http")
             host = headers.get("x-forwarded-host") or headers.get("host", "")
             reply(writer, "200 OK", page(f"{proto}://{host}/r/{name}/", room.state.get("title")), "text/html; charset=utf-8")
-        elif rest in ("api/state", "api/toggle"):
-            if rest == "api/toggle" and len(room.cmds) < 10:
-                room.cmds.append("toggle")
+        elif rest in ("api/state", "api/toggle", "api/seek"):
+            if rest != "api/state" and len(room.cmds) < 10:
+                value = query.get("v", "0")
+                who = query.get("n", "")[:40].replace(":", " ")
+                # a bare "toggle" without a name: what Pylon 1.9.7 hosts understand
+                room.cmds.append("toggle" if rest == "api/toggle" and not who else f"{rest[4:]}:{value if value.isdigit() else 0}:{who}")
             reply(writer, "200 OK", json.dumps({**room.state, "stream": "stream.ts"}))
         elif rest == "stream.ts":
             q = asyncio.Queue()

@@ -60,6 +60,20 @@ Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Орие�
     Directory.Delete(root, true);
 }
 
+// ── proxy for websites: the password field goes into the address, socks5h works for .NET, "Off" means none
+{
+    Settings.Set("net.proxymode", "Automatic");
+    Settings.Set("net.proxy", "socks5h://ann@127.0.0.1:1080");
+    Settings.Set("net.proxypass", "p@ss");
+    var withPass = YtDlp.Proxy;
+    var web = YtDlp.WebProxy(withPass!);
+    Settings.Set("net.proxymode", "Off");
+    var off = YtDlp.Proxy;
+    Check("proxy settings", withPass == "socks5h://ann:p%40ss@127.0.0.1:1080" && web.Address?.Scheme == "socks5" && web.Credentials is System.Net.NetworkCredential { Password: "p@ss" } && off == null,
+        $"{withPass} {web.Address} {off}");
+    foreach (var k in new[] { "net.proxymode", "net.proxy", "net.proxypass" }) Settings.Set(k, Settings.Find(k)!.Default);
+}
+
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
 // ── default player: every format that doesn't open in Pylon yet is taken, ours are left alone

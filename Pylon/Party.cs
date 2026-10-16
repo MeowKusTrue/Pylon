@@ -107,7 +107,7 @@ public partial class DialogWindow
             {
                 Text = L.T(relayed
                     ? "Friends open this link (or press \"Watch together\" in your Discord profile): Pylon joins and plays your picture and sound, no file needed. Pausing on their side pauses everyone."
-                    : "Friends paste this address in Pylon → ⋯ → Watch Together → Join a friend. Same Wi-Fi, or a shared VPN such as Radmin, ZeroTier or Tailscale. Those without the file watch your stream. For friends anywhere, set a Watch Together server in Settings → Privacy."),
+                    : "Friends paste this address in Pylon → ⋯ → Watch Together → Join a friend. Same Wi-Fi, or a shared VPN such as Radmin, ZeroTier or Tailscale. Those without the file watch your stream. For friends anywhere, set a Watch Together server in Settings → Online."),
                 TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = R("FgA2"), LineHeight = 21,
             },
             Spacer(14),

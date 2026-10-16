@@ -53,6 +53,13 @@ public static class YtDlp
         var sort = audioOnly ? "acodec:m4a" : $"res{(maxHeight > 0 ? ":" + maxHeight : "")},vcodec:avc1,acodec:m4a";
         using var doc = await RunJson("--no-playlist", "-f", audioOnly ? "ba/b" : "bv*+ba/b", "-S", sort, url);
         if (doc?.RootElement is not { } d) return null;
+        // a search answers with a playlist around what it found: the stream addresses are in its first entry. Reading them
+        // from the wrapper found nothing, so every song of a Spotify import was "not found on YouTube"
+        if (Str(d, "_type") == "playlist")
+        {
+            if (!d.TryGetProperty("entries", out var found) || found.ValueKind != JsonValueKind.Array || found.GetArrayLength() == 0) return null;
+            d = found[0];
+        }
         string? video, audio = null;
         JsonElement headersFrom = d;
         if (d.TryGetProperty("requested_formats", out var rf) && rf.GetArrayLength() >= 2)
@@ -88,7 +95,7 @@ public static class YtDlp
         if (JsRuntime is { } js and not "deno") { psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add(js); }
         // a signed-in browser gets past "confirm you're not a bot" and age checks
         if (Settings.Str("net.cookies") is { Length: > 0 } browser && browser != "Off") { psi.ArgumentList.Add("--cookies-from-browser"); psi.ArgumentList.Add(browser.ToLowerInvariant()); }
-        if (Settings.Str("net.proxy") is { Length: > 0 } proxy) { psi.ArgumentList.Add("--proxy"); psi.ArgumentList.Add(proxy.Contains("://") ? proxy : "http://" + proxy); }
+        AddProxy(psi, Proxy); // the same one StreamRelay uses
         psi.ArgumentList.Add(args[^1]);
         LastError = null;
         try
@@ -156,4 +163,188 @@ public static class YtDlp
 
     static string? Str(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    /// <summary>
+    /// The proxy web pages are fetched through: Pylon's own setting, else HTTPS_PROXY / HTTP_PROXY, else the Windows proxy
+    /// (what a VPN client like v2rayN switches on). Null: straight out.
+    /// </summary>
+    public static string? Proxy
+    {
+        get
+        {
+            static string Url(string p) => p.Contains("://") ? p : "http://" + p;
+            if (Settings.Str("net.proxymode") == "Off") return null;
+            if (Settings.Str("net.proxy").Trim() is { Length: > 0 } own) return WithPassword(Url(own));
+            foreach (var v in new[] { "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy" })
+                if (Environment.GetEnvironmentVariable(v) is { Length: > 0 } env) return Url(env);
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings");
+            if (k?.GetValue("ProxyEnable") is not 1 || k.GetValue("ProxyServer") is not string server || server.Length == 0) return null;
+            // "host:port", or per protocol: "http=host:port;https=host:port;socks=host:port"
+            var parts = server.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var pick = parts.FirstOrDefault(p => p.StartsWith("https=")) ?? parts.FirstOrDefault(p => p.StartsWith("http=")) ?? parts.FirstOrDefault(p => !p.Contains('='));
+            if (pick != null) return Url(pick[(pick.IndexOf('=') + 1)..]);
+            return parts.FirstOrDefault(p => p.StartsWith("socks=")) is { } socks ? "socks5://" + socks[6..] : null;
+        }
+    }
+
+    /// <summary>yt-dlp reads HTTPS_PROXY by itself: "Off" has to say so, or it went through the proxy anyway.</summary>
+    static void AddProxy(ProcessStartInfo psi, string? proxy)
+    {
+        if (proxy == null && Settings.Str("net.proxymode") != "Off") return;
+        psi.ArgumentList.Add("--proxy");
+        psi.ArgumentList.Add(proxy ?? "");
+    }
+
+    /// <summary>"socks5://user@host:1080" plus the separate password field: "socks5://user:password@host:1080".</summary>
+    static string WithPassword(string url)
+    {
+        if (Settings.Str("net.proxypass") is not { Length: > 0 } pass || !Uri.TryCreate(url, UriKind.Absolute, out var u) || u.UserInfo.Length == 0 || u.UserInfo.Contains(':')) return url;
+        return $"{u.Scheme}://{u.UserInfo}:{Uri.EscapeDataString(pass)}@{u.Authority[(u.Authority.IndexOf('@') + 1)..]}{u.PathAndQuery.TrimEnd('/')}";
+    }
+
+    /// <summary>The proxy for .NET: it knows http, https, socks4, socks4a and socks5 (socks5 already resolves names on the proxy, like socks5h).</summary>
+    public static System.Net.WebProxy WebProxy(string proxy)
+    {
+        var u = new Uri(proxy.StartsWith("socks5h://", StringComparison.OrdinalIgnoreCase) ? "socks5://" + proxy[10..] : proxy);
+        var p = new System.Net.WebProxy(new UriBuilder(u) { UserName = "", Password = "" }.Uri);
+        if (u.UserInfo.Length > 0)
+        {
+            var (user, pass) = u.UserInfo.IndexOf(':') is var i and >= 0 ? (u.UserInfo[..i], u.UserInfo[(i + 1)..]) : (u.UserInfo, "");
+            p.Credentials = new System.Net.NetworkCredential(Uri.UnescapeDataString(user), Uri.UnescapeDataString(pass));
+        }
+        return p;
+    }
+
+    /// <summary>
+    /// Settings → Network → Check the proxy: YouTube through it the way Pylon plays (.NET, as StreamRelay does), then yt-dlp
+    /// reading a video's title through it. One line each: what worked, what didn't and why, how long it took.
+    /// </summary>
+    public static async Task<string> TestProxyAsync()
+    {
+        var proxy = Proxy;
+        var lines = new List<string> { proxy == null ? L.T("Proxy: none, straight out.") : L.F("Proxy: {0}", Redact(proxy)) };
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var http = new HttpClient(new SocketsHttpHandler { Proxy = proxy == null ? null : WebProxy(proxy), UseProxy = proxy != null }) { Timeout = TimeSpan.FromSeconds(12) };
+            using var res = await http.GetAsync("https://www.youtube.com/generate_204");
+            lines.Add(L.F("YouTube: {0} in {1} ms", (int)res.StatusCode == 204 ? L.T("reachable") : $"HTTP {(int)res.StatusCode}", sw.ElapsedMilliseconds));
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or UriFormatException or NotSupportedException or ArgumentException)
+        {
+            lines.Add(L.F("YouTube: not reachable ({0})", e is TaskCanceledException ? L.T("no answer in 12 s") : e.InnerException?.Message ?? e.Message));
+        }
+        if (!Available) { lines.Add(L.T("yt-dlp: not downloaded yet (it comes with the first website you open).")); return string.Join("\n", lines); }
+        sw.Restart();
+        var psi = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "--simulate", "--no-warnings", "--no-playlist", "--print", "title" }) psi.ArgumentList.Add(a);
+        AddProxy(psi, proxy);
+        if (JsRuntime is { } js and not "deno") { psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add(js); }
+        psi.ArgumentList.Add("https://www.youtube.com/watch?v=jNQXAC9IVRw"); // "Me at the zoo": the first video, it doesn't go away
+        try
+        {
+            using var p = Process.Start(psi)!;
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+            try { await p.WaitForExitAsync(cancel.Token); }
+            catch (OperationCanceledException) { p.Kill(entireProcessTree: true); lines.Add(L.T("yt-dlp: no answer in 40 s")); return string.Join("\n", lines); }
+            var title = (await stdout).Trim();
+            lines.Add(p.ExitCode == 0 && title.Length > 0 ? L.F("yt-dlp: works (“{0}”, {1} ms)", title, sw.ElapsedMilliseconds)
+                : L.F("yt-dlp: {0}", (await stderr).Split('\n').LastOrDefault(l => l.StartsWith("ERROR:"))?[6..].Trim() ?? L.T("failed")));
+        }
+        catch (System.ComponentModel.Win32Exception e) { lines.Add(L.F("yt-dlp: {0}", e.Message)); }
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>The proxy address as shown: the password hidden.</summary>
+    static string Redact(string proxy) => Uri.TryCreate(proxy, UriKind.Absolute, out var u) && u.UserInfo.Contains(':')
+        ? proxy.Replace(u.UserInfo, u.UserInfo[..u.UserInfo.IndexOf(':')] + ":•••") : proxy;
+}
+
+/// <summary>
+/// YouTube binds a stream address to the IP that asked for it, and libVLC 3's https ignores --http-proxy: an address
+/// yt-dlp resolved through a proxy, played by libVLC directly, was a 403 ("couldn't find it on YouTube" although it's
+/// there). With a proxy in use the stream goes through Pylon: libVLC asks 127.0.0.1, Pylon asks the site through the same
+/// proxy, passing ranges on (seeking works) and the headers the site wants.
+/// </summary>
+public static class StreamRelay
+{
+    static System.Net.Sockets.TcpListener? _listener;
+    static HttpClient? _http;
+    static string? _proxyOf;
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Url, string? UserAgent, string? Referer)> Map = new();
+
+    /// <summary>The address libVLC should open: the original one without a proxy, else Pylon's local copy of it.</summary>
+    public static string Wrap(string url, string? userAgent, string? referer)
+    {
+        if (YtDlp.Proxy is not { } proxy || !url.StartsWith("http")) return url;
+        lock (Map)
+        {
+            if (_http == null || _proxyOf != proxy)
+            {
+                _http?.Dispose();
+                _http = new HttpClient(new SocketsHttpHandler { Proxy = YtDlp.WebProxy(proxy), UseProxy = true, AutomaticDecompression = System.Net.DecompressionMethods.None })
+                    { Timeout = Timeout.InfiniteTimeSpan };
+                _proxyOf = proxy;
+            }
+            if (_listener == null)
+            {
+                _listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+                _listener.Start();
+                _ = Serve(_listener);
+            }
+        }
+        var id = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(8));
+        Map[id] = (url, userAgent, referer);
+        if (Map.Count > 200) foreach (var old in Map.Keys.Take(100)) Map.TryRemove(old, out _); // addresses expire within hours anyway
+        return $"http://127.0.0.1:{((System.Net.IPEndPoint)_listener!.LocalEndpoint).Port}/{id}";
+    }
+
+    static async Task Serve(System.Net.Sockets.TcpListener listener)
+    {
+        while (true)
+        {
+            System.Net.Sockets.TcpClient client;
+            try { client = await listener.AcceptTcpClientAsync(); }
+            catch (Exception e) when (e is ObjectDisposedException or System.Net.Sockets.SocketException) { return; }
+            _ = Task.Run(() => Answer(client));
+        }
+    }
+
+    static async Task Answer(System.Net.Sockets.TcpClient client)
+    {
+        using (client)
+        using (var net = client.GetStream())
+        {
+            try
+            {
+                using var reader = new StreamReader(net, System.Text.Encoding.ASCII, false, 4096, leaveOpen: true);
+                var request = (await reader.ReadLineAsync())?.Split(' ');
+                string? range = null;
+                for (string? h; (h = await reader.ReadLineAsync()) is { Length: > 0 };)
+                    if (h.StartsWith("Range:", StringComparison.OrdinalIgnoreCase)) range = h[6..].Trim();
+                if (request is not [var method, var path, ..] || !Map.TryGetValue(path.TrimStart('/'), out var target)) { await Reply(net, "404 Not Found", null); return; }
+                using var ask = new HttpRequestMessage(method == "HEAD" ? HttpMethod.Head : HttpMethod.Get, target.Url);
+                if (range != null) ask.Headers.TryAddWithoutValidation("Range", range);
+                if (target.UserAgent != null) ask.Headers.TryAddWithoutValidation("User-Agent", target.UserAgent);
+                if (target.Referer != null) ask.Headers.TryAddWithoutValidation("Referer", target.Referer);
+                using var res = await _http!.SendAsync(ask, HttpCompletionOption.ResponseHeadersRead);
+                var head = new System.Text.StringBuilder($"HTTP/1.1 {(int)res.StatusCode} {res.ReasonPhrase}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n");
+                foreach (var name in new[] { "Content-Type", "Content-Length", "Content-Range" })
+                    if (res.Content.Headers.TryGetValues(name, out var values)) head.Append($"{name}: {string.Join(",", values)}\r\n");
+                head.Append("\r\n");
+                await net.WriteAsync(System.Text.Encoding.ASCII.GetBytes(head.ToString()));
+                if (method != "HEAD") await (await res.Content.ReadAsStreamAsync()).CopyToAsync(net);
+            }
+            catch (Exception e) when (e is IOException or HttpRequestException or System.Net.Sockets.SocketException or TaskCanceledException or ObjectDisposedException) { } // libVLC hung up (a seek) or the site did
+        }
+    }
+
+    static async Task Reply(Stream net, string status, string? body)
+    {
+        var b = System.Text.Encoding.UTF8.GetBytes(body ?? "");
+        await net.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\nContent-Length: {b.Length}\r\nConnection: close\r\n\r\n"));
+        await net.WriteAsync(b);
+    }
 }

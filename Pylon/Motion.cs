@@ -261,7 +261,10 @@ public static class Motion
             new MouseEventHandler((s, _) => { if (Pressable(s)) Scale((UIElement)s, 1, Spring.Release); }));
     }
 
-    /// <summary>The knob of every ToggleSwitch slides across on a spring instead of jumping.</summary>
+    /// <summary>
+    /// The knob of every ToggleSwitch slides across on a spring when it's clicked; set any other way (a page drawn again, a
+    /// preset, a reset) it's simply there.
+    /// </summary>
     public static void HookSwitches()
     {
         static void Place(CheckBox box, bool animate)
@@ -273,7 +276,8 @@ public static class Motion
             else Set(t, TranslateTransform.XProperty, to);
         }
         EventManager.RegisterClassHandler(typeof(CheckBox), FrameworkElement.LoadedEvent, new RoutedEventHandler((s, _) => Place((CheckBox)s, false)));
-        EventManager.RegisterClassHandler(typeof(CheckBox), ToggleButton.CheckedEvent, new RoutedEventHandler((s, _) => Place((CheckBox)s, ((CheckBox)s).IsLoaded)));
-        EventManager.RegisterClassHandler(typeof(CheckBox), ToggleButton.UncheckedEvent, new RoutedEventHandler((s, _) => Place((CheckBox)s, ((CheckBox)s).IsLoaded)));
+        static bool Clicked(CheckBox b) => b.IsLoaded && b.IsMouseOver && ByPointer;
+        EventManager.RegisterClassHandler(typeof(CheckBox), ToggleButton.CheckedEvent, new RoutedEventHandler((s, _) => Place((CheckBox)s, Clicked((CheckBox)s))));
+        EventManager.RegisterClassHandler(typeof(CheckBox), ToggleButton.UncheckedEvent, new RoutedEventHandler((s, _) => Place((CheckBox)s, Clicked((CheckBox)s))));
     }
 }

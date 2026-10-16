@@ -20,7 +20,7 @@ namespace Pylon;
 /// <summary>
 /// Spotify's Web API, only for what Windows' media session can't tell: the queue, and skipping ahead in it. Sign-in is
 /// PKCE in the browser (no secret, the password never passes through Pylon) with the user's own free Spotify app: its
-/// Client ID is the one under Settings → Interface → Lyrics, with <see cref="Redirect"/> added as a redirect URI. The
+/// Client ID is the one under Settings → Online → Spotify, with <see cref="Redirect"/> added as a redirect URI. The
 /// refresh token stays in the profile folder.
 /// </summary>
 public static class SpotifyApi
@@ -53,7 +53,7 @@ public static class SpotifyApi
         try { listener.Start(); }
         catch (SocketException)
         {
-            LastError = L.F("Port {0} is taken by another program. Pick another one in Settings → Interface → Lyrics and add http://127.0.0.1:<port>/callback to your Spotify app.", Port);
+            LastError = L.F("Port {0} is taken by another program. Pick another one in Settings → Online → Spotify and add http://127.0.0.1:<port>/callback to your Spotify app.", Port);
             return false;
         }
         try
@@ -219,6 +219,16 @@ public sealed class RemoteView : Grid
     /// <summary>A session appeared, changed or went away: the host shows or hides this view.</summary>
     public event Action? AvailabilityChanged;
 
+    /// <summary>The close button: the host goes back to what it showed before.</summary>
+    public event Action? Closed;
+
+    readonly Grid _layout;
+    readonly TextBlock _empty = new()
+    {
+        FontSize = 18, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 520,
+        HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+    };
+
     /// <summary>The host wants to know about other players (Pylon idle, window awake): polls every 1.5 s, else nothing.</summary>
     public bool Watching { get => _poll.IsEnabled; set { if (value == _poll.IsEnabled) return; _poll.IsEnabled = value; if (value) _ = Refresh(); } }
 
@@ -271,12 +281,21 @@ public sealed class RemoteView : Grid
         right.Children.Add(tabs);
         right.Children.Add(new Grid { Children = { _lyrics, _queueScroll } });
 
-        var layout = new Grid { Margin = new Thickness(40, 56, 40, 28), ColumnDefinitions = { new ColumnDefinition { Width = GridLength.Auto }, new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) } } };
+        var layout = _layout = new Grid { Margin = new Thickness(40, 56, 40, 28), ColumnDefinitions = { new ColumnDefinition { Width = GridLength.Auto }, new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) } } };
         Grid.SetColumn(right, 1);
         right.Margin = new Thickness(56, 0, 0, 0);
         layout.Children.Add(left);
         layout.Children.Add(right);
         Children.Add(layout);
+        // opened by hand with nothing playing elsewhere: say so instead of an empty remote
+        _empty.Text = L.T("Nothing is playing in other apps. Start a song in Spotify, Yandex Music or a browser, and it shows here.");
+        _empty.SetResourceReference(TextBlock.ForegroundProperty, "FgA2");
+        Children.Add(_empty);
+        var close = new Button { Style = (Style)Application.Current.FindResource("IconButton"), Tag = "x", Padding = new Thickness(3, 2, 3, 2),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 14, 16, 0), ToolTip = L.T("Close") };
+        close.Click += (_, _) => Closed?.Invoke();
+        Children.Add(close);
+        ShowEmpty();
         Show(lyrics: true);
 
         _poll = new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, async (_, _) => await Refresh(), Dispatcher) { IsEnabled = false };
@@ -358,9 +377,16 @@ public sealed class RemoteView : Grid
     /// <summary>Tells the host when there came to be something to show, or stopped being.</summary>
     void Announce()
     {
+        ShowEmpty();
         if (HasSession == _announced) return;
         _announced = HasSession;
         AvailabilityChanged?.Invoke();
+    }
+
+    void ShowEmpty()
+    {
+        _layout.Visibility = HasSession ? Visibility.Visible : Visibility.Hidden;
+        _empty.Visibility = HasSession ? Visibility.Collapsed : Visibility.Visible;
     }
 
     async Task Refresh()
@@ -414,7 +440,7 @@ public sealed class RemoteView : Grid
         if (!SpotifyApi.SignedIn)
         {
             QueueNote(SpotifyApi.ClientId.Length == 0
-                ? L.F("To see Spotify's queue, create a free app at developer.spotify.com with the redirect URI {0}, put its Client ID in Settings → Interface → Lyrics, then sign in here.", SpotifyApi.Redirect)
+                ? L.F("To see Spotify's queue, create a free app at developer.spotify.com with the redirect URI {0}, put its Client ID in Settings → Online → Spotify, then sign in here.", SpotifyApi.Redirect)
                 : L.T("Sign in to Spotify to see what comes next."), signIn: SpotifyApi.ClientId.Length > 0);
             return;
         }

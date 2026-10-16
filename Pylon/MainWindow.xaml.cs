@@ -99,6 +99,7 @@ public partial class MainWindow : Window
         Settings.OpenEqualizer = _ => { ShowEffects(video: false); Activate(); };
         Settings.RescanPlugins = _ => { _rescan = true; ReloadEngine(); Osd(L.T("Plugins rescanned")); };
         Settings.CheckUpdates = w => CheckForUpdates(manual: true, w);
+        Settings.OpenRemote = _ => OpenOtherPlayer();
         Settings.Changed += OnSettingChanged;
 
         var startVol = Settings.Bool("audio.remember") && Settings.Str("app.volume") != "" ? Settings.Num("app.volume") : Settings.Num("audio.startvol");
@@ -110,8 +111,8 @@ public partial class MainWindow : Window
             if (_mp.Mute) SetMute(false);
             Osd(L.F("Volume {0}%", _mp.Volume));
         };
-        Seek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
-        MiniSeek.Seek += p => { if (_mp.IsSeekable) _mp.Position = (float)p; };
+        Seek.Seek += p => { if (_mp.Length > 0 || _party != null) SeekTo((long)(p * _mp.Length)); else if (_mp.IsSeekable) _mp.Position = (float)p; };
+        MiniSeek.Seek += p => { if (_mp.Length > 0 || _party != null) SeekTo((long)(p * _mp.Length)); else if (_mp.IsSeekable) _mp.Position = (float)p; };
         FxPanel.CloseRequested += HideEffects;
 
         _tick = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => Refresh(), Dispatcher);
@@ -139,7 +140,9 @@ public partial class MainWindow : Window
         // 30 updates a second move the bar smoothly; a Rendering hook ran at the monitor's rate (144+ Hz) for the whole session
         // and kept WPF redrawing the waveform bar all the time, which cost more than a core
         new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher).Start();
+        ErrorLog.Show = text => Osd(text, 6);
         RemotePane.AvailabilityChanged += ApplyLayout;
+        RemotePane.Closed += CloseOtherPlayer;
         Motion.AsleepChanged += WatchOtherPlayers;
         Scene.Cover = () => ArtFrame.IsVisible && ArtFrame.ActualWidth > 0 ? ArtFrame.TransformToVisual(Scene).TransformBounds(new Rect(ArtFrame.RenderSize)) : null;
         // the preview card's shadow reaches down over the bar; with a hit-testable popup window the pointer "left" the bar,
@@ -566,6 +569,15 @@ public partial class MainWindow : Window
         if (!_fadeStarting) EndCrossfade();
         _index = i;
         _switch = Stopwatch.StartNew();
+        // leaving a video: libVLC's stop joins its video output, up to half a second (longer when that video was itself still
+        // starting), and inside Play() it froze the window on every quick switch. Stopped off the UI thread first, Play() is
+        // a few milliseconds. Not while casting or watching together: their stream has to run on from item to item.
+        if (_cast == null && _tail == null && !_isAudio && _mp.State is VLCState.Playing or VLCState.Paused or VLCState.Opening or VLCState.Buffering)
+        {
+            var player = _mp;
+            await Task.Run(player.Stop);
+            if (_index != i || player != _mp) return; // another switch came meanwhile: it plays instead
+        }
         var src = _queue[i];
         var isUrl = src.Contains("://");
         if (isUrl && YtDlp.Handles(src) && await PlaySite(i, src, startAt, autoplay)) return;
@@ -625,10 +637,11 @@ public partial class MainWindow : Window
         // a failed search stops here with the reason (YouTube blocked, "confirm you're not a bot"…) instead of handing
         // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
         if (s == null) { Osd(YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 6); return search; }
-        var media = new Media(Vlc, new Uri(s.Url));
+        // through a proxy the site's addresses only open from that proxy: Pylon fetches them for libVLC (StreamRelay)
+        var media = new Media(Vlc, new Uri(StreamRelay.Wrap(s.Url, s.UserAgent, s.Referer)));
         try
         {
-            if (s.Audio != null) media.AddSlave(MediaSlaveType.Audio, 4, s.Audio);
+            if (s.Audio != null) media.AddSlave(MediaSlaveType.Audio, 4, StreamRelay.Wrap(s.Audio, s.UserAgent, s.Referer));
             if (s.UserAgent != null) media.AddOption(":http-user-agent=" + s.UserAgent);
             if (s.Referer != null) media.AddOption(":http-referrer=" + s.Referer);
             var known = Library.Data.Meta.GetValueOrDefault(src);
@@ -697,6 +710,7 @@ public partial class MainWindow : Window
         var ext = isUrl ? "" : Path.GetExtension(src);
         _isAudio = audio ?? (AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video)));
         _lyricsFor = null;
+        _remoteForced = false; // something of Pylon's own plays: the stage is Pylon's again
         ApplyMeta(media, src, isUrl, parsed: false);
         var title = _title;
         var folder = isUrl ? null : Path.GetFileName(Path.GetDirectoryName(src));
@@ -750,7 +764,9 @@ public partial class MainWindow : Window
         if (_tail == null) AudioChain.SetGain(_mp, _trackGain); // during a crossfade the fade brings it in
         if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
         Perf.Mark($"play, video hwnd {_mp.Hwnd}");
+        var playAt = Stopwatch.StartNew();
         _mp.Play(media);
+        _switchStartMedia = playAt.ElapsedMilliseconds;
         MaybeTrackPopup(_index);
         Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
         Library.CountPlay(src);
@@ -969,11 +985,12 @@ public partial class MainWindow : Window
 
     public void TogglePlay()
     {
-        if (_party != null && _partyHttp != null) { _ = _partyHttp.GetStringAsync(_party + "api/toggle"); return; } // the host leads: pause for everyone
-        if (_index < 0 && RemoteShown) { RemotePane.TogglePlay(); return; }
+        if (_party != null && _partyHttp != null) { _ = PartySend($"api/toggle?n={Uri.EscapeDataString(PartyName)}"); return; } // the host leads: pause for everyone
+        if (RemoteShown) { RemotePane.TogglePlay(); return; }
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
         _duckPaused = false;
+        if (_hosting) PartyPaused(_mp.IsPlaying, _partyFrom ?? PartyName); // a watch party: everyone sees who paused
         if (_mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
         else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
         else _mp.SetPause(false);
@@ -992,7 +1009,7 @@ public partial class MainWindow : Window
 
     public void Next()
     {
-        if (_index < 0 && RemoteShown) RemotePane.Next();
+        if (RemoteShown) RemotePane.Next();
         else NextInQueue();
     }
 
@@ -1000,8 +1017,8 @@ public partial class MainWindow : Window
 
     public void Previous()
     {
-        if (_index < 0 && RemoteShown) { RemotePane.Previous(); return; }
-        if (_mp.Time > 3000) _mp.Time = 0; // restart first, previous on a second press
+        if (RemoteShown) { RemotePane.Previous(); return; }
+        if (_mp.Time > 3000) SeekTo(0); // restart first, previous on a second press
         else PlayQueueAt(NextIndex(-1));
     }
 
@@ -1009,9 +1026,9 @@ public partial class MainWindow : Window
 
     public void Jump(long deltaMs)
     {
-        if (!_mp.IsSeekable) return;
-        _mp.Time = Math.Clamp(_mp.Time + deltaMs, 0, Math.Max(0, _mp.Length - 500));
-        Osd($"{Fmt(_mp.Time)} / {Fmt(_mp.Length)}");
+        if (!_mp.IsSeekable && _party == null) return;
+        SeekTo(SeekBase + deltaMs); // held arrow keys add up instead of starting from a time libVLC hasn't caught up with
+        Osd($"{Fmt(_seekTarget)} / {Fmt(_mp.Length)}");
     }
 
     /// <summary>Skip amounts from Settings → Controls (very short / short / medium / long).</summary>
@@ -1428,13 +1445,13 @@ public partial class MainWindow : Window
         IdleView.Visibility = hasMedia || remote ? Visibility.Collapsed : Visibility.Visible;
         RemotePane.Visibility = remote ? Visibility.Visible : Visibility.Collapsed;
         WatchOtherPlayers();
-        MusicView.Visibility = hasMedia && _isAudio ? Visibility.Visible : Visibility.Collapsed;
+        MusicView.Visibility = hasMedia && _isAudio && !remote ? Visibility.Visible : Visibility.Collapsed;
         ArtFrame.Visibility = Settings.Bool("ui.cover") ? Visibility.Visible : Visibility.Hidden;
         MusicCaption.Visibility = _mini ? Visibility.Collapsed : Visibility.Visible;
         var spectrum = Spectrum.On;
         MusicSpectrum.Visibility = spectrum && !_mini ? Visibility.Visible : Visibility.Collapsed;
         MusicLayout.Margin = _mini ? new Thickness(16) : new Thickness(40, 72, 40, spectrum ? 92 : 24); // the bars get their own strip under the caption
-        Video.Visibility = video ? Visibility.Visible : Visibility.Collapsed;
+        Video.Visibility = video && !remote ? Visibility.Visible : Visibility.Collapsed; // the video's own window would cover the remote
         ControlsBar.BorderThickness = new Thickness(0, _isAudio && hasMedia ? 1 : 0, 0, 0);
 
         bool chromeless = _fullscreen || _minimal || _mini || !Settings.Bool("ui.decorations");
@@ -1477,11 +1494,33 @@ public partial class MainWindow : Window
         UpdateCornerMask();
     }
 
-    /// <summary>Pylon plays nothing and another app does: the stage is the remote for it.</summary>
-    bool RemoteShown => _index < 0 && !_mini && Settings.Bool("remote.auto") && RemotePane.HasSession;
+    bool _remoteForced, _remoteDismissed;
 
-    /// <summary>Other players are looked for only while Pylon is idle and its window is awake.</summary>
-    void WatchOtherPlayers() => RemotePane.Watching = _index < 0 && !Motion.Asleep && Settings.Bool("remote.auto");
+    /// <summary>
+    /// The stage is the remote for another app: opened by hand (⋯ → Control Another Player, right-click, Settings), or on
+    /// its own while Pylon plays nothing and another app does.
+    /// </summary>
+    bool RemoteShown => !_mini && (_remoteForced || _index < 0 && !_remoteDismissed && Settings.Bool("remote.auto") && RemotePane.HasSession);
+
+    /// <summary>Other players are looked for only while the remote may show and the window is awake.</summary>
+    void WatchOtherPlayers() => RemotePane.Watching = !Motion.Asleep && (_remoteForced || _index < 0 && Settings.Bool("remote.auto"));
+
+    /// <summary>The remote by hand. Pylon's own playback pauses meanwhile: the remote takes its place on the stage.</summary>
+    public void OpenOtherPlayer()
+    {
+        if (_mini) ToggleMiniplayer();
+        if (_index >= 0 && _mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
+        _remoteForced = true;
+        _remoteDismissed = false;
+        ApplyLayout();
+    }
+
+    void CloseOtherPlayer()
+    {
+        _remoteForced = false;
+        _remoteDismissed = true; // closed: it doesn't come back on its own until opened again (or the next start)
+        ApplyLayout();
+    }
 
     // ───────── seek bar that glides instead of stepping 5 times a second ─────────
 
@@ -1544,7 +1583,7 @@ public partial class MainWindow : Window
         if (LyricsPane.Tag == null)
         {
             LyricsPane.Tag = true;
-            LyricsPane.Seek += s => { if (_mp.IsSeekable) _mp.Time = (long)(s * 1000); };
+            LyricsPane.Seek += s => SeekTo((long)(s * 1000));
         }
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
         var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
@@ -2281,6 +2320,7 @@ public partial class MainWindow : Window
         Item("Open File(s)", "file-duotone", KeyOf("open"), OpenFiles),
         Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
         Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream),
+        Item("Control Another Player", "spotify-logo-duotone", null, () => { if (RemoteShown) CloseOtherPlayer(); else OpenOtherPlayer(); }, check: RemoteShown),
         DiscMenu(),
         Item("Convert", "arrows-left-right-duotone", KeyOf("convert"), OpenConverter),
         Sub("Open Recent", "clock-counter-clockwise-duotone",
@@ -2290,14 +2330,15 @@ public partial class MainWindow : Window
             Profiles.Names.Select(n => (object)Item(n, null, null, () => Profiles.Apply(n), check: (Settings.Str("general.profile") is { Length: > 0 } cur ? cur : "Default") == n))),
         CastMenu(),
         Item(_cast != null ? "Streaming to TV / Phone…" : "Stream to TV / Phone…", "broadcast-duotone", null, StreamToNetwork, check: _cast != null, enabled: _index >= 0 || _cast != null),
-        Item("Phone Remote…", "device-mobile-duotone", null, ShowRemote, check: _remote != null),
+        Item("Phone Remote…", "device-mobile-duotone", null, ShowRemote, check: _phoneRemote),
         Item("Import from Spotify…", "spotify-logo-duotone", null, () =>
         {
             if (DialogWindow.AskName(this, "Import from Spotify", "Playlist, album or track link", "Copy it in Spotify: Share → Copy link. Songs you have play from disk, the rest from YouTube.", "https://open.spotify.com/playlist/…") is { } link)
                 ImportSpotify(link);
         }),
         Item("Lyrics for Spotify", "microphone-stage-duotone", null, () => new SpotifyLyricsWindow(this).Show()),
-        _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true) : Item("Watch Together…", "users-three-duotone", null, WatchTogether),
+        _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true)
+            : Item("Watch Together…", "users-three-duotone", null, _hosting ? HostParty : WatchTogether, check: _hosting),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),
@@ -2328,7 +2369,7 @@ public partial class MainWindow : Window
                 case "Stop": Stop(); break;
             }
         });
-        _session.Seek += p => Dispatcher.BeginInvoke(() => { if (_mp.IsSeekable) _mp.Time = (long)p.TotalMilliseconds; });
+        _session.Seek += p => Dispatcher.BeginInvoke(() => SeekTo((long)p.TotalMilliseconds));
     }
 
     // ───────── taskbar thumbnail toolbar (open / previous / play / next under the window preview) ─────────
@@ -2411,7 +2452,7 @@ public partial class MainWindow : Window
     {
         var now = _mp.Time;
         var current = _chapters.LastOrDefault(c => c.Time <= now);
-        var item = Sub("Chapters", null, _chapters.Select(c => (object)Item($"{Fmt(c.Time)}   {c.Name}", null, null, () => { _mp.Time = c.Time; Osd(c.Name); }, check: c == current)));
+        var item = Sub("Chapters", null, _chapters.Select(c => (object)Item($"{Fmt(c.Time)}   {c.Name}", null, null, () => { SeekTo(c.Time); Osd(c.Name); }, check: c == current)));
         item.IsEnabled = _chapters.Length > 0;
         return item;
     }
@@ -2424,7 +2465,7 @@ public partial class MainWindow : Window
         foreach (var b in list.ToList())
             items.Add(Sub($"{Fmt(b.Time)}   {b.Name}", null,
             [
-                Item("Go to Bookmark", null, null, () => _mp.Time = b.Time),
+                Item("Go to Bookmark", null, null, () => SeekTo(b.Time)),
                 Item("Rename", null, null, () =>
                 {
                     if (DialogWindow.AskName(this, "Rename Bookmark", "Name", "", "Bookmark name", b.Name) is not { } n) return;
@@ -2541,15 +2582,28 @@ public partial class MainWindow : Window
     }
 
     // ───────── watch together ─────────
+    // Like a split-screen co-op game: one shared timeline. Anyone's pause pauses everyone (and everyone sees who did it,
+    // "waiting" until it goes on); anyone's seek moves everyone. The host's Pylon holds the timeline: guests send their
+    // pause / seek to it and follow its state.
 
     string? _party;                     // the host's address while this copy follows one
     System.Net.Http.HttpClient? _partyHttp;
     DispatcherTimer? _partyTimer;
     string? _partyMissing;
+    bool _hosting, _phoneRemote;        // the local server serves a watch party, the phone remote, or both
+    string? _partyFrom;                 // host: the guest whose command is being carried out
+    string? _pausedBy;                  // host: who paused the party (null while it plays, or when it stopped on its own)
+    int _noteId;                        // host: the last event everyone is told about ("Ann jumped to 12:30")
+    string _note = "", _noteBy = "";
+    int _seenNote = -1;                 // guest: the last one shown
+    bool _waiting;                      // guest: "X paused — waiting" is on screen
+
+    /// <summary>The name the others see.</summary>
+    static string PartyName => Settings.Str("party.name").Trim() is { Length: > 0 } n ? n : Environment.UserName;
 
     void WatchTogether()
     {
-        var pick = DialogWindow.Choose(this, "Watch Together", "Friends follow your play, pause and position. Those who have the same file play their own copy; the others watch your stream.",
+        var pick = DialogWindow.Choose(this, "Watch Together", "One timeline for everyone, like split-screen co-op: anyone's pause pauses all, anyone's seek moves all. Those who have the same file play their own copy; the others watch your stream.",
             [L.T("Invite friends: they follow you"), L.T("Join a friend")]);
         if (pick == 0) HostParty();
         if (pick != 1) return;
@@ -2560,24 +2614,20 @@ public partial class MainWindow : Window
     PartyRelay? _relay;
 
     /// <summary>
-    /// Hosting: the phone remote's address answers friends (state; pause for everyone), the cast server streams what plays
-    /// for those without the file, and with a Watch Together server set the room reaches friends anywhere (and Discord
-    /// shows a "Watch together" button on the profile).
+    /// Hosting: the local server answers friends (state; their pause and seek), the cast server streams what plays for
+    /// those without the file, and with a Watch Together server set the room reaches friends anywhere (and Discord shows a
+    /// "Watch together" button on the profile). The dialog shows the address again while it runs.
     /// </summary>
     void HostParty()
     {
         StartHosting();
-        if (!DialogWindow.Party(this, _relay?.RoomUrl ?? _remote!.Url, _relay != null)) return;
-        _relay?.Dispose();
-        _relay = null;
-        _discordSig = null;
-        StopStreaming();
-        _remote?.Dispose();
-        _remote = null;
+        if (DialogWindow.Party(this, _relay?.RoomUrl ?? _remote!.Url, _relay != null)) StopHosting();
     }
 
     void StartHosting()
     {
+        if (_party != null) LeaveParty(); // one party at a time
+        _hosting = true;
         _remote ??= new RemoteServer(RemoteCommand);
         if (_cast == null)
         {
@@ -2585,17 +2635,36 @@ public partial class MainWindow : Window
             if (_index >= 0) PlayAt(_index, startAt: _mp.Time, autoplay: _mp.IsPlaying); // reopen with the stream branch
         }
         if (Settings.Str("party.relay").Trim() is { Length: > 0 } server)
-            _relay ??= new PartyRelay(server, () => RemoteCommand("state", 0), c => { if (c == "toggle") TogglePlay(); }, () => _cast?.StreamUrl);
+            _relay ??= new PartyRelay(server, () => RemoteCommand("state", 0, null), RelayCommand, () => _cast?.StreamUrl);
         _discordSig = null; // the profile gets its button
+    }
+
+    void StopHosting()
+    {
+        _hosting = false;
+        _relay?.Dispose();
+        _relay = null;
+        _discordSig = null;
+        _pausedBy = null;
+        StopStreaming();
+        if (!_phoneRemote) { _remote?.Dispose(); _remote = null; } // the phone remote may still use the same server
+        Osd(L.T("Watch Together stopped"), 2);
+    }
+
+    /// <summary>A guest's command through the relay: "toggle::Ann", "seek:754000:Ann".</summary>
+    void RelayCommand(string c)
+    {
+        var p = c.Split(':', 3);
+        RemoteCommand(p[0], int.TryParse(p.ElementAtOrDefault(1), out var v) ? v : 0, p.ElementAtOrDefault(2) is { Length: > 0 } who ? who : null);
     }
 
     void JoinParty(string url)
     {
-        if (_relay != null) return; // hosting already
+        if (_hosting) StopHosting();
         _partyTimer?.Stop();
         _party = url.Trim().EndsWith('/') ? url.Trim() : url.Trim() + "/";
         _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-        _partyMissing = null;
+        (_partyMissing, _seenNote, _waiting) = (null, -1, false);
         _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
         Osd(L.T("Joined the watch party"), 3);
     }
@@ -2608,10 +2677,79 @@ public partial class MainWindow : Window
         Osd(L.T("Left the watch party"), 2);
     }
 
+    /// <summary>A guest watching the host's stream (no file of its own): it can't seek or pause the stream itself.</summary>
+    bool PartyStreaming => _party != null && CurrentPath is { } cp && cp.StartsWith(_party, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every seek the user makes (seek bar, keys, lyrics, chapters, bookmarks, Windows' media panel). In a party as a
+    /// guest it goes to the host, which moves everyone; this copy jumps at once too when it plays its own file.
+    /// </summary>
+    void SeekTo(long ms)
+    {
+        ms = Math.Max(0, ms);
+        if (_mp.Length > 0) ms = Math.Min(ms, _mp.Length - 500); // a guest on the host's live stream knows no length: the host clamps
+        _seekTarget = ms;
+        _seekAsked = Environment.TickCount64;
+        // at most one seek per 120 ms, always to the latest position: dragging the bar asked for one per mouse move, and
+        // libVLC worked through every precise seek in turn, so the picture lagged behind the pointer
+        if (Environment.TickCount64 - _seekDone >= 120) ApplySeek();
+        else if (_seekTimer is not { IsEnabled: true })
+        {
+            _seekTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(120), DispatcherPriority.Input, (_, _) => { _seekTimer!.Stop(); ApplySeek(); }, Dispatcher);
+            _seekTimer.Start();
+        }
+    }
+
+    long _seekTarget = -1, _seekAsked, _seekDone;
+    DispatcherTimer? _seekTimer;
+
+    /// <summary>Where the next relative jump starts: just after a seek libVLC still reports the old time for a moment.</summary>
+    long SeekBase => _seekTarget >= 0 && Environment.TickCount64 - _seekAsked < 1000 ? _seekTarget : _mp.Time;
+
+    void ApplySeek()
+    {
+        _seekDone = Environment.TickCount64;
+        var ms = _seekTarget;
+        if (ms < 0) return;
+        if (_party != null && _partyHttp != null)
+        {
+            _ = PartySend($"api/seek?v={ms}&n={Uri.EscapeDataString(PartyName)}");
+            if (!PartyStreaming && _mp.IsSeekable) _mp.Time = ms;
+            return;
+        }
+        if (!_mp.IsSeekable) return;
+        _mp.Time = ms;
+        if (_hosting) Note(PartyName, L.F("{0} jumped to {1}", PartyName, Fmt(ms)));
+    }
+
+    async Task PartySend(string path)
+    {
+        try { if (_partyHttp != null && _party != null) await _partyHttp.GetStringAsync(_party + path); }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException) { Osd(L.T("The watch party didn't answer"), 3); }
+    }
+
+    /// <summary>Host: something happened that everyone should see; shown here too when a guest did it.</summary>
+    void Note(string who, string text)
+    {
+        (_noteId, _note, _noteBy) = (_noteId + 1, text, who);
+        if (who != PartyName) Osd(text, 3);
+    }
+
+    /// <summary>Host: the party's play / pause changed. Paused, everyone waits for whoever did it.</summary>
+    void PartyPaused(bool paused, string who)
+    {
+        _pausedBy = paused ? who : null;
+        Note(who, paused ? L.F("{0} paused — waiting for them", who) : L.F("{0} pressed play", who));
+        if (paused && who != PartyName) Osd(L.F("{0} paused — waiting for them", who), 86_400); // stays until it goes on
+    }
+
     bool _partyBusy;
     long _partyStreamAt;
 
-    /// <summary>Follows the host: same file (by name), play / pause, and the position within 1.5 s.</summary>
+    /// <summary>
+    /// Follows the host: same file (by name) or the host's stream, play / pause, the position within 1.5 s, and what the
+    /// others did ("Ann paused — waiting for them" stays on screen until someone presses play).
+    /// </summary>
     async Task FollowParty()
     {
         if (_party == null || _partyHttp == null || _partyBusy) return;
@@ -2621,6 +2759,8 @@ public partial class MainWindow : Window
             var sent = Environment.TickCount64;
             using var doc = System.Text.Json.JsonDocument.Parse(await _partyHttp.GetStringAsync(_party + "api/state"));
             var host = doc.RootElement;
+            var playing = host.TryGetProperty("playing", out var pl) && pl.GetBoolean();
+            ShowPartyNews(host, playing);
             var file = host.TryGetProperty("file", out var f) ? f.GetString() : null;
             var mine = CurrentPath is { } p ? (p.Contains("://") ? p : Path.GetFileName(p)) : null;
             if (file == null) return;
@@ -2640,7 +2780,6 @@ public partial class MainWindow : Window
                 if (_partyMissing != file) { _partyMissing = file; Osd(L.F("Open “{0}” to watch together", file), 5); }
                 return;
             }
-            var playing = host.GetProperty("playing").GetBoolean();
             var time = host.GetProperty("time").GetInt64() + (playing ? (Environment.TickCount64 - sent) / 2 : 0); // half the round trip
             if (playing != _mp.IsPlaying) _mp.SetPause(!playing);
             if (Math.Abs(_mp.Time - time) > 1500 && _mp.IsSeekable) _mp.Time = time;
@@ -2649,19 +2788,48 @@ public partial class MainWindow : Window
         finally { _partyBusy = false; }
     }
 
-    void ShowRemote()
+    /// <summary>Guest: the others' doings, once each; the "waiting" line while the party is paused by someone.</summary>
+    void ShowPartyNews(System.Text.Json.JsonElement host, bool playing)
     {
-        _remote ??= new RemoteServer(RemoteCommand);
-        if (!DialogWindow.Remote(this, _remote.Url)) return;
-        _remote.Dispose();
-        _remote = null;
+        var pausedBy = host.TryGetProperty("pausedBy", out var pb) ? pb.GetString() : null;
+        if (!playing && pausedBy is { Length: > 0 } who && who != PartyName)
+        {
+            if (!_waiting) Osd(L.F("{0} paused — waiting for them", who), 86_400); // stays until it goes on
+            _waiting = true;
+        }
+        else if (_waiting && playing) _waiting = false; // the "pressed play" note below replaces it
+        if (host.TryGetProperty("noteId", out var ni) && ni.TryGetInt32(out var id) && id != _seenNote)
+        {
+            var first = _seenNote < 0;
+            _seenNote = id;
+            var by = host.TryGetProperty("noteBy", out var nb) ? nb.GetString() : null;
+            if (!first && by != PartyName && host.TryGetProperty("note", out var nt) && nt.GetString() is { Length: > 0 } text && !(_waiting && !playing))
+                Osd(text, 3);
+        }
     }
 
-    object RemoteCommand(string command, int arg)
+    void ShowRemote()
+    {
+        _phoneRemote = true;
+        _remote ??= new RemoteServer(RemoteCommand);
+        if (!DialogWindow.Remote(this, _remote.Url)) return;
+        _phoneRemote = false;
+        if (!_hosting) { _remote.Dispose(); _remote = null; } // a watch party still uses it
+    }
+
+    /// <param name="who">A Watch Together guest's name (their pause or seek goes to everyone); null: the phone remote.</param>
+    object RemoteCommand(string command, int arg, string? who)
     {
         switch (command)
         {
-            case "toggle": TogglePlay(); break;
+            case "toggle":
+                _partyFrom = who;
+                try { TogglePlay(); } finally { _partyFrom = null; }
+                break;
+            case "seek" when who != null:
+                if (_mp.IsSeekable) _mp.Time = Math.Clamp(arg, 0, Math.Max(0, _mp.Length - 500));
+                if (_hosting) Note(who, L.F("{0} jumped to {1}", who, Fmt(arg)));
+                break;
             case "prev": Previous(); break;
             case "next": Next(); break;
             case "back": Jump(-15_000); break;
@@ -2674,6 +2842,7 @@ public partial class MainWindow : Window
             file = _index >= 0 && CurrentPath is { } cp ? (cp.Contains("://") ? cp : Path.GetFileName(cp)) : null,
             time = Math.Max(0, _mp.Time), length = Math.Max(0, _mp.Length), volume = (int)Math.Round(Volume.Value * 100),
             stream = _cast?.StreamUrl, // Watch Together: friends without the file play this
+            host = _hosting ? PartyName : null, pausedBy = _mp.IsPlaying ? null : _pausedBy, noteId = _noteId, note = _note, noteBy = _noteBy,
         };
     }
 
@@ -2959,12 +3128,14 @@ public partial class MainWindow : Window
                 Item("Reset 360° View", null, null, () => _view.Reset(), enabled: _is360),
                 Item("Contact Sheet…", null, null, MakeContactSheet, enabled: !_isAudio && CurrentPath is { } cs && !cs.Contains("://")),
                 Sub("Deinterlace", null, new[] { "Automatic", "On", "Off" }.Select(o => (object)Item(o, null, null, () => Settings.Set("video.deint", o), check: Settings.Str("video.deint") == o))),
+                Sub("Background", null, Settings.Find("ui.videobg")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("ui.videobg", o), check: Settings.Str("ui.videobg") == o))),
             ]),
             Sub("Audio", "speaker-high", AudioMenuItems()),
             Sub("Subtitle", "subtitles", SubtitleMenuItems()),
             Item("More Settings", "sliders-horizontal", KeyOf("effects"), ToggleEffects),
             Item("Playlist", "queue", KeyOf("queue"), ToggleQueue),
             Sub("Open Media", "folder-open", [Item("Open File(s)", null, KeyOf("open"), OpenFiles), Item("Open Folder", null, KeyOf("openfolder"), OpenFolder), Item("Open Network Stream", null, KeyOf("openstream"), OpenStream)]),
+            Item("Control Another Player", "spotify-logo-duotone", null, () => { if (RemoteShown) CloseOtherPlayer(); else OpenOtherPlayer(); }, check: RemoteShown),
             new Separator(),
             Item("Quit Pylon", "sign-out", KeyOf("quit"), Close),
         };
@@ -3011,6 +3182,7 @@ public partial class MainWindow : Window
             ]),
             Sub("Full-screen Visualizer", null, [.. new[] { "Off", "Bio", "Wave", "Bloom", "Ripple", "Radial", "Aurora", "Horizon" }.Select(v =>
                 (object)Item(v, null, null, () => Settings.Set("ui.scene", v), check: (SceneView.On ? SceneView.Style : "Off") == v))]),
+            Sub("Background", null, Settings.Find("ui.musicbg")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("ui.musicbg", o), check: Settings.Str("ui.musicbg") == o))),
             .. Recognize.Possible ? new object[] { Item("Recognize Song", null, null, () => RecognizeSong(path!), enabled: local) } : [],
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             !local || !_isAudio ? Item("Add to Music", null, null, () => { }, enabled: false)
@@ -3238,7 +3410,7 @@ public partial class MainWindow : Window
                     await Task.Delay(1500);
                     break;
                 case "state":
-                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath}");
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
                     break;
                 case "settings":
                     OpenSettings(arg.Length > 0 ? arg : null);
@@ -3403,7 +3575,33 @@ public partial class MainWindow : Window
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"findmusic {sw.ElapsedMilliseconds} ms: {string.Join(" | ", found.Select(f => $"{f.Folder}={f.Songs}"))}{Environment.NewLine}");
                         break;
                     }
+                case "drag": // the seek bar dragged across: ~125 requests a second, how many seeks reach libVLC and where it lands
+                    {
+                        var applied = 0; var was = _seekDone;
+                        var sw = Stopwatch.StartNew();
+                        for (var k = 1; k <= 75; k++) { SeekTo(_mp.Length * k / 100); if (_seekDone != was) { applied++; was = _seekDone; } await Task.Delay(8); }
+                        await Task.Delay(400);
+                        if (_seekDone != was) applied++;
+                        await Task.Delay(800);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"drag: 75 asked in {sw.ElapsedMilliseconds - 1200} ms, {applied} seeks, target {_seekTarget} ms, now at {_mp.Time} ms{Environment.NewLine}");
+                        break;
+                    }
+                case "rapid": // switching items fast (the queue, the menu): how long each switch holds the UI, and whether it recovers
+                    {
+                        var blocks = new List<long>();
+                        for (var k = 0; k < int.Parse(arg); k++) { var t0 = Stopwatch.StartNew(); Next(); blocks.Add(t0.ElapsedMilliseconds); await Task.Delay(60); }
+                        var ping = Stopwatch.StartNew();
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Input);
+                        var pingMs = ping.ElapsedMilliseconds;
+                        await Task.Delay(3000);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"rapid: Next() held the UI {string.Join(",", blocks)} ms (the last Play() alone {_switchStartMedia} ms); UI answered after {pingMs} ms; playing={_mp.IsPlaying} index={_index} file={Path.GetFileName(CurrentPath)}{Environment.NewLine}");
+                        break;
+                    }
+                case "remoteopen": OpenOtherPlayer(); break;
+                case "proxytest": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), (await YtDlp.TestProxyAsync()).Replace('\n', '|') + Environment.NewLine); break;
+                case "seekto": SeekTo(long.Parse(arg)); break; // a user seek (Watch Together sends it to everyone)
                 case "remoteany": RemoteView.DebugAnySession = true; WatchOtherPlayers(); break; // a paused session shows too
+                case "throw": _ = Dispatcher.BeginInvoke(() => throw new InvalidOperationException("test of the safety net")); break; // must be logged, not fatal
                 case "spectrum": MusicSpectrum.DebugFill(1.3); break;
                 case "scene": Scene.DebugFill(); break;
                 case "spotify":

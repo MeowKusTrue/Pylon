@@ -17,6 +17,7 @@ public partial class App : Application
             return;
         }
         Perf.Mark("startup");
+        ErrorLog.Install(this);
         SmoothScroll.Install();
         Motion.HookMenus();
         Motion.HookPress();
@@ -32,6 +33,52 @@ public partial class App : Application
             return;
         }
         new MainWindow().Show();
+    }
+}
+
+/// <summary>
+/// The safety net: an exception nobody caught (an async void handler, a timer, a menu click) used to close the player
+/// without a word. Now it goes to errors.log in the profile folder, the player says so in a line, and keeps running.
+/// Only running out of memory is let through: nothing sane can follow it. A burst of the same error (one thrown every
+/// frame) is written and shown once.
+/// </summary>
+public static class ErrorLog
+{
+    static string FilePath => System.IO.Path.Combine(Library.Dir, "errors.log");
+    static readonly Dictionary<string, DateTime> Recent = [];
+
+    /// <summary>The main window shows the line (set by it; null until it exists).</summary>
+    public static Action<string>? Show;
+
+    public static void Install(Application app)
+    {
+        app.DispatcherUnhandledException += (_, e) =>
+        {
+            Write(e.Exception, "UI");
+            e.Handled = e.Exception is not OutOfMemoryException;
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) => { Write(e.Exception, "task"); e.SetObserved(); };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Write(ex, "fatal"); }; // can't be stopped: at least it's written
+    }
+
+    public static void Write(Exception e, string where)
+    {
+        var key = e.GetType().FullName + e.StackTrace?.Split('\n').FirstOrDefault();
+        lock (Recent)
+        {
+            if (Recent.TryGetValue(key, out var at) && DateTime.UtcNow - at < TimeSpan.FromSeconds(30)) return;
+            Recent[key] = DateTime.UtcNow;
+        }
+        try
+        {
+            System.IO.Directory.CreateDirectory(Library.Dir);
+            var file = new System.IO.FileInfo(FilePath);
+            if (file.Exists && file.Length > 1 << 20) file.Delete(); // a megabyte is plenty: start over
+            System.IO.File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{where}] Pylon {Updater.Current.ToString(3)}{Environment.NewLine}{e}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception io) when (io is System.IO.IOException or UnauthorizedAccessException) { }
+        if (where != "fatal")
+            Application.Current?.Dispatcher.BeginInvoke(() => Show?.Invoke(L.F("Something went wrong ({0}). Pylon kept going; details are in errors.log.", e.GetType().Name)));
     }
 }
 

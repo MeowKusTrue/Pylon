@@ -254,7 +254,7 @@ public static class Settings
         // Network
         Add($"--file-caching={Int("net.file")}"); Add($"--disc-caching={Int("net.disc")}");
         Add($"--network-caching={Int("net.stream")}"); Add($"--live-caching={Int("net.live")}");
-        if (Str("net.proxy") is { Length: > 0 } proxy) { Add($"--http-proxy={proxy}"); if (Str("net.proxypass") is { Length: > 0 } pp) Add($"--http-proxy-pwd={pp}"); }
+        if (Str("net.proxymode") != "Off" && Str("net.proxy") is { Length: > 0 } proxy && !proxy.StartsWith("socks", StringComparison.OrdinalIgnoreCase)) { Add($"--http-proxy={proxy}"); if (Str("net.proxypass") is { Length: > 0 } pp) Add($"--http-proxy-pwd={pp}"); }
         if (!Bool("net.systemtrust")) Add("--no-gnutls-system-trust");
         Add($"--gnutls-priorities={Str("net.cipher") switch { "Performance" => "PERFORMANCE", "Security" => "SECURE256", "Compatibility" => "LEGACY", _ => "NORMAL" }}");
 
@@ -301,35 +301,45 @@ public static class Settings
 
     /// <summary>Filled in by MainWindow (needs the live MediaPlayer).</summary>
     public static Func<string[]>? AudioDevices;
-    public static Action<Window>? OpenHotkeys, ClearHistory, OpenEqualizer, RescanPlugins, CheckUpdates;
+    public static Action<Window>? OpenHotkeys, ClearHistory, OpenEqualizer, RescanPlugins, CheckUpdates, OpenRemote;
 
+    // Pages as people look for things ("where do I change the background?"), not as VLC's preferences tree had them.
+    // Keys never move between versions: only where an option is shown changes.
     public static readonly List<Category> Categories =
     [
         new("General", "sliders-horizontal", "Global Settings", "App",
         [
             Sec("", new Opt { Kind = OptKind.Custom, Label = "Default player", Build = DialogWindow.DefaultsCard }),
-            Sec("Appearance",
+            Sec("Language",
                 C("general.language", "Interface language", "System", L.Choices, "Pylon restarts to switch the language."),
                 Act("Help translate Pylon", "Open", _ => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://hosted.weblate.org/engage/pylon/") { UseShellExecute = true }),
-                    "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there."),
-                C("general.theme", "Theme", "Dark", ThemeManager.Themes),
-                new Opt { Kind = OptKind.Accent, Key = "general.accent", Label = "Accent color", Default = AccentColors[0] },
-                Seg("ui.corners", "Corner rounding", "Moderate", "Off", "Slight", "Moderate", "Strong")),
-            Sec("Startup",
-                T("general.errors", "Show confirmation and error dialogs", false, "Pop up a message when a file can't be played."),
+                    "Pylon is translated by its users on Weblate, in the browser. Your language missing or wrong? Fix it there.")),
+            Sec("Updates",
                 T("general.updates", "Check for updates automatically", true, "Checks GitHub releases at startup."),
                 Act("Check for updates", "Check now", w => CheckUpdates?.Invoke(w))),
+            Sec("Startup and Tray",
+                T("ui.compact", "Start in compact mode", false, "Open in the miniplayer."),
+                T("ui.tray", "Show a system tray icon", false, "Minimizing hides Pylon to the tray; click the icon to bring it back."),
+                T("ui.traymin", "Start minimized to the tray", false),
+                T("ui.front", "Bring Pylon to the front when playback starts", false)),
+            Sec("Messages",
+                T("osd.enable", "Show feedback for shortcuts", true),
+                S("osd.time", "Show feedback for", 1.2, 0.5, 5, 0.1, " s"),
+                T("osd.filename", "Show filename when a video starts", false),
+                S("osd.filetime", "Show filename for", 3, 1, 10, 0.5, " s"),
+                C("ui.popup", "Show a popup when the track changes", "When minimized", ["Never", "When minimized", "Always"]),
+                S("ui.popuptime", "Popup duration", 5, 0, 10, 1, " s"),
+                T("general.errors", "Show confirmation and error dialogs", false, "Pop up a message when a file can't be played.")),
+        ],
+        [
             Sec("Diagnostics",
                 T("general.dev", "Developer mode", false, "Shows developer options under Advanced."),
                 T("general.log", "Save a log", false, "Write libVLC messages to a text file."),
                 FileOpt("general.logfile", "Log file", Path.Combine(Library.Dir, "pylon-log.txt")),
-                C("general.loglevel", "Log details", "Errors only", ["Errors only", "Warnings", "Everything"])),
-        ],
-        [
-            Sec("",
+                C("general.loglevel", "Log details", "Errors only", ["Errors only", "Warnings", "Everything"]),
                 T("general.minor", "Show minor warnings", false, "Include notices in the log."),
-                Txt("general.cmdline", "Additional command line options", "", "e.g., --no-sub-autodetect-file", engine: true),
                 C("general.logformat", "Log format", "Plain text", ["Plain text", "HTML"]),
+                Txt("general.cmdline", "Additional command line options", "", "e.g., --no-sub-autodetect-file", engine: true),
                 Act("Open configurations folder", "Open", _ => System.Diagnostics.Process.Start("explorer.exe", $"\"{Library.Dir}\"")),
                 Act("Reset all settings", "Reset", w =>
                 {
@@ -343,76 +353,77 @@ public static class Settings
                 with { Visible = () => Bool("general.dev") },
         ]),
 
-        new("Interface", "cursor", "Interface Settings", "App",
+        new("Look", "paint-brush-duotone", "Look & Feel", "App",
         [
+            Sec("Theme",
+                C("general.theme", "Theme", "Dark", ThemeManager.Themes),
+                new Opt { Kind = OptKind.Accent, Key = "general.accent", Label = "Accent color", Default = AccentColors[0] },
+                Seg("ui.corners", "Corner rounding", "Moderate", "Off", "Slight", "Moderate", "Strong"),
+                T("ui.lite", "Light mode", false, "For weak laptops and battery life: no blur on lyrics, no moving background, calmer animation.")),
+            Sec("When Music Plays",
+                T("ui.cover", "Show cover art in the window when playing audio", true),
+                Seg("ui.musicbg", "Behind the music", "Blurred cover", "Theme color", "Cover color", "Blurred cover"),
+                T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
+                C("ui.scene", "Full-screen visualizer", "Off", ["Off", "Bio", "Wave", "Bloom", "Ripple", "Radial", "Aurora", "Horizon"],
+                    "Behind the cover while music plays, in the cover's colors. Bio: living, overlapping waves round the cover. Wave: thin rings that bend with the music. Bloom: turning petals. Ripple: every bass hit sends a ring out. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection."),
+                C("ui.scenefps", "Visualizer frame rate", "60", ["30", "60", "120"], "Updates a second for the full-screen visualizer. Lower is lighter; light mode keeps it at 30."),
+                C("ui.spectrumstyle", "Visualizer", "Bars", ["Off", "Bars", "Mirror", "Wave", "Pulse"], "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music."),
+                T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached.")),
+            Sec("When Video Plays",
+                Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Theme color", "Blurred frame"),
+                T("ui.pausemin", "Pause video when window is minimized", false)),
             Sec("Window",
-                T("ui.inside", "Play video inside main window", true).Off("Video always plays inside the player"),
-                C("ui.fit", "Resize window to fit video", "Never", ["Never", "On first video", "Always"]),
-                T("ui.remember", "Remember window size and position", true),
-                T("ui.ontop", "Keep window above other windows", false),
                 T("ui.decorations", "Show window decorations", true, "The top bar with the title and window buttons."),
                 T("ui.titlefile", "Show the file name in the title bar", true),
-                C("ui.fsscreen", "Open fullscreen on", "Current screen", ["Current screen", "Primary screen"])),
+                T("ui.remember", "Remember window size and position", true),
+                T("ui.ontop", "Keep window above other windows", false),
+                C("ui.fit", "Resize window to fit video", "Never", ["Never", "On first video", "Always"]),
+                C("ui.fsscreen", "Open fullscreen on", "Current screen", ["Current screen", "Primary screen"]),
+                T("ui.inside", "Play video inside main window", true).Off("Video always plays inside the player"),
+                S("ui.opacity", "Window opacity", 100, 10, 100, 5, "%").Off("Video windows can't be translucent")),
             Sec("Playback Controls",
-                T("ui.compact", "Start in compact mode", false, "Open in the miniplayer."),
                 C("ui.autohide", "Auto-hide the controls", "In fullscreen only", ["Never", "In fullscreen only", "Always"]),
                 S("ui.hideafter", "Hide after", 3, 0, 10, 0.5, " s"),
-                T("ui.fscontrols", "Show controls in fullscreen", true)),
-            Sec("Notifications and System Tray",
-                T("ui.tray", "Show a system tray icon", false, "Minimizing hides Pylon to the tray; click the icon to bring it back."),
-                T("ui.traymin", "Start minimized to the tray", false),
-                C("ui.popup", "Show a popup when the track changes", "When minimized", ["Never", "When minimized", "Always"]),
-                S("ui.popuptime", "Popup duration", 5, 0, 10, 1, " s")),
-            Sec("Lyrics",
+                T("ui.fscontrols", "Show controls in fullscreen", true),
+                S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),
+                C("ui.sensitivity", "Fullscreen controls sensitivity", "Medium", ["Low", "Medium", "High"])),
+        ], []),
+
+        new("Lyrics", "microphone-stage", "Lyrics", "App",
+        [
+            Sec("",
                 T("lyrics.online", "Find lyrics online", true, "Spicy Lyrics (word by word) and LRCLIB, when a track has no .ttml or .lrc file next to it."),
                 T("lyrics.translation", "Show translations", true, "When the lyrics carry them (Apple Music TTML, bilingual LRC)."),
                 C("lyrics.style", "Lyrics animation", "Spicy", ["Spicy", "Jump", "Wave", "Rise", "Neon", "Karaoke", "Line by line"],
                     "Spicy: words swell and glow, letter by letter on long notes. Jump: each word hops as it's sung. Wave: a wave runs through the letters. Rise: words float up out of the dark. Neon: a fill and a soft glow on the current line. Karaoke: a plain fill, lighter. Line by line: whole lines light up, the lightest.")),
         ],
         [
-            Sec("",
-                S("ui.opacity", "Window opacity", 100, 10, 100, 5, "%").Off("Video windows can't be translucent"),
-                T("ui.pausemin", "Pause video when window is minimized", false),
-                T("ui.front", "Bring Pylon to the front when playback starts", false),
-                T("ui.cover", "Show cover art in the window when playing audio", true),
-                T("remote.auto", "Show other players when Pylon is idle", true, "While Pylon plays nothing: the song another app plays (Spotify, Yandex Music, a browser), its cover and lyrics, with its controls."),
-                C("ui.scene", "Full-screen visualizer", "Off", ["Off", "Bio", "Wave", "Bloom", "Ripple", "Radial", "Aurora", "Horizon"],
-                    "Behind the cover while music plays, in the cover's colors. Bio: living, overlapping waves round the cover. Wave: thin rings that bend with the music. Bloom: turning petals. Ripple: every bass hit sends a ring out. Radial: rays round the cover. Aurora: soft ribbons. Horizon: wide bars with a reflection."),
-                C("ui.scenefps", "Visualizer frame rate", "60", ["30", "60", "120"], "Updates a second for the full-screen visualizer. Lower is lighter; light mode keeps it at 30."),
-                C("ui.spectrumstyle", "Visualizer", "Bars", ["Off", "Bars", "Mirror", "Wave", "Pulse"], "Under the cover while music plays (the same choice as right-click → Visualizer). Pulse: soft waves that breathe with the music."),
-                T("ui.realwave", "Real waveform on the music seek bar", true, "Each track is scanned once in the background; the result is cached."),
-                Seg("ui.videobg", "Around the video", "Blurred frame", "Black", "Theme color", "Blurred frame"),
-                Seg("ui.musicbg", "Behind the music", "Blurred cover", "Theme color", "Cover color", "Blurred cover"),
-                T("ui.livebg", "Live background", true, "The blurred picture behind music and video slowly drifts."),
-                T("ui.lite", "Light mode", false, "For weak laptops and battery life: no blur on lyrics, no moving background, calmer animation.")),
-            Sec("Lyrics: your own keys (optional)",
+            Sec("Your Own Keys (optional)",
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spicykey", Label = "Spicy Lyrics API key", ButtonText = "sl_pk_… / sl_sk_…",
-                          Info = "Not needed: Pylon has its own key. Only for your own limits (developers.spicylyrics.org). Stored only on this computer." },
+                          Info = "Not needed: Pylon has its own key. Only for your own limits (developers.spicylyrics.org). Stored only on this computer." }),
+        ]),
+
+        new("Online", "users-three-duotone", "Spotify, Friends & Services", "App",
+        [
+            Sec("Other Players",
+                T("remote.auto", "Show other players when Pylon is idle", true, "While Pylon plays nothing: the song another app plays (Spotify, Yandex Music, a browser), its cover and lyrics, with its controls."),
+                Act("Remote for other players", "Open", w => OpenRemote?.Invoke(w), "Also in ⋯ → Control Another Player.")),
+            Sec("Spotify",
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spotifyid", Label = "Spotify client ID", ButtonText = "developer.spotify.com",
                           Info = "Not needed for lyrics: Pylon finds a song's Spotify id through ListenBrainz. A free app from developer.spotify.com helps with songs it misses, and shows Spotify's queue in the remote (add http://127.0.0.1:47851/callback as its redirect URI; another port below if that one is taken)." },
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" },
-                N("spotify.port", "Spotify sign-in port", 47851, 1024, 65535),
                 Act("Spotify account", "Sign in", async w =>
                 {
                     if (SpotifyApi.ClientId.Length == 0) { MessageBox.Show(w, L.T("Put your Spotify app's Client ID above first."), "Spotify"); return; }
                     MessageBox.Show(w, await SpotifyApi.SignInAsync() ? L.T("Pylon is connected to Spotify.") : SpotifyApi.LastError ?? L.T("Spotify sign-in didn't finish. Try again from Pylon."), "Spotify");
                 }, "For the queue in the remote. Sign in through Spotify's website; Pylon never sees your password."),
-                Act("Sign out of Spotify", "Sign out", _ => SpotifyApi.SignOut())),
-            Sec("",
-                S("ui.fsopacity", "Fullscreen controls opacity", 100, 10, 100, 5, "%"),
-                C("ui.sensitivity", "Fullscreen controls sensitivity", "Medium", ["Low", "Medium", "High"])),
-        ]),
-
-        new("Privacy", "shield", "Privacy Settings", "App",
-        [
-            Sec("History",
-                T("privacy.history", "Save recently played items", true),
-                T("privacy.position", "Remember the playback position", true),
-                Txt("privacy.exclude", "Never remember items matching", "", "e.g., *private*; D:\\Secret\\*"),
-                Act("Clear history now", "Clear", w => ClearHistory?.Invoke(w)),
-                T("library.netmeta", "Fetch titles and cover art from the internet", false, "Missing covers come from iTunes; songs without tags are recognized by their sound (AcoustID; downloads the 3 MB fpcalc tool once).", engine: true),
+                Act("Sign out of Spotify", "Sign out", _ => SpotifyApi.SignOut()),
+                N("spotify.port", "Spotify sign-in port", 47851, 1024, 65535)),
+            Sec("Watch Together",
+                Txt("party.name", "Your name in Watch Together", "", Environment.UserName),
                 new Opt { Kind = OptKind.Text, Key = "party.relay", Label = "Watch Together server", Default = "https://party-pylon.hubcore.org", ButtonText = "https://party.example.com",
-                          Info = "For Watch Together with friends anywhere. Pylon's own server by default; your own relay (relay/party-relay.py from Pylon's repository) works too. Empty: friends join over the same network or a shared VPN." },
+                          Info = "For Watch Together with friends anywhere. Pylon's own server by default; your own relay (relay/party-relay.py from Pylon's repository) works too. Empty: friends join over the same network or a shared VPN." }),
+            Sec("Discord & Last.fm",
                 Discord.Possible ? T("privacy.discord", "Show what's playing in Discord", false, "Your Discord profile shows the track or video, like Spotify does. Only while Discord is running on this computer.")
                                  : T("privacy.discord", "Show what's playing in Discord", false).Off(),
                 LastFm.Possible ? T("lastfm.scrobble", "Scrobble to Last.fm", false, "Songs you listen to (half of them, or 4 minutes) go to your Last.fm profile.")
@@ -424,9 +435,24 @@ public static class Settings
                 }, "Sign in through the Last.fm website; Pylon never sees your password.")
                                 : Act("Last.fm account", "Connect", _ => { }).Off(),
                 LastFm.Possible ? Act("Sign out of Last.fm", "Sign out", _ => LastFm.Disconnect()) : Act("Sign out of Last.fm", "Sign out", _ => { }).Off()),
+            Sec("Control from Another Device",
+                T("controls.web", "Web remote control", false, "Control playback from a browser on your network (http://this-pc:port).", engine: true),
+                N("controls.webport", "Port", 8080, 1024, 65535, engine: true),
+                Pw("controls.webpass", "Password")),
         ], []),
 
-        new("Controls", "keyboard", "Mouse, Keyboard & Remote Controls", "App",
+        new("Privacy", "shield", "Privacy Settings", "App",
+        [
+            Sec("History",
+                T("privacy.history", "Save recently played items", true),
+                T("privacy.position", "Remember the playback position", true),
+                Txt("privacy.exclude", "Never remember items matching", "", "e.g., *private*; D:\\Secret\\*"),
+                Act("Clear history now", "Clear", w => ClearHistory?.Invoke(w))),
+            Sec("Internet",
+                T("library.netmeta", "Fetch titles and cover art from the internet", false, "Missing covers come from iTunes; songs without tags are recognized by their sound (AcoustID; downloads the 3 MB fpcalc tool once).", engine: true)),
+        ], []),
+
+        new("Controls", "keyboard", "Mouse & Keyboard", "App",
         [
             Sec("Keyboard Shortcuts",
                 C("controls.defaults", "Layout", "VLC-style", ["VLC-style", "YouTube-style", "MPC-HC-style"],
@@ -445,10 +471,6 @@ public static class Settings
                 C("controls.wheel", "Scroll wheel", "Volume", ["Volume", "Seek", "Nothing"]),
                 C("controls.hwheel", "Horizontal scroll", "Seek", ["Seek", "Volume", "Nothing"]),
                 T("controls.reverse", "Reverse scroll direction", false)),
-            Sec("Remotes",
-                T("controls.web", "Web remote control", false, "Control playback from a browser on your network (http://this-pc:port).", engine: true),
-                N("controls.webport", "Port", 8080, 1024, 65535, engine: true),
-                Pw("controls.webpass", "Password")),
         ], []),
 
         new("Playback", "play", "Playback Preferences", "Media",
@@ -595,11 +617,6 @@ public static class Settings
                 C("subs.position", "Vertical position", "Bottom", ["Bottom", "Higher", "Much higher"], engine: true)),
             Sec("Timing",
                 S("subs.delay", "Subtitle delay", 0, -5, 5, 0.1, " s")),
-            Sec("On-Screen Messages",
-                T("osd.enable", "Show feedback for shortcuts", true),
-                S("osd.time", "Show feedback for", 1.2, 0.5, 5, 0.1, " s"),
-                T("osd.filename", "Show filename when a video starts", false),
-                S("osd.filetime", "Show filename for", 3, 1, 10, 0.5, " s")),
         ],
         [
             Sec("",
@@ -636,8 +653,12 @@ public static class Settings
                 N("net.stream", "Network streams", 1000, 0, 60000, " ms", engine: true),
                 N("net.live", "Live capture", 300, 0, 60000, " ms", engine: true)),
             Sec("Proxy",
-                Txt("net.proxy", "HTTP proxy", "", "System proxy", engine: true),
-                Pw("net.proxypass", "HTTP proxy password"),
+                Seg("net.proxymode", "Proxy for websites", "Automatic", "Automatic", "Off"),
+                new Opt { Kind = OptKind.Text, Key = "net.proxy", Label = "Proxy address", ButtonText = "socks5://user:pass@host:1080 · http://host:8080", Engine = true,
+                          Info = "For YouTube and other sites (yt-dlp) and for playing what they give. Any of: host:port, http://, https://, socks4://, socks5://, socks5h://, with user:password@ if it needs a sign-in. Empty with Automatic: the proxy of your VPN app or of Windows." },
+                Pw("net.proxypass", "Proxy password"),
+                Act("Check the proxy", "Check", async w => MessageBox.Show(w, await YtDlp.TestProxyAsync(), L.T("Proxy")),
+                    "Opens YouTube through it and has yt-dlp read a video's title; says what worked and how long it took."),
                 C("net.cookies", "Sign in to websites with cookies from", "Off", ["Off", "Firefox", "Edge", "Chrome", "Brave", "Opera", "Vivaldi"],
                   "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks.")),
             Sec("Security",
