@@ -164,6 +164,7 @@ public partial class MainWindow : Window
             HookOverlayWindow();
             Topmost = Settings.Bool("ui.ontop");
             Library.IndexMusic(Dispatcher);
+            new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background, async (t, _) => { ((DispatcherTimer)t!).Interval = TimeSpan.FromHours(6); await SyncSpotifyLists(); }, Dispatcher).Start();
             Hotkeys.RegisterGlobal(this);
             StartCastDiscovery();
             ApplyPriority();
@@ -483,6 +484,7 @@ public partial class MainWindow : Window
     {
         if (items.Count == 0) return;
         SaveProgress();
+        _radio = null; // another list: the radio stops topping up
         _queue.Clear();
         _queue.AddRange(items);
         BuildShuffle();
@@ -543,6 +545,7 @@ public partial class MainWindow : Window
         SaveProgress();
         _mp.Stop();
         _queue.Clear();
+        _radio = null;
         ShowIdle();
     }
 
@@ -554,7 +557,7 @@ public partial class MainWindow : Window
     int NextIndex(int dir)
     {
         if (_queue.Count == 0) return -1;
-        if (!Settings.Bool("playback.shuffle")) return _index + dir;
+        if (!Settings.Bool("playback.shuffle") || _radio != null) return _index + dir; // a radio plays in its order
         var pos = _shuffle.IndexOf(_index) + dir;
         return pos >= 0 && pos < _shuffle.Count ? _shuffle[pos] : -1;
     }
@@ -569,6 +572,7 @@ public partial class MainWindow : Window
         if (!_fadeStarting) EndCrossfade();
         _index = i;
         _switch = Stopwatch.StartNew();
+        TopUpRadio(); // when the switch is made, not when the song sounds: skipping fast never got there
         // leaving a video: libVLC's stop joins its video output, up to half a second (longer when that video was itself still
         // starting), and inside Play() it froze the window on every quick switch. Stopped off the UI thread first, Play() is
         // a few milliseconds. Not while casting or watching together: their stream has to run on from item to item.
@@ -612,6 +616,156 @@ public partial class MainWindow : Window
     bool _metaPending, _ytDlpDeclined;
 
     /// <summary>
+    /// The next two web items (Spotify imports, YouTube) are resolved while this one plays, so the switch to them is
+    /// immediate: yt-dlp takes a few seconds per song. In play order, shuffle included.
+    /// </summary>
+    void LookAhead()
+    {
+        if (!YtDlp.Available || _queue.Count == 0) return;
+        var order = Settings.Bool("playback.shuffle") && _radio == null && _shuffle.Count == _queue.Count ? _shuffle : Enumerable.Range(0, _queue.Count).ToList();
+        var at = order.IndexOf(_index);
+        var q = Settings.Str("playback.quality");
+        for (var k = 1; k <= 2 && at >= 0; k++)
+        {
+            var next = _queue[order[(at + k) % order.Count]];
+            if (next.Contains("://") && YtDlp.Handles(next) && !YtDlp.IsPlaylistPage(next))
+                _ = YtDlp.ResolveItemAsync(next, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
+        }
+    }
+
+    // ───────── radio by a song ─────────
+
+    /// <summary>What a radio plays on from: YouTube Music's token for 50 more, the last song it brought, what it brought already.</summary>
+    sealed class Radio
+    {
+        public string? More, Last;
+        public readonly HashSet<string> Seen = [];
+        public bool Busy;
+    }
+
+    Radio? _radio;
+
+    static string SongKey(string? artist, string? title)
+    {
+        static string N(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
+        return N((artist ?? "").Split(',', '&')[0]) + "|" + N(title ?? "");
+    }
+
+    /// <summary>
+    /// Radio by a song ("my wave" for one track): YouTube Music's radio for it plays on and on. Songs that are in the
+    /// library play from the library, the rest from YouTube Music (the exact video, nothing to search); when five are left
+    /// it asks for more. Like: more like that song comes next, and it goes to "Liked songs". Dislike: skipped now, never
+    /// offered again.
+    /// </summary>
+    public async void StartRadio(string? src = null)
+    {
+        src ??= CurrentPath;
+        if (src == null) return;
+        if (!YtDlp.Available && (_ytDlpDeclined || !await OfferYtDlp())) return;
+        Osd(L.T("Tuning the radio…"), 15);
+        if (await RadioSeed(src) is not { } id) { Osd(L.T("Couldn't find this song on YouTube Music"), 4); return; }
+        var (songs, more) = await YtMusic.RadioAsync(id, null);
+        if (songs.Count == 0) { Osd(L.T("No radio for this song"), 4); return; }
+        var radio = new Radio { More = more };
+        radio.Seen.Add(id);
+        radio.Seen.Add(SongKey(songs[0].Artist, songs[0].Title)); // the first one is the song itself
+        var items = RadioItems(radio, songs);
+        if (src == CurrentPath && _index >= 0)
+        {
+            // the song plays on, the radio follows it
+            _queue.Clear();
+            _queue.Add(src);
+            _queue.AddRange(items);
+            _index = 0;
+            BuildShuffle();
+            LookAhead();
+        }
+        else PlayList([src, .. items], 0);
+        _radio = radio;
+        Osd(L.F("Radio by “{0}”: {1} songs, more as it plays", Library.TitleOf(src), items.Count), 4);
+        Sidebar.Render();
+    }
+
+    /// <summary>The song's video on YouTube Music: from its address, from an earlier search, or found by title and artist.</summary>
+    async Task<string?> RadioSeed(string src)
+    {
+        if (System.Text.RegularExpressions.Regex.Match(src, @"(?:[?&]v=|youtu\.be/)([\w-]{11})") is { Success: true } link) return link.Groups[1].Value;
+        var meta = Library.Data.Meta.GetValueOrDefault(src);
+        if (meta?.YouTubeId != null) return meta.YouTubeId;
+        var (title, artist, seconds) = src == CurrentPath ? (_track.Title, _track.Artist, _track.Duration) : (meta?.Title ?? Library.TitleOf(src), meta?.Artist, (meta?.DurationMs ?? 0) / 1000.0);
+        if (string.IsNullOrWhiteSpace(title)) return null;
+        if (artist != null && await YtMusic.FindAsync(title, artist, seconds, meta?.Isrc) is { } found) return found;
+        try { return (await YtMusic.SearchSongsAsync($"{artist} {title}".Trim())).FirstOrDefault()?.VideoId; } // a local file's length can differ: the top hit
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException) { return null; }
+    }
+
+    /// <summary>Radio songs as queue items: the new ones only (not disliked, not in this radio already), library files first.</summary>
+    List<string> RadioItems(Radio radio, List<YtMusic.Hit> songs)
+    {
+        var fresh = songs.Where(s => !Library.Data.Disliked.Contains(SongKey(s.Artist, s.Title)) & radio.Seen.Add(s.VideoId) & radio.Seen.Add(SongKey(s.Artist, s.Title))).ToList();
+        if (songs.Count > 0) radio.Last = songs[^1].VideoId;
+        var items = SpotifyImport.Resolve([.. fresh.Select(s => new SpotifyImport.Track(s.Title, s.Artist, (long)(s.Seconds * 1000), "", null, s.Art, s.Album))]);
+        for (var k = 0; k < items.Count; k++)
+            if (items[k].StartsWith("ytsearch://") && Library.Data.Meta.GetValueOrDefault(items[k]) is { } m) m.YouTubeId = fresh[k].VideoId; // the exact video: no search
+        return [.. items.Distinct().Where(i => !_queue.Contains(i))];
+    }
+
+    /// <summary>Five songs left: 50 more (the next page, or a new radio from the last song when YouTube Music's runs out).</summary>
+    async void TopUpRadio()
+    {
+        if (_radio is not { Busy: false } radio || _queue.Count - _index > 5) return;
+        radio.Busy = true;
+        var (songs, more) = await YtMusic.RadioAsync(radio.More == null ? radio.Last : null, radio.More);
+        radio.Busy = false;
+        if (_radio != radio) return;
+        radio.More = more;
+        if (songs.Count == 0) return; // offline: tried again on the next song
+        _queue.AddRange(RadioItems(radio, songs));
+        BuildShuffle();
+        Sidebar.Render();
+    }
+
+    /// <summary>Into "Liked songs"; on the radio, a few songs like it come next.</summary>
+    public async void LikeSong()
+    {
+        if (CurrentPath is not { } src) return;
+        var liked = Library.Data.Playlists.FirstOrDefault(p => p.Source == "liked");
+        if (liked == null) Library.Data.Playlists.Add(liked = new Playlist { Name = L.T("Liked songs"), Source = "liked" });
+        if (!liked.Items.Contains(src)) liked.Items.Add(src);
+        Library.Touch();
+        Osd(_radio != null ? L.T("Liked: more like this next") : L.T("Added to Liked songs"), 2);
+        if (_radio is not { } radio || await RadioSeed(src) is not { } id) return;
+        var (songs, _) = await YtMusic.RadioAsync(id, null);
+        if (_radio != radio || CurrentPath != src) return;
+        _queue.InsertRange(_index + 1, RadioItems(radio, songs.Skip(1).Take(6).ToList()));
+        BuildShuffle();
+        Sidebar.Render();
+    }
+
+    /// <summary>Skipped, and never offered by a radio again.</summary>
+    public void DislikeSong()
+    {
+        if (CurrentPath == null) return;
+        Library.Data.Disliked.Add(SongKey(_track.Artist, _track.Title));
+        Library.Touch();
+        Osd(L.T("Won't come up on the radio again"), 2);
+        NextInQueue();
+    }
+
+    List<object> RadioMenuItems(string? path) => _radio == null
+        ? [Item("Radio by This Song", "radio", KeyOf("radio"), () => StartRadio(), enabled: path != null)]
+        : [
+            Sub("Radio", "radio", [
+                Item("Like: More Like This", null, KeyOf("like"), LikeSong),
+                Item("Dislike: Never Again", null, KeyOf("dislike"), DislikeSong),
+                new Separator(),
+                Item("Radio by This Song", null, KeyOf("radio"), () => StartRadio(), enabled: path != null),
+                Item("Stop the Radio", null, null, () => { _radio = null; Osd(L.T("The radio stops after the queue"), 2); }),
+            ]),
+        ];
+
+
+    /// <summary>
     /// A web page (YouTube and the rest) through yt-dlp: a playlist or channel turns into its videos, a video into its
     /// stream addresses. True when it took care of the item (or the user moved on); false lets libVLC try the address.
     /// </summary>
@@ -632,7 +786,7 @@ public partial class MainWindow : Window
             return true;
         }
         var q = Settings.Str("playback.quality");
-        var s = await YtDlp.ResolveAsync(src, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
+        var s = await YtDlp.ResolveItemAsync(src, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
         if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
         // a failed search stops here with the reason (YouTube blocked, "confirm you're not a bot"…) instead of handing
         // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
@@ -647,7 +801,7 @@ public partial class MainWindow : Window
             var known = Library.Data.Meta.GetValueOrDefault(src);
             media.SetMeta(MetadataType.Title, known?.Title ?? s.Title);
             if ((known?.Artist ?? s.Artist) is { } by) media.SetMeta(MetadataType.Artist, by);
-            if (s.Thumbnail != null) media.SetMeta(MetadataType.ArtworkURL, s.Thumbnail);
+            if ((known?.Art ?? s.Thumbnail) is { } art) media.SetMeta(MetadataType.ArtworkURL, art); // an imported song: its album cover, not the video's frame
             Osd("", 0);
             StartMedia(media, src, isUrl: true, s.Live ? -1 : startAt, autoplay ?? Settings.Bool("playback.autoplay"), audio: !s.HasVideo);
         }
@@ -770,6 +924,8 @@ public partial class MainWindow : Window
         MaybeTrackPopup(_index);
         Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
         Library.CountPlay(src);
+        LookAhead();
+        LyricsAhead();
         _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
         if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
         ApplyLayout();
@@ -847,6 +1003,7 @@ public partial class MainWindow : Window
         ArtImage.Source = bmp;
         ArtBackdrop.SetImage(bmp);
         Scene.SetCover(bmp);
+        LyricsPane.SetCover(bmp);
         ApplyMusicBg();
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -1303,7 +1460,15 @@ public partial class MainWindow : Window
             case "general.log" or "general.logfile" or "general.loglevel" or "general.minor" or "general.logformat": HookLog(); break;
             case "ui.ontop": Topmost = Settings.Bool("ui.ontop") || _mini; break;
             case "ui.lite": ApplyLayout(); LyricsPane.Reblur(); break;
-            case "lyrics.style": LyricsPane.Restyle(); break;
+            case "lyrics.style":
+                // the font row shows this style's own font
+                var styleFont = Settings.Str("lyrics.font." + Settings.Str("lyrics.style")) is { Length: > 0 } sf ? sf : "Default";
+                if (Settings.Str("lyrics.font") != styleFont) Settings.Set("lyrics.font", styleFont);
+                break; // the lyrics views rebuild themselves
+            case "lyrics.font":
+                var fontKey = "lyrics.font." + Settings.Str("lyrics.style");
+                if (Settings.Str(fontKey) != Settings.Str("lyrics.font")) Settings.Set(fontKey, Settings.Str("lyrics.font"));
+                break;
             case "ui.scene" or "ui.scenefps": Scene.Restyle(); break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.musicbg" or "remote.auto" or "ui.livebg" or "ui.lyrics" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
@@ -1550,6 +1715,7 @@ public partial class MainWindow : Window
         if (_shownMs < 0 || Math.Abs(target - _shownMs) > 700) _shownMs = target;
         else _shownMs = Math.Max(_shownMs, _shownMs + dt * 1000 * _mp.Rate + (target - _shownMs) * 0.1); // never backwards
         ShowPosition(_shownMs / len);
+        if (_mini) PaintMiniWords();
     }
 
     // ───────── lyrics ─────────
@@ -1572,8 +1738,9 @@ public partial class MainWindow : Window
             else LyricsPane.Visibility = Visibility.Collapsed;
             Dispatcher.BeginInvoke(() => MusicLayout_SizeChanged(MusicLayout, null!), DispatcherPriority.Loaded);
         }
-        var wanted = on || (_mini && Settings.Bool("ui.lyrics") && _isAudio && _index >= 0); // the miniplayer shows them too
-        if (wanted && !_metaPending && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path); // fetched only once someone looks, with real tags
+        // every song's lyrics are looked up as it starts (with its real tags), shown or not: opening the panel, the
+        // miniplayer or the remote then finds them there
+        if (_isAudio && _index >= 0 && !_metaPending && CurrentPath is { } path && _lyricsFor != path) LoadLyrics(path);
     }
 
     async void LoadLyrics(string path)
@@ -1587,10 +1754,26 @@ public partial class MainWindow : Window
         }
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
         var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
-        var doc = await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration, tags);
+        var doc = _lyricsAhead.Remove(path, out var early) && await early is { } found ? found
+            : await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album, _track.Duration, tags);
         if (CurrentPath != path) return;
         if (doc != null) LyricsPane.Show(doc);
         else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
+    }
+
+    readonly Dictionary<string, Task<LyricsDoc?>> _lyricsAhead = [];
+
+    /// <summary>
+    /// The next song's lyrics are looked up while this one plays (by its library tags), so they are there the moment it
+    /// starts. A miss isn't kept: the song asks again with its real tags when it plays.
+    /// </summary>
+    void LyricsAhead()
+    {
+        if (NextIndex(+1) is not (>= 0 and var n) || n >= _queue.Count || _queue[n] is var next && _lyricsAhead.ContainsKey(next)) return;
+        if (Library.Data.Meta.GetValueOrDefault(next) is not { Title: { Length: > 0 } title } m) return; // untagged: looked up when it plays
+        var seconds = m.DurationMs > 0 ? m.DurationMs / 1000.0 : (Library.HistoryOf(next)?.Length ?? 0) / 1000.0;
+        if (_lyricsAhead.Count > 6) _lyricsAhead.Clear();
+        _lyricsAhead[next] = Lyrics.FindAsync(next, title, m.Artist, m.Album, seconds, m.SpotifyId is { } id ? "\nspotify:track:" + id : "");
     }
 
     /// <summary>Seconds this track's lyrics are moved ahead (Lyrics → Timing); negative = later.</summary>
@@ -2574,11 +2757,32 @@ public partial class MainWindow : Window
         Osd(L.T("Reading the Spotify list…"), 10);
         if (await SpotifyImport.ReadAsync(link) is not { Tracks.Count: > 0 } list) { Osd(L.T("Couldn't read that Spotify link"), 3); return; }
         var items = SpotifyImport.Resolve(list.Tracks);
-        Library.Data.Playlists.Add(new Playlist { Name = list.Name, Items = items });
+        var playlist = Library.Data.Playlists.FirstOrDefault(p => p.Source == link)
+            ?? new Playlist { Name = list.Name, Source = link }; // the same link again: the same playlist, brought up to date
+        if (!Library.Data.Playlists.Contains(playlist)) Library.Data.Playlists.Add(playlist);
+        (playlist.Items, playlist.LastSync) = (items, DateTime.UtcNow);
+        playlist.Thumb = await SpotifyImport.SaveCoverAsync(list.Cover) ?? playlist.Thumb;
         Library.Touch();
         var local = items.Count(i => !i.StartsWith("ytsearch://"));
-        Osd(L.F("{0}: {1} songs, {2} from your library", list.Name, items.Count, local), 4);
+        Osd(list.Partial ? L.F("{0}: the first {1} songs. Sign in to Spotify (Settings → Online) for the whole list.", list.Name, items.Count)
+            : L.F("{0}: {1} songs, {2} from your library", list.Name, items.Count, local), list.Partial ? 7 : 4);
         PlayList(items, 0);
+        _ = SpotifyImport.EnrichAsync(items, () => { Library.Touch(); Sidebar.Render(); });
+    }
+
+    /// <summary>
+    /// Imported Spotify lists follow their source: at start and every 6 hours, each one last read more than 6 hours ago is
+    /// read again (one after the other, quietly); what changed is said in a line.
+    /// </summary>
+    async Task SyncSpotifyLists()
+    {
+        foreach (var p in Library.Data.Playlists.Where(p => p.Source?.StartsWith("http") == true && (p.LastSync == null || DateTime.UtcNow - p.LastSync > TimeSpan.FromHours(6))).ToList())
+        {
+            if (await SpotifyImport.SyncAsync(p) is not { } change) continue;
+            Library.Touch();
+            if (change.Added + change.Removed > 0) Osd(L.F("“{0}” updated from Spotify: +{1} / −{2}", p.Name, change.Added, change.Removed), 4);
+            _ = SpotifyImport.EnrichAsync(p.Items, () => { Library.Touch(); Sidebar.Render(); });
+        }
     }
 
     // ───────── watch together ─────────
@@ -2895,11 +3099,38 @@ public partial class MainWindow : Window
     {
         var show = _mini && _isAudio && Settings.Bool("ui.lyrics") && LyricsPane.HasLyrics && CurrentPath == _lyricsFor;
         var (now, next) = show ? LyricsPane.LinesAt(PlaybackClock() + LyricsOffset) : (null, null);
-        MiniLyrics.Visibility = show && (now ?? next) != null ? Visibility.Visible : Visibility.Collapsed;
-        if (MiniLyricNow.Text == (now ?? "")) return;
-        MiniLyricNow.Text = now ?? "";
+        MiniLyrics.Visibility = show && ((object?)now ?? next) != null ? Visibility.Visible : Visibility.Collapsed;
+        if (now == _miniLine) return;
+        _miniLine = now;
+        // word by word: one run per word, lit as it's sung (lines without word timing light up whole)
+        MiniLyricNow.Inlines.Clear();
+        _miniWords.Clear();
+        if (now is { Words.Length: > 0 })
+            foreach (var w in now.Words)
+            {
+                var brush = new SolidColorBrush(Color.FromArgb(105, 255, 255, 255));
+                _miniWords.Add((w, brush));
+                MiniLyricNow.Inlines.Add(new System.Windows.Documents.Run(w.Joined ? w.Text : w.Text + " ") { Foreground = brush });
+            }
+        else MiniLyricNow.Text = now?.Text ?? "";
         MiniLyricNext.Text = next ?? "";
-        Motion.Pop(MiniLyricNow, dy: 10, scale: 0.97); // the new line rises in
+        if (now != null) Motion.Pop(MiniLyricNow, dy: 10, scale: 0.97); // the new line rises in
+        PaintMiniWords();
+    }
+
+    LyricLine? _miniLine;
+    readonly List<(Syllable Word, SolidColorBrush Brush)> _miniWords = [];
+
+    /// <summary>The miniplayer's words brighten as they're sung (30 times a second, from the seek bar's smooth clock).</summary>
+    void PaintMiniWords()
+    {
+        if (_miniWords.Count == 0 || MiniLyrics.Visibility != Visibility.Visible) return;
+        var t = PlaybackClock() + LyricsOffset;
+        foreach (var (w, brush) in _miniWords)
+        {
+            var a = (byte)(105 + 150 * Math.Clamp((t - w.Start) / Math.Max(0.08, w.End - w.Start), 0, 1));
+            if (brush.Color.A != a) brush.Color = Color.FromArgb(a, 255, 255, 255);
+        }
     }
 
     // ───────── Last.fm ─────────
@@ -3173,6 +3404,7 @@ public partial class MainWindow : Window
         return
         [
             LyricsMenu(),
+            .. RadioMenuItems(path),
             Sub("Visualizer", null, [
                 .. new[] { "Off", "Bars", "Mirror", "Wave", "Pulse" }.Select(v => (object)Item(v, null, null, () =>
                 {
@@ -3498,6 +3730,7 @@ public partial class MainWindow : Window
                     for (var k = 0; k < double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * 60; k++) { Motion.DebugFrame(); LyricsPane.DebugFrame(); await Task.Delay(16); }
                     break;
                 case "flash": FlashPlayState(false); break;
+                case "shot": Snap(this, Path.Combine(Path.GetDirectoryName(outFile)!, $"{Path.GetFileNameWithoutExtension(outFile)}-{arg}.png")); break; // a picture mid-script
                 case "desktop": // tray icon added and removed at once, other apps' sound, the track card
                     {
                         using var tray = new TrayIcon("Pylon test");
@@ -3598,6 +3831,22 @@ public partial class MainWindow : Window
                         break;
                     }
                 case "remoteopen": OpenOtherPlayer(); break;
+                case "import": ImportSpotify(arg); break; // a Spotify link imported like the user does it
+                case "radio": StartRadio(); break;
+                case "like": LikeSong(); break;
+                case "dislike": DislikeSong(); break;
+                case "queue": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"queue {_queue.Count} at {_index} radio={_radio != null}: {string.Join(" | ", _queue.Skip(Math.Max(0, _index - 1)).Take(8).Select(i => Library.TitleOf(i)))}{Environment.NewLine}"); break;
+                case "nexttiming": // how long Next() takes to sound when the next item is a web one (lookahead should make it quick)
+                    {
+                        SwitchTiming = "";
+                        var t0 = Stopwatch.StartNew();
+                        Next();
+                        while (t0.ElapsedMilliseconds < 30_000 && SwitchTiming.Length == 0) await Task.Delay(20); // OnPlaying of the new item
+                        var meta = Library.Data.Meta.GetValueOrDefault(CurrentPath ?? "");
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"next: playing after {t0.ElapsedMilliseconds} ms: {meta?.Artist} - {meta?.Title} yt={meta?.YouTubeId} isrc={meta?.Isrc} art={(meta?.Art != null)}{Environment.NewLine}");
+                        break;
+                    }
+                case "playlists": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", Library.Data.Playlists.Select(pl => $"{pl.Name}: {pl.Items.Count} items, thumb={(pl.Thumb != null && File.Exists(pl.Thumb))}, source={pl.Source != null}, art={pl.Items.Count(i => Library.Data.Meta.GetValueOrDefault(i)?.Art != null)}, isrc={pl.Items.Count(i => Library.Data.Meta.GetValueOrDefault(i)?.Isrc != null)}")) + Environment.NewLine); break;
                 case "proxytest": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), (await YtDlp.TestProxyAsync()).Replace('\n', '|') + Environment.NewLine); break;
                 case "seekto": SeekTo(long.Parse(arg)); break; // a user seek (Watch Together sends it to everyone)
                 case "remoteany": RemoteView.DebugAnySession = true; WatchOtherPlayers(); break; // a paused session shows too
@@ -3608,7 +3857,7 @@ public partial class MainWindow : Window
                     {
                         var list = await SpotifyImport.ReadAsync(arg);
                         var items = list is { } l ? SpotifyImport.Resolve(l.Tracks) : [];
-                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"spotify '{list?.Name}' {items.Count}: {string.Join(" | ", items.Take(3).Select(i => Library.TitleOf(i) + " <- " + i))} id={Library.Data.Meta.GetValueOrDefault(items.FirstOrDefault() ?? "")?.SpotifyId}{Environment.NewLine}");
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"spotify '{list?.Name}' partial={list?.Partial} cover={list?.Cover != null} isrc={list?.Tracks.Count(t => t.Isrc != null)} art={list?.Tracks.Count(t => t.Art != null)} {items.Count}: {string.Join(" | ", items.Take(3).Select(i => Library.TitleOf(i) + " <- " + i))} id={Library.Data.Meta.GetValueOrDefault(items.FirstOrDefault() ?? "")?.SpotifyId}{Environment.NewLine}");
                         break;
                     }
                 case "sessions":

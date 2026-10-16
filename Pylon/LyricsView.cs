@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace Pylon;
@@ -38,9 +39,12 @@ public class LyricsView : Grid
     {
         public required FrameworkElement El;
         public double A, B;
-        public GradientStop? E0, E1;          // fill edge; null on a letter container
+        public GradientStop? E0, EM, E1;      // fill: sung, the edge (Bloom's colored rim, Shimmer's glint), not yet; null on a letter container
         public readonly ScaleTransform Scale = new(1, 1);
         public readonly TranslateTransform Lift = new();
+        public readonly RotateTransform Turn = new();
+        public bool Glint;                    // Shimmer: the edge stop is lit up for the glint
+        public Color Dim;                     // the not-yet color, restored after a glint
         public Sp? S, Y, G, O;
         public Part[]? Letters;
         public bool Dot, Plain;
@@ -52,6 +56,7 @@ public class LyricsView : Grid
         public LyricLine? Line;             // null: interlude dots
         public required Border Root;
         public required BlurEffect Blur;
+        public ScaleTransform? Zoom;        // Focus: lines other than the current one step back
         public readonly List<Part> Parts = [];
         public ScaleTransform? DotGroup;
         public double A, B;
@@ -83,6 +88,11 @@ public class LyricsView : Grid
     double _lastFrame, _ls = 34;
     DateTime _manualUntil;
     Color _fg = Colors.White;
+    Color _tone = Colors.White, _edgeTone = Colors.Orange; // the sung color (the text's, or the cover's made readable); Bloom's rim and glows
+    FontFamily? _font;
+    BitmapSource? _cover;
+    double _mid, _edge = 0.2; // where the fill's edge stop and its fade end sit past the sung point (in word widths)
+    int _lineNo;
 
     /// <summary>Playback position in seconds (interpolated by the host between libVLC time updates).</summary>
     public Func<double>? Clock;
@@ -104,8 +114,13 @@ public class LyricsView : Grid
         _message.SetResourceReference(TextBlock.ForegroundProperty, "FgA3");
         IsVisibleChanged += (_, _) => Hook();
         // static events: a closed Spotify lyrics window must not stay subscribed (and rebuilt on every theme change)
-        Loaded += (_, _) => { Motion.AsleepChanged -= Hook; Motion.AsleepChanged += Hook; ThemeManager.Changed -= Restyle; ThemeManager.Changed += Restyle; };
-        Unloaded += (_, _) => { Motion.AsleepChanged -= Hook; ThemeManager.Changed -= Restyle; };
+        Loaded += (_, _) =>
+        {
+            Motion.AsleepChanged -= Hook; Motion.AsleepChanged += Hook;
+            ThemeManager.Changed -= Restyle; ThemeManager.Changed += Restyle;
+            Settings.Changed -= OnSetting; Settings.Changed += OnSetting;
+        };
+        Unloaded += (_, _) => { Motion.AsleepChanged -= Hook; ThemeManager.Changed -= Restyle; Settings.Changed -= OnSetting; };
         Background = Brushes.Transparent; // the wheel works over the gaps between lines too
         // No OpacityMask for the edge fade: WPF maps it over the content's bounds, which scroll, so it slid along and
         // hid most lines. Each line fades by its own on-screen position instead (see Update).
@@ -177,12 +192,12 @@ public class LyricsView : Grid
     }
 
     /// <summary>The line being sung at <paramref name="t"/> (or just sung) and the one after it, for the miniplayer.</summary>
-    public (string? Now, string? Next) LinesAt(double t)
+    public (LyricLine? Now, string? Next) LinesAt(double t)
     {
         if (_doc is not { Synced: true } doc) return (null, null);
         var lines = doc.Lines;
         var i = Array.FindLastIndex(lines, l => l.Start <= t + 0.1);
-        var now = i >= 0 && t < Math.Max(lines[i].End, lines[i].Start + 2) + 1.5 ? lines[i].Text : null;
+        var now = i >= 0 && t < Math.Max(lines[i].End, lines[i].Start + 2) + 1.5 ? lines[i] : null;
         var next = i + 1 < lines.Length ? lines[i + 1].Text : null;
         return (now, next);
     }
@@ -193,15 +208,71 @@ public class LyricsView : Grid
     public void Reblur() => _blurFor = -2;
 
     /// <summary>
-    /// Animation style: Spicy (springs, glow, blur); the word styles Jump, Wave, Rise and Neon (one transform per word, no
-    /// blur, no effect per word); Karaoke (fill only) or Line by line (whole lines light up).
+    /// Animation style: Spicy (springs, glow, blur); Focus (the current line in front, the others back and blurred); the word
+    /// styles Jump, Wave, Rise, Neon, Bloom, Shimmer, Bounce, Cascade, Aurora, Typewriter, Swing and Ripple (transforms and the
+    /// fill only, no effect per word; Neon and Bloom glow once per line); Karaoke (fill only) or Line by line.
     /// </summary>
     string _style = "Spicy";
-    bool Light => Motion.Lite || _style != "Spicy";
+    bool Light => Motion.Lite || _style is not ("Spicy" or "Focus");
     bool Slow => Motion.Lite || _style is "Karaoke" or "Line by line"; // 30 updates a second are enough for a plain fill
+    bool Lettered => _style is "Wave" or "Cascade" or "Typewriter"; // every word as letters, not only long notes
 
-    /// <summary>The style setting changed: the lines are built again.</summary>
+    /// <summary>The style, font or color setting changed: the lines are built again.</summary>
     public void Restyle() { if (_doc != null) Show(_doc); }
+
+    // every lyrics view (the pane, the remote, the Spotify lyrics window) follows the settings. "lyrics.font" itself is
+    // only the settings row: the font a style uses is "lyrics.font.<style>", which the player writes from it
+    void OnSetting(string key) { if (key is "*" or "lyrics.style" or "lyrics.color" or "lyrics.translation" || key.StartsWith("lyrics.font.")) Restyle(); }
+
+    /// <summary>The song's cover: with "From the cover" the sung words take its color.</summary>
+    public void SetCover(BitmapSource? cover)
+    {
+        _cover = cover;
+        if (_doc != null && Settings.Str("lyrics.color") == "From the cover") Show(_doc);
+    }
+
+    /// <summary>The font chosen for this style (each style keeps its own); null: the app's.</summary>
+    static FontFamily? FontOf(string style) =>
+        Settings.Str("lyrics.font." + style) is { Length: > 0 } f && f != "Default" ? new FontFamily(f) : null;
+
+    /// <summary>
+    /// A color with its lightness moved until it stands out from the background by 7:1 (dark backgrounds get a light tone,
+    /// light ones a dark tone), so a dark or pale cover still gives readable words.
+    /// </summary>
+    public static Color Readable(Color c, bool darkBackground)
+    {
+        var bg = darkBackground ? 0.012 : 0.9; // the luminance of Pylon's dark / light backgrounds
+        var (h, s, l) = Hsl(c);
+        for (var k = 0; k < 60; k++)
+        {
+            var x = FromHsl(h, s, l);
+            var y = Luminance(x);
+            if ((Math.Max(y, bg) + 0.05) / (Math.Min(y, bg) + 0.05) >= 7) return x;
+            l = Math.Clamp(l + (darkBackground ? 0.02 : -0.02), 0, 1);
+        }
+        return darkBackground ? Colors.White : Colors.Black;
+    }
+
+    static double Luminance(Color c)
+    {
+        static double Lin(byte v) { var x = v / 255.0; return x <= 0.03928 ? x / 12.92 : Math.Pow((x + 0.055) / 1.055, 2.4); }
+        return 0.2126 * Lin(c.R) + 0.7152 * Lin(c.G) + 0.0722 * Lin(c.B);
+    }
+
+    static (double H, double S, double L) Hsl(Color c)
+    {
+        double r = c.R / 255.0, g = c.G / 255.0, b = c.B / 255.0, max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), l = (max + min) / 2, d = max - min;
+        if (d == 0) return (0, 0, l);
+        var h = max == r ? (g - b) / d % 6 : max == g ? (b - r) / d + 2 : (r - g) / d + 4;
+        return ((h * 60 + 360) % 360, d / (1 - Math.Abs(2 * l - 1)), l);
+    }
+
+    static Color FromHsl(double h, double s, double l)
+    {
+        double c = (1 - Math.Abs(2 * l - 1)) * s, x = c * (1 - Math.Abs(h / 60 % 2 - 1)), m = l - c / 2;
+        var (r, g, b) = h < 60 ? (c, x, 0.0) : h < 120 ? (x, c, 0.0) : h < 180 ? (0.0, c, x) : h < 240 ? (0.0, x, c) : h < 300 ? (x, 0.0, c) : (c, 0.0, x);
+        return Color.FromRgb((byte)Math.Round((r + m) * 255), (byte)Math.Round((g + m) * 255), (byte)Math.Round((b + m) * 255));
+    }
 
     static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
@@ -226,6 +297,17 @@ public class LyricsView : Grid
         _stack.Children.Clear();
         _message.Visibility = Visibility.Collapsed;
         _fg = TryFindResource("FgA0") is SolidColorBrush b ? b.Color : Colors.White;
+        // the sung color: the text's own, or the cover's main tone made readable; Bloom's rim and the glows: the cover's
+        // other tone (its main one when the words keep the text color), else the accent
+        var accent = TryFindResource("Accent") is SolidColorBrush ac ? ac.Color : Colors.Orange;
+        var (main, other) = _cover != null ? SceneView.Palette(_cover, accent) : (accent, accent);
+        var dark = Luminance(_fg) > 0.5;
+        var fromCover = Settings.Str("lyrics.color") == "From the cover";
+        _tone = fromCover ? Readable(main, dark) : _fg;
+        _edgeTone = Readable(fromCover ? other : main, dark);
+        _font = FontOf(_style);
+        (_mid, _edge) = _style switch { "Bloom" => (0.14, 0.34), "Focus" => (0.0, 0.6), _ => (0.0, 0.2) };
+        _lineNo = 0;
         _ls = FontFor(ActualWidth > 0 ? ActualWidth : 600);
 
         _stack.Children.Add(new Border { Height = 40 });
@@ -280,6 +362,12 @@ public class LyricsView : Grid
             HorizontalAlignment = opposite ? HorizontalAlignment.Right : HorizontalAlignment.Left,
         };
         var lv = new LineView { Root = root, Blur = blur };
+        if (_style == "Focus" && _doc?.Synced == true)
+        {
+            lv.Zoom = new ScaleTransform(0.9, 0.9);
+            root.RenderTransformOrigin = new Point(opposite ? 1 : 0, 0.5);
+            root.RenderTransform = lv.Zoom;
+        }
         if (_doc?.Synced == true)
         {
             root.Cursor = Cursors.Hand;
@@ -296,6 +384,7 @@ public class LyricsView : Grid
         var align = line.Opposite ? HorizontalAlignment.Right : HorizontalAlignment.Left;
         var panel = new StackPanel { HorizontalAlignment = align };
         var lv = Shell(panel, line.Opposite, () => Seek?.Invoke(line.Start));
+        _lineNo++;
         lv.Line = line;
         lv.A = a;
         lv.B = z;
@@ -324,7 +413,7 @@ public class LyricsView : Grid
         if (line.Translation != null && Settings.Bool("lyrics.translation"))
             panel.Children.Add(new TextBlock
             {
-                Text = line.Translation, FontSize = _ls * 0.5, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap,
+                Text = line.Translation, FontSize = _ls * 0.5, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, FontFamily = _font ?? System.Windows.Documents.TextElement.GetFontFamily(this),
                 Foreground = new SolidColorBrush(WithAlpha(0.6)), Margin = new Thickness(0, _ls * 0.08, 0, 0),
                 TextAlignment = line.Opposite ? TextAlignment.Right : TextAlignment.Left,
             });
@@ -334,31 +423,34 @@ public class LyricsView : Grid
     WrapPanel Words(Syllable[] words, double size, FontWeight weight, double ga, double ge, HorizontalAlignment align, LineView lv)
     {
         var wrap = new WrapPanel { HorizontalAlignment = align };
-        foreach (var s in words)
+        for (var i = 0; i < words.Length; i++)
         {
+            var s = words[i];
             var tail = s.Joined ? "" : " ";
             Part w;
             var isLong = s.End - s.Start >= LetterMin;
-            if ((isLong || _style == "Wave") && s.Text.Length > 0)
+            // Aurora: the sung color drifts along the line, word by word, and a little from line to line
+            Color? hue = _style == "Aurora" ? Shift(_edgeTone, (22 * i + 14 * _lineNo) % 90 - 45) : null; // within 45° of the cover's tone
+            if ((isLong || Lettered) && s.Text.Length > 0)
             {
                 // long syllable (or any word in Wave): the letters share its time, a long one ending a little early
                 var row = new StackPanel { Orientation = Orientation.Horizontal };
                 double b = isLong ? s.End - LetterEarly : s.End, step = (b - s.Start) / s.Text.Length;
                 var letters = s.Text.Select((ch, k) =>
                 {
-                    var l = Text(ch.ToString(), size, weight, ga, ge);
+                    var l = Text(ch.ToString(), size, weight, ga, ge, hue);
                     l.A = s.Start + k * step;
                     l.B = s.Start + (k + 1) * step;
                     row.Children.Add(l.El);
                     return l;
                 }).ToArray();
-                if (tail.Length > 0) row.Children.Add(new TextBlock { Text = tail, FontSize = size, FontWeight = weight });
+                if (tail.Length > 0) row.Children.Add(new TextBlock { Text = tail, FontSize = size, FontWeight = weight, FontFamily = _font ?? System.Windows.Documents.TextElement.GetFontFamily(this) });
                 w = new Part { El = row, A = s.Start, B = b, Letters = letters };
                 Transforms(w);
             }
             else
             {
-                w = Text(s.Text + tail, size, weight, ga, ge);
+                w = Text(s.Text + tail, size, weight, ga, ge, hue);
                 w.A = s.Start;
                 w.B = s.End;
             }
@@ -368,16 +460,23 @@ public class LyricsView : Grid
         return wrap;
     }
 
-    Part Text(string text, double size, FontWeight weight, double ga, double ge)
+    /// <summary>
+    /// A word or letter: sung color left of the fill point, the edge stop (Bloom's colored rim; otherwise the sung color
+    /// itself), then the not-yet color.
+    /// </summary>
+    Part Text(string text, double size, FontWeight weight, double ga, double ge, Color? sung = null)
     {
-        var e0 = new GradientStop(WithAlpha(ga), -0.2);
+        var tone = sung ?? _tone;
+        var e0 = new GradientStop(Color.FromArgb((byte)(ga * 255), tone.R, tone.G, tone.B), -_edge);
+        var em = new GradientStop(_style == "Bloom" ? _edgeTone : e0.Color, -_edge + _mid);
         var e1 = new GradientStop(WithAlpha(ge), 0);
         var tb = new TextBlock
         {
             Text = text, FontSize = size, FontWeight = weight, LineHeight = size * 1.1818, LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
-            Foreground = new LinearGradientBrush(new GradientStopCollection { e0, e1 }, new Point(0, 0), new Point(1, 0)),
+            Foreground = new LinearGradientBrush(new GradientStopCollection { e0, em, e1 }, new Point(0, 0), new Point(1, 0)),
         };
-        var p = new Part { El = tb, E0 = e0, E1 = e1 };
+        if (_font != null) tb.FontFamily = _font;
+        var p = new Part { El = tb, E0 = e0, EM = em, E1 = e1, Dim = e1.Color };
         Transforms(p);
         return p;
     }
@@ -385,10 +484,17 @@ public class LyricsView : Grid
     static void Transforms(Part p)
     {
         p.El.RenderTransformOrigin = new Point(0.5, 0.5);
-        p.El.RenderTransform = new TransformGroup { Children = { p.Scale, p.Lift } };
+        p.El.RenderTransform = new TransformGroup { Children = { p.Scale, p.Turn, p.Lift } };
     }
 
     Color WithAlpha(double a) => Color.FromArgb((byte)(a * 255), _fg.R, _fg.G, _fg.B);
+
+    /// <summary>The same color turned around the color wheel, as readable as before.</summary>
+    Color Shift(Color c, double degrees)
+    {
+        var (h, s, l) = Hsl(c);
+        return Readable(FromHsl(((h + degrees) % 360 + 360) % 360, Math.Max(s, 0.55), l), Luminance(_fg) > 0.5);
+    }
 
     /// <summary>Three dots filling a long gap, each taking a third of it; they shrink away just before the singing resumes.</summary>
     LineView Dots(double a, double b, bool opposite)
@@ -486,7 +592,13 @@ public class LyricsView : Grid
             if (state != lv.State)
             {
                 lv.State = state;
-                Motion.Animate(lv.Root, OpacityProperty, state == 1 || lv.Hover ? 1 : state == 0 ? 0.51 : 0.497, Spring.Snappy);
+                var near = state == 1 || lv.Hover;
+                Motion.Animate(lv.Root, OpacityProperty, near ? 1 : lv.Zoom != null ? 0.32 : state == 0 ? 0.51 : 0.497, Spring.Snappy);
+                if (lv.Zoom != null) // Focus: the current line steps forward, the rest back
+                {
+                    Motion.Animate(lv.Zoom, ScaleTransform.ScaleXProperty, near ? 1 : 0.9, Spring.Smooth);
+                    Motion.Animate(lv.Zoom, ScaleTransform.ScaleYProperty, near ? 1 : 0.9, Spring.Smooth);
+                }
             }
 
             // soft fade near the top and bottom edges. The line's place is read from layout every frame (a field read):
@@ -521,7 +633,7 @@ public class LyricsView : Grid
                     Motion.Animate(line.Blur, BlurEffect.RadiusProperty, r, Spring.Smooth, done: r == 0 ? () => { if (line.Blur.Radius < 0.05) line.Root.Effect = null; } : null);
                 else if (r == 0) line.Root.Effect = null;
             }
-            if (_style == "Neon") Neon(cur >= 0 && _lines[cur].Line != null ? _lines[cur] : null);
+            if (_style is "Neon" or "Bloom") Neon(cur >= 0 && _lines[cur].Line != null ? _lines[cur] : null);
         }
 
         // follow the song: the line about to be sung (slightly early), or the interlude dots, in the middle
@@ -539,7 +651,7 @@ public class LyricsView : Grid
 
     LineView? _neon;
 
-    /// <summary>Neon: one soft accent glow on the current line's text (one effect for the line, not one per word).</summary>
+    /// <summary>Neon (and Bloom): one soft glow on the current line's text (one effect for the line, not one per word).</summary>
     void Neon(LineView? lv)
     {
         if (lv == _neon) return;
@@ -551,21 +663,21 @@ public class LyricsView : Grid
             lv.Root.Child.Effect = glow = new DropShadowEffect
             {
                 ShadowDepth = 0, BlurRadius = _ls * 0.5, Opacity = 0, RenderingBias = RenderingBias.Performance,
-                Color = TryFindResource("Accent") is SolidColorBrush a ? a.Color : Colors.Orange,
+                Color = _style == "Bloom" ? _edgeTone : TryFindResource("Accent") is SolidColorBrush a ? a.Color : Colors.Orange,
             };
-        Motion.Animate(glow, DropShadowEffect.OpacityProperty, 0.85, Spring.Smooth);
+        Motion.Animate(glow, DropShadowEffect.OpacityProperty, _style == "Bloom" ? 0.55 : 0.85, Spring.Smooth);
     }
 
     static int StateOf(double t, double a, double b) => t < a ? 0 : t >= b ? 2 : 1;
     static double Prog(double t, double a, double b) => t <= a ? 0 : t >= b ? 1 : (t - a) / (b - a);
-    static double Lit(double t, double a, double b) => t < a ? -0.2 : t >= b ? 1 : -0.2 + 1.2 * (t - a) / (b - a); // karaoke fill edge
+    double Lit(double t, double a, double b) => t < a ? -_edge : t >= b ? 1 : -_edge + (1 + _edge) * (t - a) / (b - a); // karaoke fill edge
 
     /// <summary>One frame of a word / letter / dot. Off-screen ones jump to where they belong instead of animating.</summary>
     void Paint(Part w, double t, double dt, bool active, bool visible)
     {
         int st = StateOf(t, w.A, w.B);
         double p = Prog(t, w.A, w.B), q = st == 1 ? p : st / 2.0; // rest = curve(0), sung = curve(1)
-        if (w.Plain) { Fill(w, st == 0 ? -0.2 : 1); return; }
+        if (w.Plain) { Fill(w, st == 0 ? -_edge : 1); return; }
         if (!visible) dt = 10; // settles at once
         if (w.Dot)
         {
@@ -582,7 +694,49 @@ public class LyricsView : Grid
             double? whole = null;
             switch (_style)
             {
-                case "Line by line": whole = active || st == 2 ? 1 : -0.2; break;
+                case "Line by line": whole = active || st == 2 ? 1 : -_edge; break;
+                case "Bloom": // a colored rim runs through the word, which breathes a little while it's sung
+                    var bl = Springs(w, st == 1 ? 1.045 : 1, 0, 0, null, dt, BloomK);
+                    Move(w, bl.s, 0);
+                    break;
+                case "Bounce": // the word flashes in whole, hops, stretches up and springs back
+                    var hit = st == 1 && t - w.A < 0.12;
+                    var po = Springs(w, hit ? 0.9 : 1, hit ? -0.12 : 0, hit ? 1.18 : 1, null, dt, PopK);
+                    if (Changed(ref w.Sc, po.s, 1e-3)) w.Scale.ScaleX = po.s;
+                    if (Changed(ref w.Gb, po.g, 1e-3)) w.Scale.ScaleY = po.g; // the glow cache is free: these styles have none
+                    if (Changed(ref w.Ly, po.y * _ls, 0.02)) w.Lift.Y = po.y * _ls;
+                    whole = st == 0 ? -_edge : 1;
+                    break;
+                case "Swing": // the word tips as it's sung and swings back upright
+                    var sw = Springs(w, 1, st == 1 ? -0.05 : 0, st == 1 && p < 0.35 ? -6 : 0, null, dt, SwingK);
+                    Move(w, 1, sw.y * _ls);
+                    if (Changed(ref w.Go, sw.g, 0.05)) w.Turn.Angle = sw.g;
+                    break;
+                case "Ripple": // a swell travels along the line with the singing, a word or two wide
+                    double mid = (w.A + w.B) / 2, bump = Math.Exp(-Math.Pow((t - mid) / Math.Max(0.28, (w.B - w.A) / 2), 2));
+                    Move(w, 1 + 0.09 * bump, -0.06 * bump * _ls);
+                    break;
+                case "Aurora": // each word in its own shade of the cover, lifted while it's sung
+                    var au = Springs(w, 1, st == 1 ? -0.05 : 0, 0, null, dt, BloomK);
+                    Move(w, 1, au.y * _ls);
+                    break;
+                case "Shimmer" when st == 2 && t - w.B < 0.7 && visible: // once sung, a glint passes over it
+                    var band = -0.3 + 1.6 * (t - w.B) / 0.7;
+                    if (w.Letters == null) Glint(w, band);
+                    else for (var k = 0; k < w.Letters.Length; k++) Glint(w.Letters[k], band * w.Letters.Length - k);
+                    return;
+                case "Cascade" or "Typewriter" when w.Letters is { } cl: // letters rise into place / appear one by one
+                    var type = _style == "Typewriter";
+                    foreach (var l in cl)
+                    {
+                        var up = t >= l.A;
+                        // Typewriter: on the line being sung, letters wait small and nearly invisible, then pop in
+                        var c = Springs(l, up || !type || !active ? 1 : 0.6, up || type ? 0 : 0.22, 0, up ? 1 : type && active ? 0.06 : 0.3, visible ? dt : 10, type ? TypeK : CascadeK);
+                        Move(l, c.s, c.y * _ls);
+                        if (Changed(ref l.Op, c.o, 1e-3)) l.El.Opacity = Math.Clamp(c.o, 0, 1);
+                        Fill(l, up ? 1 : -_edge);
+                    }
+                    return;
                 case "Jump": // the word hops and grows a little as it's sung, and lands with a bounce
                     var j = Springs(w, JScale(q), JLift(q), 0, null, dt, JumpK);
                     Move(w, j.s, j.y * _ls);
@@ -600,8 +754,8 @@ public class LyricsView : Grid
                         Move(ls[k], 1, st == 1 ? -0.1 * _ls * Math.Exp(-Math.Pow((k - x) / W, 2)) : 0);
                     break;
             }
-            if (w.Letters == null) Fill(w, whole ?? Lit(t, w.A, w.B));
-            else foreach (var l in w.Letters) Fill(l, whole ?? Lit(t, l.A, l.B));
+            if (w.Letters == null) { Unglint(w); Fill(w, whole ?? Lit(t, w.A, w.B)); }
+            else foreach (var l in w.Letters) { Unglint(l); Fill(l, whole ?? Lit(t, l.A, l.B)); }
             return;
         }
         var v = Springs(w, CScale(q), CLift(q), CGlow(q), null, dt, SpicyK);
@@ -644,7 +798,30 @@ public class LyricsView : Grid
 
     // springs (frequency Hz, damping ratio) for scale, lift, glow and opacity
     static readonly (double F, double D)[] SpicyK = [(0.88, 0.64), (1.45, 0.4), (1.18, 0.56), (1, 0.5)], DotK = [(0.7, 0.6), (1.25, 0.4), (1, 0.5), (1, 0.5)],
-        JumpK = [(1.3, 0.35), (1.8, 0.3), (1, 0.5), (1, 0.5)], RiseK = [(1, 0.9), (1.2, 0.8), (1, 0.5), (1.1, 0.95)];
+        JumpK = [(1.3, 0.35), (1.8, 0.3), (1, 0.5), (1, 0.5)], RiseK = [(1, 0.9), (1.2, 0.8), (1, 0.5), (1.1, 0.95)],
+        BloomK = [(1.1, 0.5), (1.3, 0.55), (1, 0.5), (1, 0.5)], PopK = [(2.2, 0.3), (1.9, 0.35), (2.2, 0.3), (1, 0.5)],
+        SwingK = [(1, 0.5), (1.4, 0.45), (1.6, 0.3), (1, 0.5)], CascadeK = [(1, 0.5), (1.6, 0.45), (1, 0.5), (1.4, 0.9)],
+        TypeK = [(2.4, 0.55), (1, 0.5), (1, 0.5), (3, 0.9)];
+
+    /// <summary>Shimmer's glint: the edge stop lights up and slides over the sung word.</summary>
+    void Glint(Part p, double at)
+    {
+        if (p.E0 == null) return;
+        if (!p.Glint) { p.Glint = true; p.EM!.Color = WithAlpha(1); p.E1!.Color = p.E0.Color; }
+        p.Gp = double.NaN; // the plain fill sets its offsets again afterwards
+        p.E0.Offset = at - 0.25;
+        p.EM!.Offset = at;
+        p.E1!.Offset = at + 0.25;
+    }
+
+    static void Unglint(Part p)
+    {
+        if (!p.Glint) return;
+        p.Glint = false;
+        p.EM!.Color = p.E0!.Color;
+        p.E1!.Color = p.Dim;
+        p.Gp = double.NaN;
+    }
 
     static (double s, double y, double g, double o) Springs(Part p, double s, double y, double g, double? o, double dt, (double F, double D)[] k)
     {
@@ -673,12 +850,13 @@ public class LyricsView : Grid
         if (Changed(ref p.Ly, lift, 0.02)) p.Lift.Y = lift;
     }
 
-    /// <summary>Sung color left of <paramref name="gp"/>, the dim one from 20 % further on (gp −0.2 … 1 across the word).</summary>
-    static void Fill(Part p, double gp)
+    /// <summary>Sung color left of <paramref name="gp"/>, the dim one from the edge width further on (gp −edge … 1 across the word).</summary>
+    void Fill(Part p, double gp)
     {
         if (p.E0 == null || !Changed(ref p.Gp, gp, 0.0005)) return;
         p.E0.Offset = gp;
-        p.E1!.Offset = gp + 0.2;
+        p.EM!.Offset = gp + _mid;
+        p.E1!.Offset = gp + _edge;
     }
 
     void Glow(Part p, double radius, double opacity)

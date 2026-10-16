@@ -16,6 +16,8 @@ public class Playlist
     public string Name { get; set; } = "";
     public string? Thumb { get; set; } // optional cover image (file path)
     public List<string> Items { get; set; } = [];
+    public string? Source { get; set; }    // the Spotify link it was imported from: kept in step with it; "liked": the radio's likes
+    public DateTime? LastSync { get; set; }
 }
 
 public class SavedStream
@@ -45,6 +47,9 @@ public class TrackMeta
     public string? Genre { get; set; }
     public string? Art { get; set; }
     public string? SpotifyId { get; set; } // from a Spotify import: lyrics by exact id
+    public string? Isrc { get; set; }      // the recording's code: finds the official release on YouTube Music
+    public long DurationMs { get; set; }   // Spotify's length: a YouTube hit has to match it
+    public string? YouTubeId { get; set; } // the video found for it once (YouTube Music), searched no more
 }
 
 /// <summary>Everything the library sidebar shows, persisted as JSON in %APPDATA%\Pylon.</summary>
@@ -59,6 +64,7 @@ public class LibraryData
     public List<SavedStream> Streams { get; set; } = [];
     public List<SavedStream> Podcasts { get; set; } = []; // RSS feeds
     public List<Playlist> Playlists { get; set; } = [];
+    public HashSet<string> Disliked { get; set; } = [];   // "artist|title" (letters only): the radio never offers these
     public Dictionary<string, HistoryEntry> History { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, TrackMeta> Meta { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> Subtitles { get; set; } = new(StringComparer.OrdinalIgnoreCase); // video -> extra subtitle files
@@ -369,6 +375,9 @@ public static class Library
 
     static readonly ConcurrentDictionary<string, ImageSource?> Thumbs = new(StringComparer.OrdinalIgnoreCase);
     static readonly SemaphoreSlim ThumbGate = new(2);
+
+    /// <summary>A cover found later (Deezer, YouTube): the list asks for it again instead of keeping "none".</summary>
+    public static void ForgetThumb(string path) => Thumbs.TryRemove(path, out _);
 
     /// <summary>Song artwork from tags, otherwise the Windows Explorer thumbnail. Null when there is none.</summary>
     public static async Task<ImageSource?> ThumbnailAsync(string path)

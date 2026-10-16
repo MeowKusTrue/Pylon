@@ -2,6 +2,8 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace Pylon;
@@ -215,9 +217,13 @@ public static class Settings
         Add($"--audio-language={Lang("audio.lang")}");
         if (Bool("audio.spdif")) Add("--spdif");
         Add($"--force-dolby-surround={Str("audio.dolby") switch { "On" => 1, "Off" => 2, _ => 0 }}");
-        // Sample rates are converted by Windows: the output is DirectSound (see AudioChain.Output). libVLC's own converters
-        // were both wrong here: "ugly" (this build has no soxr) sounded like a bad radio, and speex threw libVLC's drift
-        // correction into a spiral after a seek (buffers dropped every 0.2 s, a core busy). libVLC only nudges the rate now.
+        // DirectSound takes the file's own rate (Windows converts it), so libVLC needs no resampler, and it must have none:
+        // after a seek DirectSound reports its delay 40 ms off, and libVLC "corrected" that by resampling for ~9 s with
+        // "ugly" (this build has no soxr), which sounded like a bad radio: SNR 2-7 dB against 68 normally, measured on a
+        // VB-Cable recording. speex instead threw the correction into a spiral (buffers dropped every 0.2 s, a core busy).
+        // libVLC's WASAPI (mmdevice, shared only in libVLC 3) needs the device's rate: 44.1 kHz on a 48 kHz device measured
+        // 4-18 dB with ugly and a drop-out spiral with speex, so it isn't offered.
+        Add("--audio-resampler=none");
         Add($"--role={Str("audio.role").ToLowerInvariant()}");
 
         // Subtitles
@@ -289,6 +295,51 @@ public static class Settings
     static Opt Col(string key, string label, string def) => new() { Kind = OptKind.Color, Key = key, Label = label, Default = def, Engine = true };
     static Opt Act(string label, string button, Action<Window> run, string? info = null) => new() { Kind = OptKind.Action, Label = label, ButtonText = button, Run = run, Info = info };
     static Opt Off(this Opt o, string reason = NotYet) { o.Unavailable = reason; return o; }
+
+    /// <summary>
+    /// A sign-in row: "Signed in (as name)" or "Not signed in", and one button that does the other thing — not a Sign in
+    /// and a Sign out button side by side.
+    /// </summary>
+    static Opt Account(string label, string info, Func<bool> signedIn, Func<Window, Task<bool>> signIn, Action signOut, Func<string>? who = null) => new()
+    {
+        Kind = OptKind.Custom, Label = label, Info = info,
+        Build = () =>
+        {
+            Brush R(string key) => (Brush)Application.Current.FindResource(key);
+            var status = new TextBlock { FontSize = 12, Foreground = R("FgA3"), Margin = new Thickness(0, 2, 0, 0) };
+            var button = new Button { Style = (Style)Application.Current.FindResource("SecondaryButton"), MinWidth = 100, Height = 32, Background = R("BgRaised") };
+            void Show()
+            {
+                var on = signedIn();
+                var name = on ? who?.Invoke() : null;
+                status.Text = on ? (name is { Length: > 0 } ? L.F("Signed in as {0}", name) : L.T("Signed in")) : L.T("Not signed in");
+                button.Content = L.T(on ? "Sign out" : "Sign in");
+            }
+            button.Click += async (_, _) =>
+            {
+                if (signedIn()) signOut();
+                else
+                {
+                    button.IsEnabled = false;
+                    try { await signIn(Window.GetWindow(button)); }
+                    finally { button.IsEnabled = true; }
+                }
+                Show();
+            };
+            Show();
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children =
+            {
+                new TextBlock { Text = L.T(label), FontSize = 14, Foreground = R("FgA2"), ToolTip = L.T(info) },
+                status,
+            } };
+            var row = new DockPanel { MinHeight = 34 };
+            DockPanel.SetDock(button, Dock.Right);
+            button.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(button);
+            row.Children.Add(text);
+            return row;
+        },
+    };
     static Opt Eng(this Opt o) { o.Engine = true; return o; }
     static Section Sec(string heading, params Opt[] opts) => new(heading, [.. opts]);
 
@@ -394,8 +445,11 @@ public static class Settings
             Sec("",
                 T("lyrics.online", "Find lyrics online", true, "Spicy Lyrics (word by word) and LRCLIB, when a track has no .ttml or .lrc file next to it."),
                 T("lyrics.translation", "Show translations", true, "When the lyrics carry them (Apple Music TTML, bilingual LRC)."),
-                C("lyrics.style", "Lyrics animation", "Spicy", ["Spicy", "Jump", "Wave", "Rise", "Neon", "Karaoke", "Line by line"],
-                    "Spicy: words swell and glow, letter by letter on long notes. Jump: each word hops as it's sung. Wave: a wave runs through the letters. Rise: words float up out of the dark. Neon: a fill and a soft glow on the current line. Karaoke: a plain fill, lighter. Line by line: whole lines light up, the lightest.")),
+                C("lyrics.style", "Lyrics animation", "Spicy", ["Spicy", "Bloom", "Shimmer", "Bounce", "Cascade", "Focus", "Aurora", "Typewriter", "Swing", "Ripple", "Jump", "Wave", "Rise", "Neon", "Karaoke", "Line by line"],
+                    "Spicy: words swell and glow, letter by letter on long notes. Bloom: a colored rim runs through each word. Shimmer: a glint passes over every sung word. Bounce: words flash in and spring. Cascade: letters rise into place. Focus: the current line in front, the others step back. Aurora: each word in its own shade of the cover. Typewriter: letters appear one by one. Swing: words tip and swing back. Ripple: a swell travels along the line. Jump, Wave, Rise, Neon: the earlier styles. Karaoke and Line by line: the lightest."),
+                new Opt { Kind = OptKind.Choice, Key = "lyrics.font", Label = "Font", Default = "Default", DynamicOptions = Fonts,
+                          Info = "Any font installed in Windows. Each animation remembers its own." },
+                Seg("lyrics.color", "Sung words", "Text color", "Text color", "From the cover")),
         ],
         [
             Sec("Your Own Keys (optional)",
@@ -409,15 +463,16 @@ public static class Settings
                 T("remote.auto", "Show other players when Pylon is idle", true, "While Pylon plays nothing: the song another app plays (Spotify, Yandex Music, a browser), its cover and lyrics, with its controls."),
                 Act("Remote for other players", "Open", w => OpenRemote?.Invoke(w), "Also in ⋯ → Control Another Player.")),
             Sec("Spotify",
-                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifyid", Label = "Spotify client ID", ButtonText = "developer.spotify.com",
-                          Info = "Not needed for lyrics: Pylon finds a song's Spotify id through ListenBrainz. A free app from developer.spotify.com helps with songs it misses, and shows Spotify's queue in the remote (add http://127.0.0.1:47851/callback as its redirect URI; another port below if that one is taken)." },
+                Account("Spotify account", "For whole playlists with their covers, and the queue in the remote. Sign in on Spotify's website; Pylon never sees your password.",
+                    () => SpotifyApi.SignedIn, async w =>
+                    {
+                        if (await SpotifyApi.SignInAsync()) return true;
+                        MessageBox.Show(w, SpotifyApi.LastError ?? L.T("Spotify sign-in didn't finish. Try again from Pylon."), "Spotify");
+                        return false;
+                    }, SpotifyApi.SignOut),
+                new Opt { Kind = OptKind.Text, Key = "lyrics.spotifyid", Label = "Your own Spotify app (optional)", ButtonText = "Client ID",
+                          Info = "Pylon has its own Spotify app. Only if you want yours: its Client ID from developer.spotify.com, with http://127.0.0.1:47851/callback as a redirect URI (another port below if that one is taken)." },
                 new Opt { Kind = OptKind.Text, Key = "lyrics.spotifysecret", Label = "Spotify client secret" },
-                Act("Spotify account", "Sign in", async w =>
-                {
-                    if (SpotifyApi.ClientId.Length == 0) { MessageBox.Show(w, L.T("Put your Spotify app's Client ID above first."), "Spotify"); return; }
-                    MessageBox.Show(w, await SpotifyApi.SignInAsync() ? L.T("Pylon is connected to Spotify.") : SpotifyApi.LastError ?? L.T("Spotify sign-in didn't finish. Try again from Pylon."), "Spotify");
-                }, "For the queue in the remote. Sign in through Spotify's website; Pylon never sees your password."),
-                Act("Sign out of Spotify", "Sign out", _ => SpotifyApi.SignOut()),
                 N("spotify.port", "Spotify sign-in port", 47851, 1024, 65535)),
             Sec("Watch Together",
                 Txt("party.name", "Your name in Watch Together", "", Environment.UserName),
@@ -428,13 +483,15 @@ public static class Settings
                                  : T("privacy.discord", "Show what's playing in Discord", false).Off(),
                 LastFm.Possible ? T("lastfm.scrobble", "Scrobble to Last.fm", false, "Songs you listen to (half of them, or 4 minutes) go to your Last.fm profile.")
                                 : T("lastfm.scrobble", "Scrobble to Last.fm", false).Off(),
-                LastFm.Possible ? Act("Last.fm account", "Connect", async w =>
-                {
-                    MessageBox.Show(w, L.T("Last.fm opens in your browser: allow Pylon there, then come back."), "Last.fm");
-                    MessageBox.Show(w, await LastFm.ConnectAsync() ? L.F("Connected as {0}.", Str("lastfm.user")) : L.T("Last.fm didn't confirm. Try again."), "Last.fm");
-                }, "Sign in through the Last.fm website; Pylon never sees your password.")
-                                : Act("Last.fm account", "Connect", _ => { }).Off(),
-                LastFm.Possible ? Act("Sign out of Last.fm", "Sign out", _ => LastFm.Disconnect()) : Act("Sign out of Last.fm", "Sign out", _ => { }).Off()),
+                LastFm.Possible ? Account("Last.fm account", "Sign in through the Last.fm website; Pylon never sees your password.",
+                    () => LastFm.SignedIn, async w =>
+                    {
+                        MessageBox.Show(w, L.T("Last.fm opens in your browser: allow Pylon there, then come back."), "Last.fm");
+                        if (await LastFm.ConnectAsync()) return true;
+                        MessageBox.Show(w, L.T("Last.fm didn't confirm. Try again."), "Last.fm");
+                        return false;
+                    }, LastFm.Disconnect, () => Str("lastfm.user"))
+                                : Act("Last.fm account", "Connect", _ => { }).Off()),
             Sec("Control from Another Device",
                 T("controls.web", "Web remote control", false, "Control playback from a browser on your network (http://this-pc:port).", engine: true),
                 N("controls.webport", "Port", 8080, 1024, 65535, engine: true),

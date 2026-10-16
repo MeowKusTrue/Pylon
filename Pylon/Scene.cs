@@ -140,7 +140,7 @@ public class SceneView : FrameworkElement
     }
 
     /// <summary>The cover at 16×16: the most saturated pixel, and the most saturated one that's a different hue.</summary>
-    static (Color, Color) Palette(BitmapSource cover, Color fallback)
+    internal static (Color, Color) Palette(BitmapSource cover, Color fallback)
     {
         try
         {

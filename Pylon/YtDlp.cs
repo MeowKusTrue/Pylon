@@ -40,7 +40,7 @@ public static class YtDlp
             .Select(e => (e.Url!, e.Title))];
     }
 
-    static bool IsPlaylistPage(string url) =>
+    public static bool IsPlaylistPage(string url) =>
         url.Contains("list=") && !url.Contains("watch?v=") || url.Contains("/playlist") || url.Contains("/sets/")
         || url.Contains("youtube.com/@") || url.Contains("/channel/") || url.Contains("/videos");
 
@@ -76,6 +76,55 @@ public static class YtDlp
             headers.ValueKind == JsonValueKind.Object ? Str(headers, "Referer") : null,
             d.TryGetProperty("is_live", out var live) && live.ValueKind == JsonValueKind.True,
             !audioOnly && (audio != null || Str(d, "vcodec") is not (null or "none")));
+    }
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (Stream S, DateTime Until)> Ready = new();
+    static readonly Dictionary<string, Task<Stream?>> Pending = [];
+
+    /// <summary>
+    /// What a queue item plays from: a stream resolved earlier if it's still good (looked up ahead, see the player's
+    /// lookahead), else resolved now. A song from a Spotify import is the official release on YouTube Music (found by ISRC
+    /// and checked by artist and length, remembered for next time), not the first video a search turns up. Playback and
+    /// the lookahead asking for the same item share one yt-dlp run. Called on the UI thread (the library index isn't
+    /// thread-safe).
+    /// </summary>
+    public static Task<Stream?> ResolveItemAsync(string src, int maxHeight, bool audioOnly)
+    {
+        if (Ready.TryGetValue(src, out var r) && r.Until > DateTime.UtcNow) return Task.FromResult<Stream?>(r.S);
+        if (Pending.TryGetValue(src, out var running)) return running;
+        var task = Run();
+        Pending[src] = task;
+        return task;
+
+        async Task<Stream?> Run()
+        {
+            try
+            {
+                var url = src;
+                TrackMeta? meta = null;
+                if (src.StartsWith("ytsearch://") && Library.Data.Meta.GetValueOrDefault(src) is { Title: { } title, Artist: { } artist } m)
+                {
+                    meta = m;
+                    var id = m.YouTubeId ?? await YtMusic.FindAsync(title, artist, m.DurationMs / 1000.0, m.Isrc);
+                    if (id != null && m.YouTubeId != id) { m.YouTubeId = id; Library.Touch(); }
+                    if (id != null) url = "https://music.youtube.com/watch?v=" + id;
+                }
+                var s = await ResolveAsync(url, maxHeight, audioOnly);
+                if (s == null && meta?.YouTubeId != null) { meta.YouTubeId = null; s = await ResolveAsync(src, maxHeight, audioOnly); } // the video went away: search again
+                if (s is { Live: false }) Ready[src] = (s, DateTime.UtcNow + Lifetime(s.Url));
+                return s;
+            }
+            finally { Pending.Remove(src); }
+        }
+    }
+
+    /// <summary>A resolved address works until its "expire" (a few hours on YouTube); 10 minutes of margin, else an hour.</summary>
+    static TimeSpan Lifetime(string url)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(url, @"[?&]expire=(\d+)");
+        if (!m.Success || !long.TryParse(m.Groups[1].Value, out var unix)) return TimeSpan.FromHours(1);
+        var left = DateTimeOffset.FromUnixTimeSeconds(unix) - DateTimeOffset.UtcNow - TimeSpan.FromMinutes(10);
+        return left > TimeSpan.Zero ? left : TimeSpan.Zero;
     }
 
     /// <summary>yt-dlp's own words for the last failure ("Sign in to confirm you're not a bot", "Video unavailable"…).</summary>
@@ -260,6 +309,135 @@ public static class YtDlp
     /// <summary>The proxy address as shown: the password hidden.</summary>
     static string Redact(string proxy) => Uri.TryCreate(proxy, UriKind.Absolute, out var u) && u.UserInfo.Contains(':')
         ? proxy.Replace(u.UserInfo, u.UserInfo[..u.UserInfo.IndexOf(':')] + ":•••") : proxy;
+}
+
+/// <summary>
+/// YouTube Music's own search (the InnerTube API its website uses; no key), "Songs" only: official releases from the
+/// artists' Topic channels, not clips, covers or lyric videos. One request, about half a second, with title, artists,
+/// album and length — yt-dlp's search took three and gave no length to check.
+/// </summary>
+public static class YtMusic
+{
+    public record Hit(string VideoId, string Title, string Artist, string? Album, double Seconds, string? Art = null);
+
+    static HttpClient? _http;
+    static string? _proxyOf;
+
+    static HttpClient Client()
+    {
+        var proxy = YtDlp.Proxy;
+        if (_http != null && _proxyOf == proxy) return _http;
+        _http = new HttpClient(new SocketsHttpHandler { Proxy = proxy == null ? null : YtDlp.WebProxy(proxy), UseProxy = proxy != null }) { Timeout = TimeSpan.FromSeconds(10) };
+        _proxyOf = proxy;
+        return _http;
+    }
+
+    static readonly object Context = new { client = new { clientName = "WEB_REMIX", clientVersion = "1.20250101.01.00", hl = "en", gl = "US" } };
+
+    static async Task<JsonDocument?> PostAsync(string endpoint, object body)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"https://music.youtube.com/youtubei/v1/{endpoint}?prettyPrint=false")
+            { Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json") };
+        req.Headers.TryAddWithoutValidation("Origin", "https://music.youtube.com");
+        req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36");
+        using var res = await Client().SendAsync(req);
+        return res.IsSuccessStatusCode ? JsonDocument.Parse(await res.Content.ReadAsStringAsync()) : null;
+    }
+
+    public static async Task<List<Hit>> SearchSongsAsync(string query)
+    {
+        using var doc = await PostAsync("search", new { context = Context, query, @params = "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D" }); // the "Songs" filter
+        var hits = new List<Hit>();
+        if (doc == null) return hits;
+        foreach (var r in Find(doc.RootElement, "musicResponsiveListItemRenderer"))
+        {
+            var id = r.TryGetProperty("playlistItemData", out var pd) && pd.TryGetProperty("videoId", out var v) ? v.GetString() : null;
+            if (id == null || !r.TryGetProperty("flexColumns", out var cols) || cols.GetArrayLength() < 2) continue;
+            var title = Runs(cols[0]).FirstOrDefault().Text ?? "";
+            var runs = Runs(cols[1]).ToList();
+            var artists = runs.Where(x => x.Page == "MUSIC_PAGE_TYPE_ARTIST").Select(x => x.Text).ToList();
+            var duration = runs.LastOrDefault(x => System.Text.RegularExpressions.Regex.IsMatch(x.Text ?? "", @"^\d+(:\d{2}){1,2}$")).Text;
+            hits.Add(new Hit(id, title, artists.Count > 0 ? string.Join(", ", artists) : runs.FirstOrDefault().Text ?? "",
+                runs.FirstOrDefault(x => x.Page == "MUSIC_PAGE_TYPE_ALBUM").Text,
+                duration == null ? 0 : duration.Split(':').Aggregate(0.0, (acc, part) => acc * 60 + int.Parse(part))));
+        }
+        return hits;
+    }
+
+    /// <summary>
+    /// YouTube Music's radio for a song (its "Start radio"): about 50 similar songs, the song itself first, and a token
+    /// that brings 50 more. <paramref name="more"/>: that token, for the next page.
+    /// </summary>
+    public static async Task<(List<Hit> Songs, string? More)> RadioAsync(string? videoId, string? more)
+    {
+        try
+        {
+            using var doc = await PostAsync("next", more != null ? new { context = Context, continuation = more }
+                : new { context = Context, videoId, playlistId = "RDAMVM" + videoId, isAudioOnly = true });
+            if (doc == null) return ([], null);
+            var songs = new List<Hit>();
+            foreach (var r in Find(doc.RootElement, "playlistPanelVideoRenderer"))
+            {
+                if (!r.TryGetProperty("videoId", out var id) || Text(r, "title") is not { Length: > 0 } title) continue;
+                // "Artist • Album • 2007"
+                var by = (Text(r, "longBylineText") ?? Text(r, "shortBylineText") ?? "").Split(" • ");
+                var length = Text(r, "lengthText");
+                var art = r.TryGetProperty("thumbnail", out var th) && th.TryGetProperty("thumbnails", out var ts) && ts.GetArrayLength() > 0
+                    && ts[ts.GetArrayLength() - 1].TryGetProperty("url", out var u) ? u.GetString() : null;
+                songs.Add(new Hit(id.GetString()!, title, by[0], by.Length > 2 ? by[1] : null,
+                    length == null ? 0 : length.Split(':').Aggregate(0.0, (acc, part) => acc * 60 + (int.TryParse(part, out var n) ? n : 0)),
+                    art == null ? null : System.Text.RegularExpressions.Regex.Replace(art, @"=w\d+-h\d+", "=w300-h300"))); // album covers come as 60 px
+            }
+            return (songs, Find(doc.RootElement, "nextRadioContinuationData").Select(c => c.TryGetProperty("continuation", out var t) ? t.GetString() : null).FirstOrDefault());
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException) { return ([], null); }
+
+        static string? Text(JsonElement e, string name) => e.TryGetProperty(name, out var t) && t.TryGetProperty("runs", out var runs)
+            ? string.Concat(runs.EnumerateArray().Select(x => x.TryGetProperty("text", out var tx) ? tx.GetString() : "")) : null;
+    }
+
+    /// <summary>Every <paramref name="key"/> object in the answer, wherever it sits (YouTube moves things around).</summary>
+    static IEnumerable<JsonElement> Find(JsonElement e, string key)
+    {
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            if (e.TryGetProperty(key, out var row)) { yield return row; yield break; }
+            foreach (var p in e.EnumerateObject()) foreach (var r in Find(p.Value, key)) yield return r;
+        }
+        else if (e.ValueKind == JsonValueKind.Array)
+            foreach (var x in e.EnumerateArray()) foreach (var r in Find(x, key)) yield return r;
+    }
+
+    static IEnumerable<(string? Text, string? Page)> Runs(JsonElement column)
+    {
+        if (!column.TryGetProperty("musicResponsiveListItemFlexColumnRenderer", out var c) || !c.TryGetProperty("text", out var t) || !t.TryGetProperty("runs", out var runs)) yield break;
+        foreach (var run in runs.EnumerateArray())
+        {
+            string? page = null;
+            if (run.TryGetProperty("navigationEndpoint", out var nav) && nav.TryGetProperty("browseEndpoint", out var be)
+                && be.TryGetProperty("browseEndpointContextSupportedConfigs", out var cfg) && cfg.TryGetProperty("browseEndpointContextMusicConfig", out var mc)
+                && mc.TryGetProperty("pageType", out var pt)) page = pt.GetString();
+            yield return (run.TryGetProperty("text", out var tx) ? tx.GetString() : null, page);
+        }
+    }
+
+    /// <summary>
+    /// The video of a song: by ISRC first (the very recording), then by artist and title; a hit counts only when the
+    /// artist matches and the length is within 4 s of Spotify's. Null when nothing fits (yt-dlp's plain search then).
+    /// </summary>
+    public static async Task<string?> FindAsync(string title, string artist, double seconds, string? isrc)
+    {
+        static string N(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
+        var main = artist.Split(',')[0].Trim();
+        bool Fits(Hit h) => Covers.Same(h.Artist, main) && (seconds <= 0 || h.Seconds <= 0 || Math.Abs(h.Seconds - seconds) <= 4);
+        try
+        {
+            if (isrc != null && (await SearchSongsAsync(isrc)).Take(3).FirstOrDefault(Fits) is { } exact) return exact.VideoId;
+            var hits = await SearchSongsAsync($"{main} {title}");
+            return (hits.FirstOrDefault(h => Fits(h) && N(h.Title).Contains(N(title))) ?? hits.FirstOrDefault(Fits))?.VideoId;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or FormatException) { return null; }
+    }
 }
 
 /// <summary>

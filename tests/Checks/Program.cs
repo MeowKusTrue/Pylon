@@ -76,6 +76,14 @@ Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Орие�
 
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
+// ── lyrics "from the cover": a dark cover's tone is lightened on a dark background, a pale one darkened on a light one,
+// keeping its hue
+{
+    var navy = LyricsView.Readable(System.Windows.Media.Color.FromRgb(20, 32, 90), darkBackground: true);
+    var butter = LyricsView.Readable(System.Windows.Media.Color.FromRgb(250, 240, 180), darkBackground: false);
+    Check("lyrics color stays readable", navy.B > 200 && navy.B > navy.R && butter.R < 110 && butter.R > butter.B, $"{navy} {butter}");
+}
+
 // ── default player: every format that doesn't open in Pylon yet is taken, ours are left alone
 var take = ShellRegistration.NotOurs(ext => ext == ".mkv" ? "Pylon.mkv" : ext == ".mp3" ? "WMP11.AssocFile.MP3" : ext == ".flac" ? "KLCP.WMP64.flac" : null);
 Check("default player: formats to take", !take.Contains(".mkv") && take.Contains(".mp3") && take.Contains(".flac") && take.Contains(".mp4"), string.Join(" ", take.Take(6)));

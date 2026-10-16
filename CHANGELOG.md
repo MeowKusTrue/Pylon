@@ -3,6 +3,32 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.9
+
+<!-- ru -->
+**Новое**
+- **Радио по песне.** Правый клик по песне → «Радио по этой песне» (или клавиша W): дальше бесконечно играют похожие песни из YouTube Music, а то, что есть у вас в библиотеке, играет из библиотеки. «Нравится» (Y) добавляет песню в «Любимые песни» и ставит следующими похожие на неё, «Не нравится» (Shift+Y) пропускает её, и радио её больше не предложит.
+- **Девять новых пословных анимаций текста:** «Цветок», «Блеск», «Пружина», «Каскад», «Фокус», «Сияние», «Машинка», «Качели» и «Круги». У каждой анимации свой шрифт (любой из установленных в Windows), а спетые слова можно красить в цвет обложки: яркость подстраивается так, чтобы текст оставался читаемым и на тёмных, и на бледных обложках.
+- **Текст ищется заранее** для каждой песни, даже при закрытой панели, а для следующей — пока играет текущая. В миниплеере текст теперь загорается по словам, пульт для других плееров тоже показывает новые анимации.
+- **Spotify:** вход работает сразу, без своего приложения (своё можно указать по желанию), одна кнопка «Войти / Выйти» для Spotify и для Last.fm. После входа плейлист импортируется целиком, с обложкой. Без входа импортируются первые 50 песен, а обложки и коды песен подтягиваются с Deezer.
+- **Импортированные плейлисты Spotify обновляются сами:** при запуске и раз в 6 часов.
+- **Песни из Spotify ищутся в YouTube Music по коду записи (ISRC):** играет официальный релиз, а не клип, кавер или лирик-видео. Поиск идёт быстрее, а следующие две песни готовятся заранее, поэтому переключение занимает меньше секунды.
+
+**Исправления**
+- **Шумы в звуке.** После перемотки DirectSound на мгновение сообщал задержку на 40 мс неверно, и libVLC около 9 секунд «подгонял» звук грубым ресемплером: это звучало как плохое радио. Подгонка отключена, звук после перемотки остаётся чистым. Замерено записью через виртуальный кабель: было 2–7 дБ сигнал/шум после каждой перемотки, стало 68 дБ всё время.
+
+<!-- en -->
+**New**
+- **Radio by a song.** Right-click a song → Radio by This Song (or press W): similar songs from YouTube Music play on and on, and the ones in your library play from the library. Like (Y) adds the song to Liked songs and puts more like it next; Dislike (Shift+Y) skips it, and the radio never offers it again.
+- **Nine new word-by-word lyric animations:** Bloom, Shimmer, Bounce, Cascade, Focus, Aurora, Typewriter, Swing and Ripple. Each animation has its own font (any font installed in Windows), and sung words can take the cover's color, with its brightness adjusted so the text stays readable on dark and pale covers alike.
+- **Lyrics are looked up ahead** for every song, even with the panel closed, and for the next song while the current one plays. The miniplayer lights the lyrics word by word, and the remote for other players shows the new animations too.
+- **Spotify:** sign-in works out of the box, no app of your own needed (you can still use yours), with one Sign in / Sign out button for Spotify and for Last.fm. Signed in, a playlist comes in whole, with its cover. Without signing in, the first 50 songs come in, with covers and song codes from Deezer.
+- **Imported Spotify playlists keep themselves up to date:** at start and every 6 hours.
+- **Spotify songs are found on YouTube Music by their recording code (ISRC):** the official release plays, not a clip, cover or lyric video. Finding them is faster, and the next two songs are prepared ahead, so switching takes under a second.
+
+**Fixes**
+- **Noise in the sound.** Right after a seek, DirectSound briefly reported its delay 40 ms off, and libVLC spent about 9 seconds "correcting" with a crude resampler that sounded like a bad radio. The correction is off, and the sound stays clean after seeking. Measured on a virtual-cable recording: 2–7 dB signal-to-noise after every seek before, 68 dB throughout now.
+
 ## 1.9.8
 
 <!-- ru -->

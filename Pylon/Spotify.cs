@@ -12,63 +12,232 @@ using Windows.Media.Control;
 namespace Pylon;
 
 /// <summary>
-/// Spotify without an account in Pylon: a public playlist / album / track link is read from Spotify's embed page (title,
-/// artist, length and track id, up to 50 tracks for big playlists), songs already in the library play from disk and the
-/// rest through YouTube (yt-dlp, audio only). The track id goes along, so word-synced lyrics are found exactly.
+/// Spotify playlists, albums and tracks in Pylon. Signed in to Spotify, the whole list comes from its Web API (every track,
+/// its cover, ISRC and album); without an account Spotify's public embed page gives the first 50, and Deezer fills in
+/// covers and ISRCs in the background. Songs already in the library play from disk, the rest from YouTube Music (the
+/// official release, found by ISRC). The list remembers its link, so it follows the Spotify one (see <see cref="SyncAsync"/>).
 /// </summary>
 public static class SpotifyImport
 {
-    public record Track(string Title, string Artist, long DurationMs, string Id);
+    public record Track(string Title, string Artist, long DurationMs, string Id, string? Isrc = null, string? Art = null, string? Album = null);
+
+    /// <summary>A Spotify list as read: its tracks, its cover's address, and whether only part of it could be read.</summary>
+    public record ImportedList(string Name, List<Track> Tracks, string? Cover, bool Partial);
 
     static readonly Regex Link = new(@"open\.spotify\.com/(?:intl-[a-z-]+/)?(playlist|album|track)/([A-Za-z0-9]{22})", RegexOptions.Compiled);
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20), DefaultRequestHeaders = { { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Pylon" } } };
 
     public static bool IsLink(string text) => Link.IsMatch(text);
 
-    /// <summary>The list's name and its tracks; null when the page isn't readable (private list, no connection).</summary>
-    public static async Task<(string Name, List<Track> Tracks)?> ReadAsync(string url)
+    /// <summary>The list behind a link; null when it can't be read (private, gone, no connection).</summary>
+    public static async Task<ImportedList?> ReadAsync(string url)
     {
         if (Link.Match(url) is not { Success: true } m) return null;
+        var (kind, id) = (m.Groups[1].Value, m.Groups[2].Value);
+        if (SpotifyApi.SignedIn && await ReadWebApiAsync(kind, id) is { Tracks.Count: > 0 } full) return full;
         try
         {
-            var html = await Http.GetStringAsync($"https://open.spotify.com/embed/{m.Groups[1].Value}/{m.Groups[2].Value}");
+            var html = await Http.GetStringAsync($"https://open.spotify.com/embed/{kind}/{id}");
             var json = Regex.Match(html, "<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", RegexOptions.Singleline).Groups[1].Value;
             using var doc = JsonDocument.Parse(json);
             var entity = doc.RootElement.GetProperty("props").GetProperty("pageProps").GetProperty("state").GetProperty("data").GetProperty("entity");
             var name = entity.TryGetProperty("name", out var n) ? n.GetString() ?? "Spotify" : "Spotify";
+            var cover = entity.TryGetProperty("coverArt", out var ca) && ca.TryGetProperty("sources", out var src) && src.GetArrayLength() > 0 ? Str(src[0], "url") : null;
             var tracks = new List<Track>();
             if (entity.TryGetProperty("trackList", out var list))
                 foreach (var t in list.EnumerateArray())
-                    tracks.Add(new Track(Str(t, "title"), Str(t, "subtitle"), t.TryGetProperty("duration", out var d) ? d.GetInt64() : 0, Str(t, "uri").Split(':').Last()));
+                    tracks.Add(new Track(Str(t, "title"), Str(t, "subtitle").Replace(' ', ' '), t.TryGetProperty("duration", out var d) ? d.GetInt64() : 0, Str(t, "uri").Split(':').Last(),
+                        Album: kind == "album" ? name : null, Art: kind == "album" ? cover : null));
             else // a single track
                 tracks.Add(new Track(name, entity.TryGetProperty("artists", out var a) ? string.Join(", ", a.EnumerateArray().Select(x => Str(x, "name"))) : "",
-                    entity.TryGetProperty("duration", out var d1) ? d1.GetInt64() : 0, m.Groups[2].Value));
-            return (name, tracks.Where(t => t.Title.Length > 0).ToList());
+                    entity.TryGetProperty("duration", out var d1) ? d1.GetInt64() : 0, id, Art: cover));
+            tracks = [.. tracks.Where(t => t.Title.Length > 0)];
+            // the embed page stops at 50: a playlist that long is most likely cut
+            return new ImportedList(name, tracks, string.IsNullOrEmpty(cover) ? null : cover, kind == "playlist" && tracks.Count >= 50);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return null; }
+    }
+
+    /// <summary>
+    /// The whole list as the signed-in user, 100 tracks a page. Null when Spotify refuses (its own editorial playlists are
+    /// closed to apps in development mode): the embed page is tried then.
+    /// </summary>
+    static async Task<ImportedList?> ReadWebApiAsync(string kind, string id)
+    {
+        static string? Image(JsonElement owner) => owner.TryGetProperty("images", out var im) && im.ValueKind == JsonValueKind.Array && im.GetArrayLength() > 0
+            ? Str(im.EnumerateArray().OrderBy(i => Math.Abs((i.TryGetProperty("width", out var w) && w.ValueKind == JsonValueKind.Number ? w.GetInt32() : 640) - 300)).First(), "url") : null;
+        static string Artists(JsonElement t) => t.TryGetProperty("artists", out var a) ? string.Join(", ", a.EnumerateArray().Select(x => Str(x, "name"))) : "";
+        static Track? FromTrack(JsonElement t, string? album = null, string? art = null)
+        {
+            if (t.ValueKind != JsonValueKind.Object || Str(t, "id") is not { Length: > 0 } tid) return null; // local files and removed tracks have none
+            var al = t.TryGetProperty("album", out var alb) ? alb : default;
+            return new Track(Str(t, "name"), Artists(t), t.TryGetProperty("duration_ms", out var d) ? d.GetInt64() : 0, tid,
+                t.TryGetProperty("external_ids", out var x) ? Str(x, "isrc") is { Length: > 0 } i ? i : null : null,
+                art ?? (al.ValueKind == JsonValueKind.Object ? Image(al) : null), album ?? (al.ValueKind == JsonValueKind.Object ? Str(al, "name") : null));
+        }
+        switch (kind)
+        {
+            case "track":
+                using (var t = await SpotifyApi.GetAsync($"tracks/{id}"))
+                    return t != null && FromTrack(t.RootElement) is { } one ? new ImportedList(one.Title, [one], one.Art, false) : null;
+            case "album":
+            {
+                using var a = await SpotifyApi.GetAsync($"albums/{id}");
+                if (a == null) return null;
+                var (name, art) = (Str(a.RootElement, "name"), Image(a.RootElement));
+                var tracks = new List<Track>();
+                for (var page = $"albums/{id}/tracks?limit=50"; page.Length > 0;)
+                {
+                    using var p = await SpotifyApi.GetAsync(page);
+                    if (p == null) break;
+                    foreach (var t in p.RootElement.GetProperty("items").EnumerateArray()) if (FromTrack(t, name, art) is { } tr) tracks.Add(tr);
+                    page = Str(p.RootElement, "next");
+                }
+                return new ImportedList(name, tracks, art, false);
+            }
+            default:
+            {
+                using var head = await SpotifyApi.GetAsync($"playlists/{id}?fields=name,images");
+                if (head == null) return null;
+                var (name, art) = (Str(head.RootElement, "name"), Image(head.RootElement));
+                var tracks = new List<Track>();
+                for (var page = $"playlists/{id}/tracks?limit=100&fields=next,items(track(id,name,duration_ms,external_ids(isrc),artists(name),album(name,images)))"; page.Length > 0;)
+                {
+                    using var p = await SpotifyApi.GetAsync(page);
+                    if (p == null) break;
+                    foreach (var it in p.RootElement.GetProperty("items").EnumerateArray())
+                        if (it.TryGetProperty("track", out var t) && FromTrack(t) is { } tr) tracks.Add(tr);
+                    page = Str(p.RootElement, "next");
+                }
+                return new ImportedList(name, tracks, art, false);
+            }
+        }
     }
 
     static string Str(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
     /// <summary>
-    /// Where each track plays from: a library file with the same title and artist, else a YouTube search through yt-dlp.
-    /// Titles and Spotify ids are kept in the library index, so lists show names and lyrics come from Spicy by id.
+    /// Where each track plays from: a library file with the same title and artist, else YouTube (found when it plays).
+    /// Title, artist, album, cover, ISRC, length and Spotify id go into the library index: lists show names and covers, the
+    /// YouTube search finds the official release, and lyrics come by exact id.
     /// </summary>
     public static List<string> Resolve(List<Track> tracks)
     {
         static string N(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
-        var local = Library.Data.Meta.Where(m => m.Value.Title is { Length: > 0 } && System.IO.File.Exists(m.Key)).ToList();
+        // names compared first, the disk asked only about a match: checking every library file each time held the UI ~250 ms
+        var local = Library.Data.Meta.Where(m => m.Value.Title is { Length: > 0 } && !m.Key.Contains("://"))
+            .Select(m => (m.Key, Title: N(m.Value.Title!), Artist: N(m.Value.Artist ?? ""))).ToList();
         var items = new List<string>();
         foreach (var t in tracks)
         {
-            var file = local.FirstOrDefault(m => N(m.Value.Title!) == N(t.Title) && N(m.Value.Artist ?? "").Contains(N(t.Artist.Split(',')[0]))).Key;
+            var (title, artist) = (N(t.Title), N(t.Artist.Split(',')[0]));
+            var file = local.FirstOrDefault(m => m.Title == title && m.Artist.Contains(artist) && System.IO.File.Exists(m.Key)).Key;
             var item = file ?? "ytsearch://" + Uri.EscapeDataString($"{t.Artist} - {t.Title}");
-            if (file == null) Library.Data.Meta[item] = new TrackMeta { Title = t.Title, Artist = t.Artist, SpotifyId = t.Id };
-            else Library.Data.Meta[file].SpotifyId = t.Id;
+            if (file != null) Library.Data.Meta[file].SpotifyId = t.Id is { Length: > 0 } ? t.Id : Library.Data.Meta[file].SpotifyId;
+            else
+            {
+                var meta = Library.Data.Meta.GetValueOrDefault(item) ?? new TrackMeta(); // a known song keeps what was found for it (its YouTube video)
+                (meta.Title, meta.Artist) = (t.Title, t.Artist);
+                if (t.Id.Length > 0) meta.SpotifyId = t.Id; // a radio song (YouTube Music) has no Spotify id
+                meta.Album = t.Album ?? meta.Album;
+                meta.Art = t.Art ?? meta.Art;
+                meta.Isrc = t.Isrc ?? meta.Isrc;
+                if (t.DurationMs > 0) meta.DurationMs = t.DurationMs;
+                Library.Data.Meta[item] = meta;
+            }
             items.Add(item);
         }
         Library.Touch();
         return items;
+    }
+
+    /// <summary>
+    /// What the embed page doesn't give: each song's cover and ISRC, from Deezer (free, no key), a few a second in the
+    /// background. <paramref name="changed"/> runs on the UI thread now and then so lists redraw.
+    /// </summary>
+    public static async Task EnrichAsync(IEnumerable<string> items, Action changed)
+    {
+        var todo = items.Where(i => i.StartsWith("ytsearch://") && Library.Data.Meta.GetValueOrDefault(i) is { } m && (m.Art == null || m.Isrc == null)).Distinct().ToList();
+        var n = 0;
+        foreach (var item in todo)
+        {
+            if (Library.Data.Meta.GetValueOrDefault(item) is not { Title: { } title, Artist: { } artist } meta) continue;
+            if (await Deezer.FindAsync(title, artist, meta.DurationMs / 1000.0) is { } hit)
+            {
+                if (meta.Art == null && hit.Cover != null) { meta.Art = hit.Cover; Library.ForgetThumb(item); }
+                meta.Isrc ??= hit.Isrc;
+                meta.Album ??= hit.Album;
+            }
+            if (++n % 10 == 0) changed();
+            await Task.Delay(150); // Deezer allows 50 requests in 5 s
+        }
+        if (n % 10 != 0) changed();
+    }
+
+    /// <summary>A list's cover, saved with the profile (its address on Spotify's servers changes with the list).</summary>
+    public static async Task<string?> SaveCoverAsync(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return null;
+        try
+        {
+            var dir = Path.Combine(Library.Dir, "covers");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, "spotify-" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(url)))[..16] + ".jpg");
+            if (!File.Exists(file)) await File.WriteAllBytesAsync(file, await Http.GetByteArrayAsync(url));
+            return file;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException) { return null; }
+    }
+
+    /// <summary>
+    /// Follows the Spotify list a playlist came from: songs added there are added here in the same order, removed ones go.
+    /// Returns how many came and went; null when the list couldn't be read (then it stays as it is).
+    /// </summary>
+    public static async Task<(int Added, int Removed)?> SyncAsync(Playlist p)
+    {
+        if (p.Source is not { } link || await ReadAsync(link) is not { Tracks.Count: > 0 } list) return null;
+        if (list.Partial && p.Items.Count > list.Tracks.Count) return null; // signed out since: a shorter page isn't the list shrinking
+        var items = Resolve(list.Tracks);
+        var added = items.Except(p.Items).Count();
+        var removed = p.Items.Except(items).Count();
+        p.LastSync = DateTime.UtcNow;
+        if (added + removed > 0 || !p.Items.SequenceEqual(items)) p.Items = items;
+        if (p.Thumb == null || !File.Exists(p.Thumb)) p.Thumb = await SaveCoverAsync(list.Cover) ?? p.Thumb;
+        return (added, removed);
+    }
+}
+
+/// <summary>Deezer's free search: a song's ISRC, album and cover by its name, checked by artist and length.</summary>
+public static class Deezer
+{
+    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    public record Hit(string? Isrc, string? Cover, string? Album, double Seconds);
+
+    public static async Task<Hit?> FindAsync(string title, string artist, double seconds)
+    {
+        var main = artist.Split(',')[0].Trim();
+        // the strict form (artist:"…" track:"…") finds nothing for names with an apostrophe ("Plain White T's"): plain words too
+        foreach (var q in new[] { $"artist:\"{main}\" track:\"{title}\"", $"{main} {title}" })
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://api.deezer.com/search?limit=10&q=" + Uri.EscapeDataString(q)));
+                if (!doc.RootElement.TryGetProperty("data", out var data)) continue;
+                var best = data.EnumerateArray()
+                    .Where(e => e.TryGetProperty("artist", out var a) && Covers.Same(a.TryGetProperty("name", out var an) ? an.GetString() : null, main))
+                    .Select(e => (e, off: seconds > 0 && e.TryGetProperty("duration", out var d) ? Math.Abs(d.GetDouble() - seconds) : 0))
+                    .Where(x => x.off <= 4).OrderBy(x => x.off).Select(x => x.e).FirstOrDefault();
+                if (best.ValueKind != JsonValueKind.Object) continue;
+                var album = best.TryGetProperty("album", out var al) ? al : default;
+                return new Hit(best.TryGetProperty("isrc", out var i) ? i.GetString() : null,
+                    album.ValueKind == JsonValueKind.Object && album.TryGetProperty("cover_medium", out var c) ? c.GetString() : null,
+                    album.ValueKind == JsonValueKind.Object && album.TryGetProperty("title", out var t) ? t.GetString() : null,
+                    best.TryGetProperty("duration", out var du) ? du.GetDouble() : 0);
+            }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException) { return null; }
+        }
+        return null;
     }
 }
 

@@ -37,6 +37,9 @@ public static class Hotkeys
         new("prevchapter", "Playback", "Previous chapter", "Shift+P", w => w.JumpChapter(-1)),
         new("bookmark", "Playback", "Add bookmark", "Ctrl+B", w => w.AddBookmark()),
         new("snapshot", "Playback", "Take a snapshot", "Shift+S", w => w.Snapshot()),
+        new("radio", "Playback", "Radio by this song", "W", w => w.StartRadio()),
+        new("like", "Playback", "Like (more like this on the radio)", "Y", w => w.LikeSong()),
+        new("dislike", "Playback", "Dislike (skip, never on the radio again)", "Shift+Y", w => w.DislikeSong()),
 
         new("fwd1", "Seeking", "Very short jump forward", "Shift+Right", w => w.Skip(0, +1)),
         new("back1", "Seeking", "Very short jump backward", "Shift+Left", w => w.Skip(0, -1)),

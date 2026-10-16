@@ -118,16 +118,7 @@ public static class SpicyLyrics
         return best.ValueKind == JsonValueKind.Object && (isrc != null || Off(best) <= 4) ? best.GetProperty("id").GetString() : null;
     }
 
-    static async Task<string?> DeezerIsrcAsync(string title, string artist, double duration)
-    {
-        var q = Uri.EscapeDataString($"artist:\"{artist}\" track:\"{title}\"");
-        var list = JsonDocument.Parse(await Http.GetStringAsync($"https://api.deezer.com/search?limit=10&q={q}")).RootElement;
-        if (!list.TryGetProperty("data", out var data)) return null;
-        var hits = data.EnumerateArray().Where(e => e.TryGetProperty("isrc", out _)).ToList();
-        double Off(JsonElement e) => duration > 0 ? Math.Abs(e.GetProperty("duration").GetDouble() - duration) : 0;
-        var best = hits.OrderBy(Off).FirstOrDefault();
-        return best.ValueKind == JsonValueKind.Object && Off(best) <= 4 ? best.GetProperty("isrc").GetString() : null;
-    }
+    static async Task<string?> DeezerIsrcAsync(string title, string artist, double duration) => (await Deezer.FindAsync(title, artist, duration))?.Isrc;
 
     /// <summary>Client-credentials token (no user login): enough for search.</summary>
     static async Task<string?> SpotifyTokenAsync()

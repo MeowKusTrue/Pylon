@@ -588,6 +588,7 @@ public partial class LibraryPanel : UserControl
             Item(single ? "Play" : "Play All", "play", () => Player.PlayList(Resolve(), 0)),
             Item("Play Next", "skip-forward", () => Player.PlayNext(Resolve())),
             Item("Add to Queue", "queue", () => Player.Enqueue(Resolve())),
+            .. single && files![0] is var song && (Library.IsAudio(song) || song.StartsWith("ytsearch://")) ? new object[] { Item("Radio by This Song", "radio", () => Player.StartRadio(song)) } : [],
             add,
             .. folder != null || files!.Any(Library.IsAudio) ? new object[] { music } : [],
             new Separator(),

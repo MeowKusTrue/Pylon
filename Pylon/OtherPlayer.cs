@@ -36,7 +36,10 @@ public static class SpotifyApi
     static string? _access;
     static DateTime _expires;
 
-    public static string ClientId => Settings.Str("lyrics.spotifyid").Trim();
+    /// <summary>Pylon's own Spotify app (public, as every PKCE client id is); someone's own one from Settings wins.</summary>
+    const string BuiltInClientId = "ae79aa1662d344b1933ed55be753f2db";
+
+    public static string ClientId => Settings.Str("lyrics.spotifyid").Trim() is { Length: > 0 } own ? own : BuiltInClientId;
     public static bool SignedIn => File.Exists(TokenFile);
 
     public record Song(string Id, string Title, string Artist, string? Art, double Seconds);
@@ -154,6 +157,21 @@ public static class SpotifyApi
         var holder = t.TryGetProperty("album", out var album) ? album : t;
         var art = holder.TryGetProperty("images", out var im) && im.ValueKind == JsonValueKind.Array && im.GetArrayLength() > 0 ? Str(im[im.GetArrayLength() - 1], "url") : null; // the smallest
         return new Song(Str(t, "id"), Str(t, "name"), by, art, t.TryGetProperty("duration_ms", out var d) && d.ValueKind == JsonValueKind.Number ? d.GetDouble() / 1000 : 0);
+    }
+
+    /// <summary>A Web API call as the signed-in user; null when not signed in, offline, or Spotify said no (404 / 403).</summary>
+    public static async Task<JsonDocument?> GetAsync(string pathAndQuery)
+    {
+        if (await AccessAsync() is not { } token) return null;
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, pathAndQuery.StartsWith("https://") ? pathAndQuery : "https://api.spotify.com/v1/" + pathAndQuery);
+            req.Headers.Authorization = new("Bearer", token);
+            using var res = await Http.SendAsync(req);
+            if (res.StatusCode == HttpStatusCode.Unauthorized) { _access = null; return null; }
+            return res.IsSuccessStatusCode ? JsonDocument.Parse(await res.Content.ReadAsStringAsync()) : null;
+        }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException) { return null; }
     }
 
     /// <summary>Skips ahead to the queued song <paramref name="times"/> places on. Spotify allows it with Premium only.</summary>
@@ -423,6 +441,7 @@ public sealed class RemoteView : Grid
             _backdrop.SetImage(art);
             if (_queueScroll.Visibility == Visibility.Visible || session.SourceAppUserModelId.Contains("Spotify", StringComparison.OrdinalIgnoreCase)) await LoadQueue();
             _lyrics.ShowMessage(L.T("Looking for lyrics…"));
+            _lyrics.SetCover(art as System.Windows.Media.Imaging.BitmapSource); // "From the cover": this song's cover
             var tags = _spotifyId != null ? "spotify:track:" + _spotifyId : "";
             var doc = await Lyrics.FindAsync("remote://" + key, props.Title, props.Artist, props.AlbumTitle, _length0, tags);
             if (_for != key) return;
@@ -439,9 +458,7 @@ public sealed class RemoteView : Grid
         if (!spotify) { QueueNote(L.T("Windows doesn't tell what comes next. Pylon can show the queue for Spotify.")); return; }
         if (!SpotifyApi.SignedIn)
         {
-            QueueNote(SpotifyApi.ClientId.Length == 0
-                ? L.F("To see Spotify's queue, create a free app at developer.spotify.com with the redirect URI {0}, put its Client ID in Settings → Online → Spotify, then sign in here.", SpotifyApi.Redirect)
-                : L.T("Sign in to Spotify to see what comes next."), signIn: SpotifyApi.ClientId.Length > 0);
+            QueueNote(L.T("Sign in to Spotify to see what comes next."), signIn: true);
             return;
         }
         var q = await SpotifyApi.QueueAsync();
