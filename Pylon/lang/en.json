@@ -1221,5 +1221,10 @@
   "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.": "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.",
   "Which {0} profile is signed in to YouTube?": "Which {0} profile is signed in to YouTube?",
   "{0} (the one in use)": "{0} (the one in use)",
-  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network."
+  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.",
+  "The sign-in from {0} didn't work": "The sign-in from {0} didn't work",
+  "YouTube didn't accept it: it's out of date, or that profile isn't signed in. Open YouTube in the browser you use every day, check that you're signed in, and choose that browser and profile here (or a fresh cookies.txt).": "YouTube didn't accept it: it's out of date, or that profile isn't signed in. Open YouTube in the browser you use every day, check that you're signed in, and choose that browser and profile here (or a fresh cookies.txt).",
+  "used today": "used today",
+  "used yesterday": "used yesterday",
+  "used {0} days ago": "used {0} days ago"
 }

@@ -1221,5 +1221,10 @@
   "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.": "Для видео с возрастным ограничением и проверки «подтвердите, что вы не бот» Pylon может взять вход из браузера, где вы вошли в YouTube. Cookies остаются на этом компьютере и уходят только в YouTube. Лучше всего работает Firefox; Chrome или Edge перед этим нужно закрыть.",
   "Which {0} profile is signed in to YouTube?": "В каком профиле {0} вы вошли в YouTube?",
   "{0} (the one in use)": "{0} (используется сейчас)",
-  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Не удалось взять вход из браузера. Закройте браузер и попробуйте снова или выберите Firefox либо файл cookies.txt в Настройки → Сеть."
+  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Не удалось взять вход из браузера. Закройте браузер и попробуйте снова или выберите Firefox либо файл cookies.txt в Настройки → Сеть.",
+  "The sign-in from {0} didn't work": "Вход из {0} не сработал",
+  "YouTube didn't accept it: it's out of date, or that profile isn't signed in. Open YouTube in the browser you use every day, check that you're signed in, and choose that browser and profile here (or a fresh cookies.txt).": "YouTube его не принял: он устарел, или в этом профиле вы не вошли. Откройте YouTube в браузере, которым пользуетесь каждый день, проверьте, что вы вошли, и выберите здесь этот браузер и профиль (или свежий cookies.txt).",
+  "used today": "открывался сегодня",
+  "used yesterday": "открывался вчера",
+  "used {0} days ago": "открывался {0} дн. назад"
 }

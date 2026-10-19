@@ -624,6 +624,20 @@ public static class BrowserCookies
         return All.FirstOrDefault(b => b.Name == name) is { } b && (k?.GetValue("ProgId") as string ?? "").StartsWith(b.ProgId, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>When a profile's cookies last changed: the profile someone signs in with every day is the fresh one.</summary>
+    static DateTime Used(string profile)
+    {
+        string[] files = ["cookies.sqlite", "cookies.sqlite-wal", @"Network\Cookies", "Cookies"];
+        return files.Select(f => Path.Combine(profile, f)).Where(File.Exists).Select(File.GetLastWriteTime).DefaultIfEmpty().Max();
+    }
+
+    /// <summary>"Main · used 46 days ago": out-of-date sign-ins are the ones YouTube turns down.</summary>
+    static string Label(string name, string profile)
+    {
+        var days = (int)(DateTime.Today - Used(profile).Date).TotalDays;
+        return Used(profile) == default ? name : $"{name}  ·  {(days <= 0 ? L.T("used today") : days == 1 ? L.T("used yesterday") : L.F("used {0} days ago", days))}";
+    }
+
     /// <summary>A browser's profiles: what yt-dlp is told (a folder name, or Firefox's profile path) and the name people know.</summary>
     public static List<(string Id, string Name)> Profiles(string name)
     {
@@ -649,8 +663,8 @@ public static class BrowserCookies
                 using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
                 var progId = k?.GetValue("ProgId") as string ?? "";
                 var inUse = installs.FirstOrDefault(i => progId.EndsWith("-" + i.Key, StringComparison.OrdinalIgnoreCase)).Value ?? installs.Values.FirstOrDefault();
-                return [.. list.OrderByDescending(x => string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase))
-                    .Select(x => string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase) ? (x.Id, L.F("{0} (the one in use)", x.Name)) : x)];
+                return [.. list.OrderByDescending(x => string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase)).ThenByDescending(x => Used(x.Id))
+                    .Select(x => (x.Id, Label(string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase) ? L.F("{0} (the one in use)", x.Name) : x.Name, x.Id)))];
             }
             if (name == "Opera") return [("", "Opera")];
             Dictionary<string, string> names = [];
@@ -664,7 +678,8 @@ public static class BrowserCookies
             catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
             return [.. Directory.GetDirectories(dir).Select(Path.GetFileName).OfType<string>()
                 .Where(d => (d == "Default" || d.StartsWith("Profile ")) && (File.Exists(Path.Combine(dir, d, "Network", "Cookies")) || File.Exists(Path.Combine(dir, d, "Cookies"))))
-                .Select(d => (d, names.GetValueOrDefault(d) ?? d))];
+                .OrderByDescending(d => Used(Path.Combine(dir, d)))
+                .Select(d => (d, Label(names.GetValueOrDefault(d) ?? d, Path.Combine(dir, d))))];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
     }

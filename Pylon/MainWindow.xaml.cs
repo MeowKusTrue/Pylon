@@ -661,10 +661,13 @@ public partial class MainWindow : Window
         if (s == null)
         {
             // an age check or "confirm you're not a bot": the first time, ask which browser's sign-in to use, then try again
-            if (YtDlp.WantsSignIn(YtDlp.LastError) && !_askedCookies)
+            // asked again when the sign-in chosen earlier didn't work (out of date, or a profile that isn't signed in), but
+            // not again and again for the same choice
+            if (YtDlp.WantsSignIn(YtDlp.LastError) && _askedFor != Settings.Str("net.cookies"))
             {
-                _askedCookies = true;
-                if (AskCookies()) { YtDlp.Forget(src); PlayAt(i, startAt: startAt, autoplay: autoplay); return true; }
+                var tried = Settings.Str("net.cookies") is { Length: > 0 } c && c != "Off" ? c : null;
+                _askedFor = Settings.Str("net.cookies");
+                if (AskCookies(tried)) { YtDlp.Forget(src); PlayAt(i, startAt: startAt, autoplay: autoplay); return true; }
             }
             // the chosen browser's cookies couldn't be read (it's open, or a newer Chrome / Edge keeps them locked)
             var cookieTrouble = YtDlp.LastError is { } err && err.Contains("cookie", StringComparison.OrdinalIgnoreCase) && !YtDlp.WantsSignIn(err);
@@ -698,18 +701,23 @@ public partial class MainWindow : Window
         return true;
     }
 
-    bool _askedCookies; // once per run: "Not now" isn't asked again for every song
+    string? _askedFor; // the sign-in setting already asked about this run: "Not now" isn't asked again for every song
 
     /// <summary>
     /// YouTube wants a signed-in viewer. Pylon asks where to take the sign-in from: the browser Windows opens links with,
     /// another installed one (with its profile when it has several), or a cookies.txt file. Stored in Settings → Network.
     /// </summary>
-    bool AskCookies()
+    bool AskCookies(string? tried = null)
     {
         var browsers = BrowserCookies.Installed();
         List<string> options = [.. browsers.Select(b => BrowserCookies.IsDefault(b) ? L.F("{0} (your main browser)", b) : b), L.T("A cookies.txt file…"), L.T("Not now")];
-        var pick = DialogWindow.Choose(this, "Sign In to YouTube", "YouTube wants you signed in",
-            options, "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.");
+        // "Firefox:D:\…\profile" → "Firefox, profile"
+        var what = tried == null ? null : tried.IndexOf(':') is var colon and > 0 ? $"{tried[..colon]}, {Path.GetFileName(tried[(colon + 1)..].TrimEnd('\\'))}" : tried;
+        var pick = tried == null
+            ? DialogWindow.Choose(this, "Sign In to YouTube", "YouTube wants you signed in",
+                options, "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.")
+            : DialogWindow.Choose(this, "Sign In to YouTube", L.F("The sign-in from {0} didn't work", what),
+                options, "YouTube didn't accept it: it's out of date, or that profile isn't signed in. Open YouTube in the browser you use every day, check that you're signed in, and choose that browser and profile here (or a fresh cookies.txt).");
         if (pick < 0 || pick == options.Count - 1) return false;
         if (pick == options.Count - 2)
         {

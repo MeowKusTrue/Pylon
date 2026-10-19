@@ -3,6 +3,16 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.14
+
+<!-- ru -->
+**Исправления**
+- **Вход в YouTube через браузер.** Если YouTube не принял выбранный вход (устаревший или из профиля, где вы не вошли), Pylon больше не повторяет одну и ту же ошибку: он говорит, что вход не сработал, и предлагает выбрать другой профиль. Рядом с каждым профилем видно, когда им пользовались в последний раз («сегодня», «47 дн. назад»). Наверху стоит тот, что используется сейчас, остальные идут по свежести.
+
+<!-- en -->
+**Fixes**
+- **Signing in to YouTube through your browser.** When YouTube turns down the sign-in you chose (out of date, or from a profile that isn't signed in), Pylon no longer repeats the same error: it says that sign-in didn't work and offers to pick another profile. Each profile shows when it was last used ("used today", "used 47 days ago"). The one in use comes first, the rest by freshness.
+
 ## 1.9.13
 
 <!-- ru -->
