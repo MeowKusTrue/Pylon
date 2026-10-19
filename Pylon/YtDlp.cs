@@ -114,6 +114,9 @@ public static class YtDlp
         }
     }
 
+    /// <summary>The address resolved for an item stopped working: the next play asks yt-dlp again.</summary>
+    public static void Forget(string src) => Ready.TryRemove(src, out _);
+
     /// <summary>A song rather than a video: searched by name (Spotify, radio, search) or on music.youtube.com.</summary>
     public static bool IsSong(string src) => src.StartsWith("ytsearch://") || src.Contains("://music.youtube.com/");
 

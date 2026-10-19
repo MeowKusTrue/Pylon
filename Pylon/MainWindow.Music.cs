@@ -237,7 +237,7 @@ public partial class MainWindow
         Osd(list.Partial ? L.F("{0}: the first {1} songs. Sign in to Spotify (Settings → Online) for the whole list.", list.Name, items.Count)
             : L.F("{0}: {1} songs, {2} from your library", list.Name, items.Count, local), list.Partial ? 7 : 4);
         PlayList(items, 0);
-        _ = SpotifyImport.EnrichAsync(items, () => { Library.Touch(); Sidebar.Render(); });
+        _ = SpotifyImport.EnrichAsync(items, () => { Library.Touch(); Sidebar.Render(); ArtFound(); });
     }
 
     /// <summary>
@@ -252,11 +252,11 @@ public partial class MainWindow
             Library.Touch();
             if (change.Added + change.Removed > 0) Osd(L.F("“{0}” updated from Spotify: +{1} / −{2}", p.Name, change.Added, change.Removed), 4);
             if (p.Offline && change.Added > 0) DownloadPlaylist(p); // new songs of an offline list come down too
-            _ = SpotifyImport.EnrichAsync(p.Items, () => { Library.Touch(); Sidebar.Render(); });
+            _ = SpotifyImport.EnrichAsync(p.Items, () => { Library.Touch(); Sidebar.Render(); ArtFound(); });
         }
         // songs imported before covers came from Deezer (1.9.8 and older) get theirs now, one list after another; songs
         // that already have a cover and an ISRC are skipped, so later runs only retry the few Deezer didn't know
         foreach (var p in Library.Data.Playlists.ToList())
-            await SpotifyImport.EnrichAsync(p.Items, () => { Library.Touch(); Sidebar.Render(); });
+            await SpotifyImport.EnrichAsync(p.Items, () => { Library.Touch(); Sidebar.Render(); ArtFound(); });
     }
 }

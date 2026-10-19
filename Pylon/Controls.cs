@@ -87,6 +87,33 @@ public class SeekBar : FrameworkElement
 
     public double Value { get => (double)GetValue(ValueProperty); set => SetValue(ValueProperty, value); }
     public bool Waveform { get => (bool)GetValue(WaveformProperty); set => SetValue(WaveformProperty, value); }
+
+    Color? _tint;
+    Brush? _tAccent, _tDim, _tBright;
+
+    /// <summary>The song's cover color instead of the theme's accent (null: the accent).</summary>
+    public Color? Tint
+    {
+        get => _tint;
+        set
+        {
+            if (_tint == value) return;
+            _tint = value;
+            if (value is { } c)
+            {
+                var bg = ThemeManager.IsLight ? Colors.White : Colors.Black;
+                Brush Mixed(double t)
+                {
+                    var b = new SolidColorBrush(Color.FromRgb((byte)(c.R + (bg.R - c.R) * t), (byte)(c.G + (bg.G - c.G) * t), (byte)(c.B + (bg.B - c.B) * t)));
+                    b.Freeze();
+                    return b;
+                }
+                // the same steps the theme takes from its accent (App.xaml.cs)
+                (_tAccent, _tDim, _tBright) = (Mixed(0), Mixed(ThemeManager.IsLight ? 0.12 : 0.19), Mixed(ThemeManager.IsLight ? 0.8 : 0.74));
+            }
+            InvalidateVisual();
+        }
+    }
     public bool IsDragging => IsMouseCaptured;
 
     /// <summary>Raised while the user clicks/drags, with the new position 0..1.</summary>
@@ -152,6 +179,7 @@ public class SeekBar : FrameworkElement
     {
         double w = ActualWidth, h = ActualHeight;
         Brush Track = B("BgB2"), Fill = B("AccentBright"), Thumb = B("Accent"), Played = B("AccentDim"), Unplayed = B("FgA4"), FgHover = B("FgA3");
+        if (_tint != null) (Thumb, Played, Fill) = (_tAccent!, _tDim!, _tBright!);
         dc.DrawRoundedRectangle(Track, null, new Rect(0, 0, w, h), 6, 6);
         var v = Math.Clamp(Value, 0, 1);
         if (!double.IsNaN(_loopA))

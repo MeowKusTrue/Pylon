@@ -857,8 +857,19 @@ public partial class MainWindow : Window
         }
     }
 
+    string? _retried;
+
     void OnError()
     {
+        // a web address YouTube turned down (a 403 now and then, or one that ran out while waiting): fetched again once
+        // before giving up on the song
+        if (CurrentPath is { } web && YtDlp.Handles(web) && _retried != web)
+        {
+            _retried = web;
+            YtDlp.Forget(web);
+            PlayAt(_index, startAt: Math.Max(0, _mp.Time));
+            return;
+        }
         var name = CurrentPath is { } p ? Library.DisplayName(p) : "this media";
         if (Settings.Bool("general.errors"))
             MessageBox.Show(this, L.F("Pylon can't open {0}.\nThe file may be damaged or in a format that isn't supported.", name), L.T("Playback error"), MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -876,7 +887,29 @@ public partial class MainWindow : Window
         Library.Remember(path, _title, _artist, t, _mp.Length, _isAudio);
     }
 
-    void SetArtwork(string? url) => SetArtwork(url == null ? null : LoadFull(url));
+    /// <summary>
+    /// The cover from a file or a web address. A web cover (Spotify, YouTube, Deezer) is fetched in the background: given
+    /// to WPF directly it downloads on its own, can't be frozen, and the player showed no cover while the list and
+    /// Discord had one.
+    /// </summary>
+    void SetArtwork(string? url)
+    {
+        if (url == null || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) { SetArtwork(url == null ? null : LoadFull(url)); return; }
+        var path = CurrentPath;
+        SetArtwork((BitmapSource?)null); // not the previous song's cover meanwhile
+        _ = Load();
+
+        async Task Load()
+        {
+            if (await Task.Run(() => Library.LoadImage(url, 900)) is BitmapSource bmp && CurrentPath == path) SetArtwork(bmp);
+        }
+    }
+
+    /// <summary>A cover found after the song started (Deezer, while a playlist's covers are filled in): shown at once.</summary>
+    void ArtFound()
+    {
+        if (ArtImage.Source == null && CurrentPath is { } p && Library.Data.Meta.GetValueOrDefault(p)?.Art is { } art) SetArtwork(art);
+    }
 
     void SetArtwork(BitmapSource? bmp)
     {
@@ -884,6 +917,9 @@ public partial class MainWindow : Window
         ArtBackdrop.SetImage(bmp);
         Scene.SetCover(bmp);
         LyricsPane.SetCover(bmp);
+        // the seek bar takes the cover's color too, like the scene behind; the theme's accent without one
+        var accent = (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
+        Seek.Tint = MiniSeek.Tint = bmp != null && _isAudio ? SceneView.Palette(bmp, accent).Item1 : null;
         ApplyMusicBg();
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }

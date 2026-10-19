@@ -3,6 +3,24 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.12
+
+<!-- ru -->
+**Новое**
+- Полоска перемотки у музыки окрашивается в цвет обложки, как анимация на фоне. Без обложки остаётся цвет темы.
+
+**Исправления**
+- Обложки песен из интернета (Spotify, YouTube, Deezer) не показывались в самом плеере, хотя были в списке и в Discord. Теперь показываются, а обложка, найденная уже во время песни, появляется сразу.
+- Если YouTube иногда отклоняет поток (ошибка 403), Pylon один раз получает новый адрес и продолжает с того же места, вместо того чтобы пропускать песню.
+
+<!-- en -->
+**New**
+- The seek bar takes the cover's color for music, like the animation behind it. Without a cover it keeps the theme's color.
+
+**Fixes**
+- Covers of songs from the web (Spotify, YouTube, Deezer) didn't show in the player itself, though the list and Discord had them. They show now, and a cover found while the song plays appears at once.
+- When YouTube now and then turns a stream down (error 403), Pylon fetches a fresh address once and carries on from the same place instead of skipping the song.
+
 ## 1.9.11
 
 <!-- ru -->

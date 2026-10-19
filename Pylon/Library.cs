@@ -462,7 +462,7 @@ public static class Library
     static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
     /// <summary>Small decoded image from a file path, file:// or http(s) URL. Call off the UI thread for web images.</summary>
-    public static ImageSource? LoadImage(string uri)
+    public static ImageSource? LoadImage(string uri, int width = 96)
     {
         try
         {
@@ -473,7 +473,7 @@ public static class Library
             else
                 bmp.UriSource = new Uri(uri);
             bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.DecodePixelWidth = 96;
+            bmp.DecodePixelWidth = width;
             bmp.EndInit();
             bmp.Freeze();
             return bmp;
