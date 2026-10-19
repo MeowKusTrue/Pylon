@@ -100,15 +100,8 @@ public static class YtDlp
         {
             try
             {
-                var url = src;
-                TrackMeta? meta = null;
-                if (src.StartsWith("ytsearch://") && Library.Data.Meta.GetValueOrDefault(src) is { Title: { } title, Artist: { } artist } m)
-                {
-                    meta = m;
-                    var id = m.YouTubeId ?? await YtMusic.FindAsync(title, artist, m.DurationMs / 1000.0, m.Isrc);
-                    if (id != null && m.YouTubeId != id) { m.YouTubeId = id; Library.Touch(); }
-                    if (id != null) url = "https://music.youtube.com/watch?v=" + id;
-                }
+                var url = await PageOf(src);
+                var meta = src.StartsWith("ytsearch://") ? Library.Data.Meta.GetValueOrDefault(src) : null;
                 var s = await ResolveAsync(url, maxHeight, audioOnly);
                 if (s == null && meta?.YouTubeId != null) { meta.YouTubeId = null; s = await ResolveAsync(src, maxHeight, audioOnly); } // the video went away: search again
                 if (s is { Live: false }) Ready[src] = (s, DateTime.UtcNow + Lifetime(s.Url));
@@ -141,10 +134,7 @@ public static class YtDlp
     {
         var psi = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         foreach (var a in new[] { "-J", "--no-warnings", "--no-progress" }.Concat(args.SkipLast(1))) psi.ArgumentList.Add(a);
-        if (JsRuntime is { } js and not "deno") { psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add(js); }
-        // a signed-in browser gets past "confirm you're not a bot" and age checks
-        if (Settings.Str("net.cookies") is { Length: > 0 } browser && browser != "Off") { psi.ArgumentList.Add("--cookies-from-browser"); psi.ArgumentList.Add(browser.ToLowerInvariant()); }
-        AddProxy(psi, Proxy); // the same one StreamRelay uses
+        Common(psi);
         psi.ArgumentList.Add(args[^1]);
         LastError = null;
         try
@@ -161,6 +151,54 @@ public static class YtDlp
             return null;
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or JsonException or InvalidOperationException) { return null; }
+    }
+
+    /// <summary>What every run needs: the JavaScript runtime, the browser's sign-in, the proxy.</summary>
+    static void Common(ProcessStartInfo psi)
+    {
+        if (JsRuntime is { } js and not "deno") { psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add(js); }
+        // a signed-in browser gets past "confirm you're not a bot" and age checks
+        if (Settings.Str("net.cookies") is { Length: > 0 } browser && browser != "Off") { psi.ArgumentList.Add("--cookies-from-browser"); psi.ArgumentList.Add(browser.ToLowerInvariant()); }
+        AddProxy(psi, Proxy); // the same one StreamRelay uses
+    }
+
+    /// <summary>
+    /// The page a queue item plays from: a web song's exact YouTube Music video (found once by ISRC or name, then
+    /// remembered), else the item itself. UI thread (the library index isn't thread-safe).
+    /// </summary>
+    public static async Task<string> PageOf(string src)
+    {
+        if (!src.StartsWith("ytsearch://") || Library.Data.Meta.GetValueOrDefault(src) is not { Title: { } title, Artist: { } artist } m) return src;
+        var id = m.YouTubeId ?? await YtMusic.FindAsync(title, artist, m.DurationMs / 1000.0, m.Isrc);
+        if (id != null && m.YouTubeId != id) { m.YouTubeId = id; Library.Touch(); }
+        return id != null ? "https://music.youtube.com/watch?v=" + id : src;
+    }
+
+    /// <summary>
+    /// A song's sound saved as <paramref name="stem"/>.m4a (or the best audio there is), as the site has it: no
+    /// re-encoding, no ffmpeg. The saved file's path; null when it failed.
+    /// </summary>
+    public static async Task<string?> DownloadAudioAsync(string page, string stem)
+    {
+        if (page.StartsWith("ytsearch://")) page = "ytsearch1:" + Uri.UnescapeDataString(page["ytsearch://".Length..]);
+        var psi = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in new[] { "--no-warnings", "--no-progress", "--no-playlist", "-f", "ba[ext=m4a]/ba", "-o", stem + ".%(ext)s", "--print", "after_move:filepath" })
+            psi.ArgumentList.Add(a);
+        Common(psi);
+        psi.ArgumentList.Add(page);
+        try
+        {
+            using var p = Process.Start(psi)!;
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            try { await p.WaitForExitAsync(cancel.Token); }
+            catch (OperationCanceledException) { p.Kill(entireProcessTree: true); return null; }
+            _ = await stderr;
+            var file = (await stdout).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+            return p.ExitCode == 0 && file != null && File.Exists(file) ? file : null;
+        }
+        catch (System.ComponentModel.Win32Exception) { return null; }
     }
 
     /// <summary>Downloads the official yt-dlp.exe (about 18 MB); false on failure.</summary>
@@ -357,9 +395,12 @@ public static class YtMusic
             var runs = Runs(cols[1]).ToList();
             var artists = runs.Where(x => x.Page == "MUSIC_PAGE_TYPE_ARTIST").Select(x => x.Text).ToList();
             var duration = runs.LastOrDefault(x => System.Text.RegularExpressions.Regex.IsMatch(x.Text ?? "", @"^\d+(:\d{2}){1,2}$")).Text;
+            var art = Find(r, "thumbnails").FirstOrDefault() is { ValueKind: JsonValueKind.Array } th && th.GetArrayLength() > 0
+                && th[th.GetArrayLength() - 1].TryGetProperty("url", out var u) ? u.GetString() : null;
             hits.Add(new Hit(id, title, artists.Count > 0 ? string.Join(", ", artists) : runs.FirstOrDefault().Text ?? "",
                 runs.FirstOrDefault(x => x.Page == "MUSIC_PAGE_TYPE_ALBUM").Text,
-                duration == null ? 0 : duration.Split(':').Aggregate(0.0, (acc, part) => acc * 60 + int.Parse(part))));
+                duration == null ? 0 : duration.Split(':').Aggregate(0.0, (acc, part) => acc * 60 + int.Parse(part)),
+                art == null ? null : System.Text.RegularExpressions.Regex.Replace(art, @"=w\d+-h\d+", "=w300-h300")));
         }
         return hits;
     }

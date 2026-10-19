@@ -18,6 +18,7 @@ public class Playlist
     public List<string> Items { get; set; } = [];
     public string? Source { get; set; }    // the Spotify link it was imported from: kept in step with it; "liked": the radio's likes
     public DateTime? LastSync { get; set; }
+    public bool Offline { get; set; }      // its web songs are downloaded, and so are songs a Spotify sync adds
 }
 
 public class SavedStream
@@ -107,24 +108,56 @@ public static class Library
         Data.Subtitles = new(Data.Subtitles, StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>Writes the library now (on quitting); a save still waiting is folded into this one.</summary>
     public static void Save()
     {
-        var tmp = FilePath + ".tmp";
-        try
+        _saveTimer?.Stop();
+        Write(JsonSerializer.Serialize(Data, Json), Interlocked.Increment(ref _version));
+    }
+
+    static readonly object SaveLock = new();
+    static long _version, _written;
+    static DispatcherTimer? _saveTimer;
+
+    /// <summary>One write at a time, and never an older library over a newer one (a late background write after the last save).</summary>
+    static void Write(string json, long version)
+    {
+        lock (SaveLock)
         {
-            Directory.CreateDirectory(Dir);
-            File.WriteAllText(tmp, JsonSerializer.Serialize(Data, Json));
-            File.Move(tmp, FilePath, true); // atomic replace: a crash mid-write can't eat the library
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            try { File.Delete(tmp); } catch (IOException) { } // disk full: keep the last good file, the next save tries again
+            if (version <= _written) return;
+            var tmp = FilePath + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, FilePath, true); // atomic replace: a crash mid-write can't eat the library
+                _written = version;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                try { File.Delete(tmp); } catch (IOException) { } // disk full: keep the last good file, the next save tries again
+            }
         }
     }
 
+    /// <summary>
+    /// Something changed: lists redraw now, the file is written within 1.5 s, once for every change in between. It used to
+    /// be written on the UI thread at every change: a cover found, a play counted, a radio page; with a big music folder
+    /// that's megabytes each time.
+    /// </summary>
     public static void Touch()
     {
-        Save();
+        if (Application.Current?.Dispatcher is { } ui && ui.CheckAccess())
+        {
+            _saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, (_, _) =>
+            {
+                _saveTimer!.Stop();
+                var (json, version) = (JsonSerializer.Serialize(Data, Json), Interlocked.Increment(ref _version)); // read on the UI thread, written off it
+                Task.Run(() => Write(json, version));
+            }, ui);
+            if (!_saveTimer.IsEnabled) _saveTimer.Start();
+        }
+        else Save();
         Changed?.Invoke();
         ShellRegistration.MusicMenu(); // Explorer's "Add to Music" follows the music folders (nothing to do when they're the same)
     }
@@ -371,6 +404,34 @@ public static class Library
             .OrderByDescending(s => s.Value).Select(s => (s.Key, s.Value))];
     }
 
+    // ───────── songs by name ─────────
+
+    static Dictionary<string, List<string>>? _songs;
+    static int _songsFor = -1;
+
+    /// <summary>"The Beatles" and "the beatles!" alike: lower case, letters and digits only.</summary>
+    public static string SongName(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
+
+    /// <summary>
+    /// The library file of a song (Spotify import, radio): same title, and the first named artist among its artists. Names
+    /// are looked up in a table built once (the disk is asked only about a match); it used to walk the whole library for
+    /// every song of an import or a radio page.
+    /// </summary>
+    public static string? FindSong(string title, string artist)
+    {
+        // ponytail: rebuilt when the number of known songs changes, not on a retag of one file (rare; a restart fixes it)
+        if (_songs == null || _songsFor != Data.Meta.Count)
+        {
+            _songs = [];
+            foreach (var (path, m) in Data.Meta)
+                if (m.Title is { Length: > 0 } t && !path.Contains("://"))
+                    (_songs.TryGetValue(SongName(t), out var list) ? list : _songs[SongName(t)] = []).Add(path);
+            _songsFor = Data.Meta.Count;
+        }
+        var who = SongName(artist.Split(',')[0]);
+        return _songs.GetValueOrDefault(SongName(title))?.FirstOrDefault(p => SongName(Data.Meta.GetValueOrDefault(p)?.Artist ?? "").Contains(who) && File.Exists(p));
+    }
+
     // ───────── thumbnails ─────────
 
     static readonly ConcurrentDictionary<string, ImageSource?> Thumbs = new(StringComparer.OrdinalIgnoreCase);
@@ -390,6 +451,7 @@ public static class Library
             // Windows' own thumbnail first (fast, cached); for videos it can't preview, a frame through libVLC
             var img = await Task.Run(() => art != null ? LoadImage(art) : path.Contains("://") ? null
                 : ShellThumbnail(path, 96) ?? (MainWindow.VideoExt.Contains(Path.GetExtension(path)) ? Frames.Thumbnail(path, 160) : null));
+            if (Thumbs.Count > 1500) Thumbs.Clear(); // ponytail: a whole-cache drop, not LRU; 1500 small covers ≈ 55 MB at most
             return Thumbs[path] = img;
         }
         finally { ThumbGate.Release(); }

@@ -3,6 +3,40 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.10
+
+<!-- ru -->
+**Новое**
+- **Плейлисты офлайн.** Правый клик по плейлисту → «Скачать для офлайна»: песни из интернета сохраняются в папку (по умолчанию «Музыка\Pylon», меняется в Настройки → Библиотека) и дальше играют сразу, без сети и прокси, с теми же названиями, обложками и текстами. Новые песни, которые придут при обновлении плейлиста из Spotify, тоже скачиваются.
+- **YouTube Music в поиске.** Поиск по библиотеке показывает под вашими файлами песни из YouTube Music с обложками: щелчок включает песню, а правый клик ставит её следующей, в очередь или запускает по ней радио. Отключается в Настройки → Библиотека.
+- **Обложка в Discord.** В статусе «Слушает» видна обложка песни: для песен из Spotify и YouTube — их собственная, для своих файлов — обложка альбома с Deezer.
+- **Лайки умнее.** «Нравится» ставит ♥ в Last.fm, а радио после лайков подбирает каждую вторую порцию песен по тому, что вам понравилось.
+- **Умные плейлисты учитывают песни из Spotify и радио**, а не только файлы на диске. Добавлен «Давно не слушал»: песни, которые вы слушали часто, но не последний месяц.
+
+**Исправления**
+- У плейлистов, импортированных из Spotify раньше, в боковой панели не было обложек. Теперь Pylon сам подтягивает недостающие обложки песен, а плейлист без своей обложки показывает обложку первой песни.
+
+**Быстрее**
+- Библиотека больше не переписывается целиком на диск при каждом изменении (сыгранная песня, найденная обложка, порция радио). Изменения собираются и записываются раз в полторы секунды в фоне и при выходе. С большой папкой музыки окно больше не подтормаживает.
+- Песни из Spotify и радио сопоставляются с вашими файлами через указатель по названиям, а не перебором всей библиотеки.
+- Кэш миниатюр больше не растёт без предела.
+
+<!-- en -->
+**New**
+- **Offline playlists.** Right-click a playlist → Download for Offline: its songs from the web are saved into a folder (Music\Pylon by default, changeable in Settings → Library) and then play at once, without a connection or a proxy, with the same names, covers and lyrics. Songs a Spotify update adds later come down too.
+- **YouTube Music in search.** The library search lists songs from YouTube Music, with covers, under your own files: a click plays one, a right-click plays it next, queues it or starts a radio from it. It can be turned off in Settings → Library.
+- **Cover art in Discord.** "Listening to" shows the song's cover: their own for songs from Spotify and YouTube, the album cover from Deezer for your files.
+- **Smarter likes.** Like gives the song a ♥ on Last.fm, and after a like the radio picks every other batch from what you liked.
+- **Smart playlists count songs from Spotify and the radio**, not only files on disk. New: Forgotten Favorites, songs you played often but not in the last month.
+
+**Fixes**
+- Playlists imported from Spotify with earlier versions had no covers in the sidebar. Pylon now fetches the missing song covers itself, and a playlist without a cover of its own shows its first song's.
+
+**Faster**
+- The library is no longer rewritten to disk whole on every change (a song played, a cover found, a radio batch). Changes are gathered and written every second and a half in the background, and on exit. With a big music folder the window no longer stutters.
+- Songs from Spotify and the radio find your files through an index by name instead of a pass over the whole library.
+- The thumbnail cache no longer grows without limit.
+
 ## 1.9.9
 
 <!-- ru -->

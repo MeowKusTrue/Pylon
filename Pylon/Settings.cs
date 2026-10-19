@@ -698,7 +698,9 @@ public static class Settings
                     "Frames for FLV, RMVB, VOB and other formats Windows can't show, through the free Icaros extension.")),
             Sec("Metadata & Artwork",
                 C("library.artsource", "Fetch titles and artwork", "From the file only", ["From the file only", "From the internet too"], "Same as the internet option under Privacy."),
-                T("library.enabled", "Use the media library", true, "Show the library sidebar.")),
+                T("library.enabled", "Use the media library", true, "Show the library sidebar."),
+                Dir("library.offline", "Folder for offline playlists", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "Pylon")),
+                T("library.websearch", "Search YouTube Music too", true, "The library search also lists songs from YouTube Music to play, queue or start a radio from. What you type is sent to YouTube.")),
         ], []),
 
         new("Network", "broadcast", "Network Connections & Security", "System",

@@ -21,7 +21,8 @@ public sealed class Discord : IDisposable
 
     /// <summary>Shows the track; null clears it. Quietly does nothing when Discord isn't running.</summary>
     /// <param name="join">A Watch Together room: the profile shows a "Watch together" button that opens it.</param>
-    public async Task SetAsync(string? title, string? artist, bool audio, long positionMs, long lengthMs, bool playing, string? join = null)
+    /// <param name="cover">The song's cover as a web address (Discord shows only those); null: Pylon's logo.</param>
+    public async Task SetAsync(string? title, string? artist, bool audio, long positionMs, long lengthMs, bool playing, string? join = null, string? cover = null, string? album = null)
     {
         if (!Possible) return;
         await _gate.WaitAsync();
@@ -36,7 +37,9 @@ public sealed class Discord : IDisposable
                 timestamps = playing && lengthMs > 0
                     ? new { start = DateTimeOffset.UtcNow.AddMilliseconds(-positionMs).ToUnixTimeMilliseconds(), end = DateTimeOffset.UtcNow.AddMilliseconds(lengthMs - positionMs).ToUnixTimeMilliseconds() }
                     : null,
-                assets = new { large_image = "pylon", large_text = "Pylon", small_image = playing ? "play" : "pause" },
+                assets = cover is { Length: <= 256 }
+                    ? new { large_image = cover, large_text = Trim(album ?? title), small_image = playing ? "play" : "pause", small_text = "Pylon" }
+                    : new { large_image = "pylon", large_text = "Pylon", small_image = playing ? "play" : "pause", small_text = (string?)null },
                 buttons = join == null ? null : new[] { new { label = Trim(L.T("Watch together")), url = join } },
             };
             await SendAsync(1, new { cmd = "SET_ACTIVITY", nonce = Guid.NewGuid().ToString(), args = new { pid = Environment.ProcessId, activity } });

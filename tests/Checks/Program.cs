@@ -76,6 +76,18 @@ Check("name from file", Library.FromFileName(@"C:\m\01. Лолита - Орие�
 
 Check("artist across scripts", Covers.Same("Lolita", "Лолита") && !Covers.Same("Madonna", "Лолита"));
 
+// ── a song from Spotify / the radio finds the library file: title and first artist, case and punctuation aside
+{
+    var song = Path.Combine(Path.GetTempPath(), $"pylon-check-{Guid.NewGuid():N}.mp3");
+    File.WriteAllText(song, "");
+    Library.Data.Meta[song] = new TrackMeta { Title = "Hello", Artist = "Adele" };
+    var found = Library.FindSong("hello!", "Adele, Someone Else");
+    var none = Library.FindSong("Hello", "Lionel Richie");
+    Library.Data.Meta.Remove(song);
+    File.Delete(song);
+    Check("library finds a song by name", found == song && none == null);
+}
+
 // ── lyrics "from the cover": a dark cover's tone is lightened on a dark background, a pale one darkened on a light one,
 // keeping its hue
 {

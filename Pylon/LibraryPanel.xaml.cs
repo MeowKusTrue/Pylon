@@ -212,6 +212,7 @@ public partial class LibraryPanel : UserControl
 
         var q = SearchBox.Text.Trim();
         if (q.Length > 0) rows = rows.Where(r => !r.IsHeader && r.Sortable && r.Title.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        var web = WebRows(q);
         if (!rows.Any(r => r.IsHeader))
         {
             var fixedRows = rows.Where(r => !r.Sortable);
@@ -223,6 +224,7 @@ public partial class LibraryPanel : UserControl
             if (page.Section is Section.History or Section.Queue) sorted = rows.Where(r => r.Sortable); // keep chronological / queue order
             rows = fixedRows.Concat(sorted).ToList();
         }
+        if (web.Count > 0) rows = [.. rows, .. web];
         List.ItemsSource = rows;
 
         var count = rows.Count(r => !r.IsHeader && !r.IsAction);
@@ -485,16 +487,24 @@ public partial class LibraryPanel : UserControl
         .. Library.Data.Playlists.Select(PlaylistRow),
     ]);
 
-    /// <summary>Playlists that fill themselves from what you play and add (music only, 50 at most).</summary>
+    /// <summary>
+    /// Playlists that fill themselves from what you play and add (music only, 50 at most). Songs from Spotify imports and
+    /// the radio count too: they used to be left out (only files on disk), and they're most of what some people play.
+    /// </summary>
     static readonly (string Title, string Glyph, Func<List<string>> Files)[] Smart =
     [
-        ("Most Played", "fire", () => [.. Library.Data.History.Where(h => h.Value.IsAudio && h.Value.Plays > 0 && File.Exists(h.Key))
+        ("Most Played", "fire", () => [.. PlayedSongs().Where(h => h.Value.Plays > 0)
             .OrderByDescending(h => h.Value.Plays).ThenByDescending(h => h.Value.LastPlayed).Take(50).Select(h => h.Key)]),
-        ("Recently Played", "clock-counter-clockwise", () => [.. Library.Data.History.Where(h => h.Value.IsAudio && File.Exists(h.Key))
-            .OrderByDescending(h => h.Value.LastPlayed).Take(50).Select(h => h.Key)]),
+        ("Recently Played", "clock-counter-clockwise", () => [.. PlayedSongs().OrderByDescending(h => h.Value.LastPlayed).Take(50).Select(h => h.Key)]),
+        ("Forgotten Favorites", "music-notes", () => [.. PlayedSongs().Where(h => h.Value.Plays >= 3 && DateTime.Now - h.Value.LastPlayed > TimeSpan.FromDays(30))
+            .OrderByDescending(h => h.Value.Plays).Take(50).Select(h => h.Key)]),
         ("Recently Added", "sparkle", () => [.. Library.Data.Meta.Keys.Where(File.Exists)
             .OrderByDescending(File.GetCreationTimeUtc).Take(50)]),
     ];
+
+    /// <summary>Songs in the history that can still play: files that exist, and songs found on the web when they play.</summary>
+    static IEnumerable<KeyValuePair<string, HistoryEntry>> PlayedSongs() =>
+        Library.Data.History.Where(h => h.Value.IsAudio && (h.Key.StartsWith("ytsearch://") || h.Key.StartsWith("http") || File.Exists(h.Key)));
 
     Page SmartPage(string title, Func<List<string>> files) => new(Section.Playlists, [new(L.T("Playlists"), Playlists), new(L.T(title), null)], () =>
     {
@@ -555,7 +565,9 @@ public partial class LibraryPanel : UserControl
 
     Row PlaylistRow(Playlist p) => new()
     {
-        Title = p.Name, Glyph = "playlist", Image = p.Thumb,
+        Title = p.Name, Glyph = "playlist",
+        // no cover of its own (made by hand, or imported before covers were saved): its first song's cover
+        Image = p.Thumb ?? p.Items.Take(50).Select(i => Library.Data.Meta.GetValueOrDefault(i)?.Art).FirstOrDefault(a => a != null),
         Click = () => Navigate(PlaylistPage(p)),
         Menu = () => PlaylistMenu(p),
     };
@@ -600,6 +612,8 @@ public partial class LibraryPanel : UserControl
     [
         Item("Play", "play", () => Player.PlayList(p.Items.ToList(), 0)),
         Item("Add to Queue", "queue", () => Player.Enqueue(p.Items)),
+        .. Player.IsDownloading(p) ? new object[] { Item("Stop Downloading", "x", () => { p.Offline = false; Library.Touch(); }) }
+            : p.Items.Any(i => i.Contains("://")) ? [Item("Download for Offline", "arrow-down", () => Player.DownloadPlaylist(p))] : [],
         new Separator(),
         Item("Rename…", "pencil-simple", () =>
         {
@@ -706,6 +720,57 @@ public partial class LibraryPanel : UserControl
     }
 
     void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
+
+    // ───────── YouTube Music in the search ─────────
+
+    string _webQuery = "";
+    List<YtMusic.Hit> _webHits = [];
+    CancellationTokenSource? _webSearch;
+
+    /// <summary>
+    /// Under the library's own matches: songs from YouTube Music (from 3 letters, 0.4 s after typing stops). A click plays
+    /// one; its menu queues it or starts a radio from it.
+    /// </summary>
+    List<Row> WebRows(string q)
+    {
+        if (q.Length < 3 || !Settings.Bool("library.websearch")) { _webQuery = ""; _webHits = []; _webSearch?.Cancel(); return []; }
+        if (q != _webQuery)
+        {
+            _webQuery = q;
+            _webSearch?.Cancel();
+            var cancel = _webSearch = new CancellationTokenSource();
+            _ = Find();
+            async Task Find()
+            {
+                try
+                {
+                    await Task.Delay(400, cancel.Token);
+                    var hits = await YtMusic.SearchSongsAsync(q);
+                    if (cancel.IsCancellationRequested || q != _webQuery) return;
+                    _webHits = [.. hits.Take(8)];
+                    Render();
+                }
+                catch (Exception e) when (e is OperationCanceledException or System.Net.Http.HttpRequestException or System.Text.Json.JsonException) { }
+            }
+        }
+        if (_webHits.Count == 0) return [];
+        return
+        [
+            new Row { IsHeader = true, Title = "YouTube Music", Sortable = false },
+            .. _webHits.Select(h => new Row
+            {
+                Title = $"{h.Title} - {h.Artist}", Image = h.Art ?? "", Sortable = false, Placeholder = "music-note",
+                Click = () => Player.PlayList([MainWindow.WebSong(h)], 0),
+                Menu = () =>
+                [
+                    Item("Play", "play", () => Player.PlayList([MainWindow.WebSong(h)], 0)),
+                    Item("Play Next", "skip-forward", () => Player.PlayNext([MainWindow.WebSong(h)])),
+                    Item("Add to Queue", "queue", () => Player.Enqueue([MainWindow.WebSong(h)])),
+                    Item("Radio by This Song", "radio", () => Player.StartRadio(MainWindow.WebSong(h))),
+                ],
+            }),
+        ];
+    }
 
     void SearchBox_KeyDown(object sender, KeyEventArgs e)
     {

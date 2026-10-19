@@ -123,15 +123,10 @@ public static class SpotifyImport
     /// </summary>
     public static List<string> Resolve(List<Track> tracks)
     {
-        static string N(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
-        // names compared first, the disk asked only about a match: checking every library file each time held the UI ~250 ms
-        var local = Library.Data.Meta.Where(m => m.Value.Title is { Length: > 0 } && !m.Key.Contains("://"))
-            .Select(m => (m.Key, Title: N(m.Value.Title!), Artist: N(m.Value.Artist ?? ""))).ToList();
         var items = new List<string>();
         foreach (var t in tracks)
         {
-            var (title, artist) = (N(t.Title), N(t.Artist.Split(',')[0]));
-            var file = local.FirstOrDefault(m => m.Title == title && m.Artist.Contains(artist) && System.IO.File.Exists(m.Key)).Key;
+            var file = Library.FindSong(t.Title, t.Artist);
             var item = file ?? "ytsearch://" + Uri.EscapeDataString($"{t.Artist} - {t.Title}");
             if (file != null) Library.Data.Meta[file].SpotifyId = t.Id is { Length: > 0 } ? t.Id : Library.Data.Meta[file].SpotifyId;
             else

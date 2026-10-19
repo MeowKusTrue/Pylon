@@ -52,6 +52,9 @@ public static class LastFm
     public static Task ScrobbleAsync(string artist, string track, string? album, double seconds, DateTime startedUtc) =>
         CallAsync("track.scrobble", new(Track(artist, track, album, seconds)) { ["timestamp"] = new DateTimeOffset(startedUtc).ToUnixTimeSeconds().ToString() }, post: true);
 
+    /// <summary>"Like" in Pylon is a ♥ on Last.fm too.</summary>
+    public static Task LoveAsync(string artist, string track) => CallAsync("track.love", new() { ["artist"] = artist, ["track"] = track }, post: true);
+
     static Dictionary<string, string> Track(string artist, string track, string? album, double seconds)
     {
         var p = new Dictionary<string, string> { ["artist"] = artist, ["track"] = track };
