@@ -243,6 +243,7 @@ public partial class MainWindow
                 case "remoteopen": OpenOtherPlayer(); break;
                 case "import": ImportSpotify(arg); break; // a Spotify link imported like the user does it
                 case "radio": StartRadio(); break;
+                case "browsers": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", BrowserCookies.Installed().Select(b => $"{b}{(BrowserCookies.IsDefault(b) ? "*" : "")}: {string.Join(", ", BrowserCookies.Profiles(b).Select(x => $"{x.Name}={x.Id}"))}")) + Environment.NewLine); break;
                 case "offline": // a playlist downloaded like the menu does it; waits until it's done
                     {
                         var pl = Library.Data.Playlists.First(x => x.Name == arg);

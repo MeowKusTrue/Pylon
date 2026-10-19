@@ -12,6 +12,9 @@ public class Spectrum : FrameworkElement
     readonly double[] _levels = new double[Bars];
     bool _active, _idle, _hooked, _tapped;
     SolidColorBrush? _brush;
+
+    /// <summary>The song's cover color instead of the theme's accent (null: the accent).</summary>
+    public Color? Tint { get; set; }
     internal bool DebugHooked => _hooked;
 
     public Spectrum()
@@ -109,7 +112,7 @@ public class Spectrum : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         if (!_hooked || ActualWidth <= 0) return;
-        var color = (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
+        var color = Tint ?? (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
         if (_brush?.Color != color) { _brush = new SolidColorBrush(color); _brush.Freeze(); } // not a new brush 30 times a second
         double w = ActualWidth, h = ActualHeight;
         switch (Style)

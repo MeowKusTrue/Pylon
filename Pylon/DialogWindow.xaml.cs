@@ -330,7 +330,7 @@ public partial class DialogWindow : Window
         "YouTube, Twitch, VK, Rutube, SoundCloud and about 1,800 other sites play through yt-dlp, a free open-source tool. Pylon can download it now (about 18 MB from github.com/yt-dlp) and keep it up to date.");
 
     /// <summary>Pick one of several lines (a button each); -1 when cancelled.</summary>
-    public static int Choose(Window owner, string title, string heading, IReadOnlyList<string> options)
+    public static int Choose(Window owner, string title, string heading, IReadOnlyList<string> options, string text = "")
     {
         var chosen = -1;
         DialogWindow? dlg = null;
@@ -347,7 +347,7 @@ public partial class DialogWindow : Window
             b.Click += (_, _) => { chosen = k; dlg!.DialogResult = true; };
             list.Children.Add(b);
         }
-        dlg = new DialogWindow(owner, title, Stack(Section(L.T(heading), ""), new ScrollViewer { Content = list, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Spacer(8))) { Width = 640 };
+        dlg = new DialogWindow(owner, title, Stack(Section(L.T(heading), text.Length > 0 ? L.T(text) : ""), new ScrollViewer { Content = list, MaxHeight = 380, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }, Spacer(8))) { Width = 640 };
         dlg.SaveBtn.Visibility = Visibility.Collapsed;
         dlg.Run(() => true);
         return chosen;

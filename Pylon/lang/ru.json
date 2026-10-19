@@ -881,7 +881,6 @@
   "Minimizing hides Pylon to the tray; click the icon to bring it back.": "Свёрнутый Pylon прячется в трей; щёлкните по иконке, чтобы вернуть.",
   "Resumes a few seconds after the other sound stops.": "Продолжит через несколько секунд после того, как другой звук стихнет.",
   "Sign in to websites with cookies from": "Входить на сайты с cookies из",
-  "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks.": "Для YouTube и других сайтов через yt-dlp: помогает пройти проверку «подтвердите, что вы не бот» и возрастные ограничения.",
   "Music only: the next song fades in while this one fades out. 0 turns it off.": "Только для музыки: следующая песня нарастает, пока текущая затихает. 0 — выключено.",
   "Unpin from Sidebar": "Открепить от боковой панели",
   "Convert…": "Конвертировать…",
@@ -1212,5 +1211,15 @@
   "Lyrics sooner": "Текст раньше",
   "Lyrics Later by {0} s (the recording's intro)": "Текст позже на {0} с (вступление записи)",
   "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.": "Эта запись на {0} с длиннее оригинала. Если текст спешит: Shift+G или правый клик → Текст песни.",
-  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "Эта запись на {0} с короче оригинала. Если текст отстаёт: Shift+H или правый клик → Текст песни."
+  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "Эта запись на {0} с короче оригинала. Если текст отстаёт: Shift+H или правый клик → Текст песни.",
+  "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks. Pylon asks the first time a site wants it. Firefox works best; Chrome, Edge and the like have to be closed, and newer versions keep their cookies locked.": "Для YouTube и других сайтов через yt-dlp: помогает пройти проверку «подтвердите, что вы не бот» и возрастные ограничения. Pylon спросит сам, когда сайт этого потребует. Лучше всего работает Firefox; Chrome, Edge и похожие нужно закрыть, а новые версии вообще не отдают свои cookies.",
+  "cookies.txt file": "Файл cookies.txt",
+  "{0} (your main browser)": "{0} (основной браузер)",
+  "A cookies.txt file…": "Файл cookies.txt…",
+  "Sign In to YouTube": "Вход в YouTube",
+  "YouTube wants you signed in": "YouTube просит войти",
+  "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.": "Для видео с возрастным ограничением и проверки «подтвердите, что вы не бот» Pylon может взять вход из браузера, где вы вошли в YouTube. Cookies остаются на этом компьютере и уходят только в YouTube. Лучше всего работает Firefox; Chrome или Edge перед этим нужно закрыть.",
+  "Which {0} profile is signed in to YouTube?": "В каком профиле {0} вы вошли в YouTube?",
+  "{0} (the one in use)": "{0} (используется сейчас)",
+  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Не удалось взять вход из браузера. Закройте браузер и попробуйте снова или выберите Firefox либо файл cookies.txt в Настройки → Сеть."
 }

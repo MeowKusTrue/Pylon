@@ -3,6 +3,24 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.13
+
+<!-- ru -->
+**Новое**
+- **Вход в YouTube через браузер.** Когда YouTube просит войти (видео 18+ или «подтвердите, что вы не бот»), Pylon спрашивает, откуда взять вход: из основного браузера, из другого установленного, из нужного профиля или из файла cookies.txt. Потом песня включается снова. Профиль, которым пользуется основной Firefox, стоит в списке первым. Если браузер не отдал свой вход (Chrome или Edge открыты либо заблокированы), Pylon объясняет, что сделать. Выбор меняется в Настройки → Сеть.
+- **Визуализатор под обложкой окрашивается в цвет обложки,** как полноэкранный. Без обложки остаётся цвет темы.
+
+**Исправления**
+- Полоска перемотки снова в цвете темы, как раньше. В 1.9.12 по ошибке в цвет обложки перекрасилась она, а не визуализатор.
+
+<!-- en -->
+**New**
+- **Sign in to YouTube through your browser.** When YouTube wants you signed in (age-restricted videos, or "confirm you're not a bot"), Pylon asks where to take the sign-in from: your main browser, another installed one, a particular profile, or a cookies.txt file. Then the song plays again. The profile your main Firefox uses comes first in the list. When a browser won't give up its sign-in (Chrome or Edge open or locked), Pylon says what to do. The choice can be changed in Settings → Network.
+- **The visualizer under the cover takes the cover's color,** like the full-screen one. Without a cover it keeps the theme's color.
+
+**Fixes**
+- The seek bar is back in the theme's color. In 1.9.12 it was recolored by mistake instead of the visualizer.
+
 ## 1.9.12
 
 <!-- ru -->

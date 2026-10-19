@@ -114,6 +114,9 @@ public static class YtDlp
         }
     }
 
+    /// <summary>The site wants a signed-in viewer: an age check, or "confirm you're not a bot".</summary>
+    public static bool WantsSignIn(string? error) => error != null && (error.Contains("Sign in to confirm", StringComparison.OrdinalIgnoreCase) || error.Contains("--cookies"));
+
     /// <summary>The address resolved for an item stopped working: the next play asks yt-dlp again.</summary>
     public static void Forget(string src) => Ready.TryRemove(src, out _);
 
@@ -166,8 +169,15 @@ public static class YtDlp
     static void Common(ProcessStartInfo psi)
     {
         if (JsRuntime is { } js and not "deno") { psi.ArgumentList.Add("--js-runtimes"); psi.ArgumentList.Add(js); }
-        // a signed-in browser gets past "confirm you're not a bot" and age checks
-        if (Settings.Str("net.cookies") is { Length: > 0 } browser && browser != "Off") { psi.ArgumentList.Add("--cookies-from-browser"); psi.ArgumentList.Add(browser.ToLowerInvariant()); }
+        // a signed-in browser gets past "confirm you're not a bot" and age checks: "Firefox", "Chrome:Profile 1", or a file
+        var cookies = Settings.Str("net.cookies");
+        if (cookies == "cookies.txt") { if (Settings.Str("net.cookiefile") is { Length: > 0 } file) { psi.ArgumentList.Add("--cookies"); psi.ArgumentList.Add(file); } }
+        else if (cookies.Length > 0 && cookies != "Off")
+        {
+            var colon = cookies.IndexOf(':');
+            psi.ArgumentList.Add("--cookies-from-browser");
+            psi.ArgumentList.Add(colon < 0 ? cookies.ToLowerInvariant() : cookies[..colon].ToLowerInvariant() + ":" + cookies[(colon + 1)..]); // a profile keeps its case
+        }
         AddProxy(psi, Proxy); // the same one StreamRelay uses
     }
 
@@ -577,5 +587,85 @@ public static class StreamRelay
         var b = System.Text.Encoding.UTF8.GetBytes(body ?? "");
         await net.WriteAsync(System.Text.Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\nContent-Length: {b.Length}\r\nConnection: close\r\n\r\n"));
         await net.WriteAsync(b);
+    }
+}
+
+/// <summary>
+/// Browsers yt-dlp can take a sign-in from (cookies), the one Windows opens links with, and their profiles. Only reads
+/// folder names and the browsers' own profile lists; the cookies themselves are read by yt-dlp when a site needs them.
+/// </summary>
+public static class BrowserCookies
+{
+    record Browser(string Name, string ProgId, string Dir, bool Firefox);
+
+    static readonly Browser[] All =
+    [
+        new("Firefox", "FirefoxURL", @"%APPDATA%\Mozilla\Firefox", true),
+        new("Chrome", "ChromeHTML", @"%LOCALAPPDATA%\Google\Chrome\User Data", false),
+        new("Edge", "MSEdgeHTM", @"%LOCALAPPDATA%\Microsoft\Edge\User Data", false),
+        new("Brave", "BraveHTML", @"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data", false),
+        new("Vivaldi", "VivaldiHTM", @"%LOCALAPPDATA%\Vivaldi\User Data", false),
+        new("Opera", "OperaStable", @"%APPDATA%\Opera Software\Opera Stable", false),
+    ];
+
+    static string DirOf(Browser b) => Environment.ExpandEnvironmentVariables(b.Dir);
+
+    /// <summary>Installed browsers, the one Windows opens links with first.</summary>
+    public static List<string> Installed()
+    {
+        using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
+        var progId = k?.GetValue("ProgId") as string ?? "";
+        return [.. All.Where(b => Directory.Exists(DirOf(b))).OrderByDescending(b => progId.StartsWith(b.ProgId, StringComparison.OrdinalIgnoreCase)).Select(b => b.Name)];
+    }
+
+    public static bool IsDefault(string name)
+    {
+        using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
+        return All.FirstOrDefault(b => b.Name == name) is { } b && (k?.GetValue("ProgId") as string ?? "").StartsWith(b.ProgId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A browser's profiles: what yt-dlp is told (a folder name, or Firefox's profile path) and the name people know.</summary>
+    public static List<(string Id, string Name)> Profiles(string name)
+    {
+        if (All.FirstOrDefault(b => b.Name == name) is not { } b) return [];
+        var dir = DirOf(b);
+        try
+        {
+            if (b.Firefox)
+            {
+                // profiles.ini: [ProfileN] Name=… Path=Profiles/xxxx.default-release; [Install<id>] Default=<the profile that
+                // Firefox install opens>. The install Windows opens links with ("FirefoxURL-<id>") names the profile in use
+                var list = new List<(string Id, string Name)>();
+                var installs = new Dictionary<string, string>();
+                string? pname = null, section = null;
+                string Full(string path) => Path.GetFullPath(Path.Combine(dir, path.Replace('/', '\\')));
+                foreach (var line in File.ReadLines(Path.Combine(dir, "profiles.ini")))
+                {
+                    if (line.StartsWith('[')) (section, pname) = (line.Trim('[', ']'), null);
+                    else if (line.StartsWith("Name=")) pname = line[5..];
+                    else if (line.StartsWith("Path=") && pname != null && File.Exists(Path.Combine(Full(line[5..]), "cookies.sqlite"))) list.Add((Full(line[5..]), pname));
+                    else if (line.StartsWith("Default=") && section?.StartsWith("Install") == true) installs[section[7..]] = Full(line[8..]);
+                }
+                using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice");
+                var progId = k?.GetValue("ProgId") as string ?? "";
+                var inUse = installs.FirstOrDefault(i => progId.EndsWith("-" + i.Key, StringComparison.OrdinalIgnoreCase)).Value ?? installs.Values.FirstOrDefault();
+                return [.. list.OrderByDescending(x => string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase))
+                    .Select(x => string.Equals(x.Id, inUse, StringComparison.OrdinalIgnoreCase) ? (x.Id, L.F("{0} (the one in use)", x.Name)) : x)];
+            }
+            if (name == "Opera") return [("", "Opera")];
+            Dictionary<string, string> names = [];
+            try
+            {
+                using var state = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "Local State")));
+                if (state.RootElement.TryGetProperty("profile", out var p) && p.TryGetProperty("info_cache", out var cache))
+                    foreach (var e in cache.EnumerateObject())
+                        if (e.Value.TryGetProperty("name", out var n) && n.GetString() is { } s) names[e.Name] = s;
+            }
+            catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
+            return [.. Directory.GetDirectories(dir).Select(Path.GetFileName).OfType<string>()
+                .Where(d => (d == "Default" || d.StartsWith("Profile ")) && (File.Exists(Path.Combine(dir, d, "Network", "Cookies")) || File.Exists(Path.Combine(dir, d, "Cookies"))))
+                .Select(d => (d, names.GetValueOrDefault(d) ?? d))];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
     }
 }

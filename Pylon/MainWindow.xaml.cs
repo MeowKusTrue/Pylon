@@ -660,7 +660,16 @@ public partial class MainWindow : Window
         // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
         if (s == null)
         {
-            Osd(YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 6);
+            // an age check or "confirm you're not a bot": the first time, ask which browser's sign-in to use, then try again
+            if (YtDlp.WantsSignIn(YtDlp.LastError) && !_askedCookies)
+            {
+                _askedCookies = true;
+                if (AskCookies()) { YtDlp.Forget(src); PlayAt(i, startAt: startAt, autoplay: autoplay); return true; }
+            }
+            // the chosen browser's cookies couldn't be read (it's open, or a newer Chrome / Edge keeps them locked)
+            var cookieTrouble = YtDlp.LastError is { } err && err.Contains("cookie", StringComparison.OrdinalIgnoreCase) && !YtDlp.WantsSignIn(err);
+            Osd(cookieTrouble ? L.T("Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.")
+                : YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 8);
             // a song that isn't there is skipped, so a playlist plays on; three in a row means YouTube itself is unreachable
             // (offline, "confirm you're not a bot"): then it stops instead of running through the whole list
             if (search && ++_missedInRow < 3)
@@ -686,6 +695,40 @@ public partial class MainWindow : Window
             StartMedia(media, src, isUrl: true, s.Live ? -1 : startAt, autoplay ?? Settings.Bool("playback.autoplay"), audio: !s.HasVideo);
         }
         finally { Library.DisposeLater(media); }
+        return true;
+    }
+
+    bool _askedCookies; // once per run: "Not now" isn't asked again for every song
+
+    /// <summary>
+    /// YouTube wants a signed-in viewer. Pylon asks where to take the sign-in from: the browser Windows opens links with,
+    /// another installed one (with its profile when it has several), or a cookies.txt file. Stored in Settings → Network.
+    /// </summary>
+    bool AskCookies()
+    {
+        var browsers = BrowserCookies.Installed();
+        List<string> options = [.. browsers.Select(b => BrowserCookies.IsDefault(b) ? L.F("{0} (your main browser)", b) : b), L.T("A cookies.txt file…"), L.T("Not now")];
+        var pick = DialogWindow.Choose(this, "Sign In to YouTube", "YouTube wants you signed in",
+            options, "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.");
+        if (pick < 0 || pick == options.Count - 1) return false;
+        if (pick == options.Count - 2)
+        {
+            var dlg = new OpenFileDialog { Filter = "cookies.txt|*.txt|*.*|*.*" };
+            if (dlg.ShowDialog(this) != true) return false;
+            Settings.Set("net.cookiefile", dlg.FileName);
+            Settings.Set("net.cookies", "cookies.txt");
+            return true;
+        }
+        var browser = browsers[pick];
+        var profiles = BrowserCookies.Profiles(browser);
+        var profile = profiles.Count switch
+        {
+            0 => "",
+            1 => profiles[0].Id,
+            _ => DialogWindow.Choose(this, "Sign In to YouTube", L.F("Which {0} profile is signed in to YouTube?", browser), [.. profiles.Select(p => p.Name)]) is var k and >= 0 ? profiles[k].Id : null,
+        };
+        if (profile == null) return false;
+        Settings.Set("net.cookies", profile is "" or "Default" ? browser : $"{browser}:{profile}");
         return true;
     }
 
@@ -917,9 +960,9 @@ public partial class MainWindow : Window
         ArtBackdrop.SetImage(bmp);
         Scene.SetCover(bmp);
         LyricsPane.SetCover(bmp);
-        // the seek bar takes the cover's color too, like the scene behind; the theme's accent without one
+        // the visualizer under the cover takes the cover's color too, like the full-screen one; the theme's accent without one
         var accent = (TryFindResource("Accent") as SolidColorBrush)?.Color ?? Colors.Orange;
-        Seek.Tint = MiniSeek.Tint = bmp != null && _isAudio ? SceneView.Palette(bmp, accent).Item1 : null;
+        MusicSpectrum.Tint = bmp != null && _isAudio ? SceneView.Palette(bmp, accent).Item1 : null;
         ApplyMusicBg();
         ArtPlaceholder.Visibility = bmp == null ? Visibility.Visible : Visibility.Collapsed;
     }

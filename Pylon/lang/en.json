@@ -881,7 +881,6 @@
   "Minimizing hides Pylon to the tray; click the icon to bring it back.": "Minimizing hides Pylon to the tray; click the icon to bring it back.",
   "Resumes a few seconds after the other sound stops.": "Resumes a few seconds after the other sound stops.",
   "Sign in to websites with cookies from": "Sign in to websites with cookies from",
-  "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks.": "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks.",
   "Music only: the next song fades in while this one fades out. 0 turns it off.": "Music only: the next song fades in while this one fades out. 0 turns it off.",
   "Unpin from Sidebar": "Unpin from Sidebar",
   "Convert…": "Convert…",
@@ -1212,5 +1211,15 @@
   "Lyrics sooner": "Lyrics sooner",
   "Lyrics Later by {0} s (the recording's intro)": "Lyrics Later by {0} s (the recording's intro)",
   "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.": "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.",
-  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics."
+  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.",
+  "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks. Pylon asks the first time a site wants it. Firefox works best; Chrome, Edge and the like have to be closed, and newer versions keep their cookies locked.": "For YouTube and other sites played through yt-dlp: gets past \"confirm you're not a bot\" and age checks. Pylon asks the first time a site wants it. Firefox works best; Chrome, Edge and the like have to be closed, and newer versions keep their cookies locked.",
+  "cookies.txt file": "cookies.txt file",
+  "{0} (your main browser)": "{0} (your main browser)",
+  "A cookies.txt file…": "A cookies.txt file…",
+  "Sign In to YouTube": "Sign In to YouTube",
+  "YouTube wants you signed in": "YouTube wants you signed in",
+  "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.": "For age-restricted videos and \"confirm you're not a bot\": Pylon can use the sign-in of a browser where you're logged in to YouTube. The cookies stay on this computer and go only to YouTube. Firefox works best; close Chrome or Edge before using them.",
+  "Which {0} profile is signed in to YouTube?": "Which {0} profile is signed in to YouTube?",
+  "{0} (the one in use)": "{0} (the one in use)",
+  "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network.": "Couldn't read the browser's sign-in. Close the browser and try again, or choose Firefox or a cookies.txt file in Settings → Network."
 }
