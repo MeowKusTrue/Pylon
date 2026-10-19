@@ -60,6 +60,8 @@ public static class Hotkeys
         new("subtrack", "Subtitles", "Cycle subtitle track", "V", w => w.CycleSubtitle()),
         new("subdelayup", "Subtitles", "Increase subtitle delay", "H", w => w.ShiftSubtitleDelay(+0.1)),
         new("subdelaydown", "Subtitles", "Decrease subtitle delay", "G", w => w.ShiftSubtitleDelay(-0.1)),
+        new("lyricslater", "Subtitles", "Lyrics later", "Shift+G", w => w.NudgeLyrics(-0.25)),
+        new("lyricssooner", "Subtitles", "Lyrics sooner", "Shift+H", w => w.NudgeLyrics(+0.25)),
 
         new("aspect", "Video", "Cycle aspect ratio", "A", w => w.CycleAspect()),
         new("crop", "Video", "Cycle crop", "C", w => w.CycleCrop()),

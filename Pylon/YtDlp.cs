@@ -90,6 +90,9 @@ public static class YtDlp
     /// </summary>
     public static Task<Stream?> ResolveItemAsync(string src, int maxHeight, bool audioOnly)
     {
+        // a song (Spotify import, radio, search, a YouTube Music link) is music: its sound only, played as a song with
+        // lyrics. Swapping the search for the exact video lost this, and songs opened as clips without lyrics
+        if (IsSong(src)) audioOnly = true;
         if (Ready.TryGetValue(src, out var r) && r.Until > DateTime.UtcNow) return Task.FromResult<Stream?>(r.S);
         if (Pending.TryGetValue(src, out var running)) return running;
         var task = Run();
@@ -110,6 +113,9 @@ public static class YtDlp
             finally { Pending.Remove(src); }
         }
     }
+
+    /// <summary>A song rather than a video: searched by name (Spotify, radio, search) or on music.youtube.com.</summary>
+    public static bool IsSong(string src) => src.StartsWith("ytsearch://") || src.Contains("://music.youtube.com/");
 
     /// <summary>A resolved address works until its "expire" (a few hours on YouTube); 10 minutes of margin, else an hour.</summary>
     static TimeSpan Lifetime(string url)
@@ -475,7 +481,10 @@ public static class YtMusic
         {
             if (isrc != null && (await SearchSongsAsync(isrc)).Take(3).FirstOrDefault(Fits) is { } exact) return exact.VideoId;
             var hits = await SearchSongsAsync($"{main} {title}");
-            return (hits.FirstOrDefault(h => Fits(h) && N(h.Title).Contains(N(title))) ?? hits.FirstOrDefault(Fits))?.VideoId;
+            return (hits.FirstOrDefault(h => Fits(h) && N(h.Title).Contains(N(title))) ?? hits.FirstOrDefault(Fits)
+                // another cut of the same song (a remaster, the album version): still the artist's song, not a clip with an
+                // intro; the player offers to shift the lyrics when its length differs
+                ?? hits.FirstOrDefault(h => Covers.Same(h.Artist, main) && N(h.Title).Contains(N(title))))?.VideoId;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or FormatException) { return null; }
     }

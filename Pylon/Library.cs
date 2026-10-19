@@ -106,6 +106,8 @@ public static class Library
         Data.History = new(Data.History, StringComparer.OrdinalIgnoreCase);
         Data.Meta = new(Data.Meta, StringComparer.OrdinalIgnoreCase);
         Data.Subtitles = new(Data.Subtitles, StringComparer.OrdinalIgnoreCase);
+        // 1.9.9 played songs from playlists as videos and wrote them down so: back among the music
+        foreach (var (path, h) in Data.History) if (YtDlp.IsSong(path)) h.IsAudio = true;
     }
 
     /// <summary>Writes the library now (on quitting); a save still waiting is folded into this one.</summary>
@@ -243,7 +245,7 @@ public static class Library
         if (!Settings.Bool("privacy.position")) time = 0;
         Data.History[path] = new HistoryEntry
         {
-            Title = title, Artist = artist, Time = time, Length = length, IsAudio = isAudio, LastPlayed = DateTime.Now,
+            Title = title, Artist = artist, Time = time, Length = length, IsAudio = isAudio || YtDlp.IsSong(path), LastPlayed = DateTime.Now,
             Plays = Data.History.GetValueOrDefault(path)?.Plays ?? 0,
         };
     }

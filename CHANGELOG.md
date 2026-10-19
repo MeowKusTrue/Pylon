@@ -3,6 +3,22 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 1.9.11
+
+<!-- ru -->
+**Исправления**
+- **Песни из плейлистов снова играют как музыка.** В 1.9.9 песни из импортированных плейлистов (а ещё радио и поиска) при включённом видео открывались как клипы: без текста, без музыкального экрана, не скробблились и попадали в «Продолжить просмотр». Теперь песня — это всегда песня: только звук, текст, обложка. Ссылки music.youtube.com тоже открываются как песни. История, записанная с этой ошибкой, исправляется сама.
+- **Если оригинальный релиз не нашёлся,** Pylon сначала ищет у того же исполнителя другую запись этой песни (альбомную, ремастер) и только потом обычное видео. Если найденная запись длиннее или короче оригинала, Pylon подсказывает, как подвинуть текст. В меню «Текст песни» появляется пункт «Текст позже на N с» с разницей во времени, а синхронизацию теперь можно двигать клавишами Shift+G и Shift+H.
+- Песня, которой нет на YouTube, больше не останавливает плейлист: Pylon переходит к следующей. После трёх неудач подряд он останавливается, чтобы не пролистать весь список, если YouTube недоступен.
+- Текст для песни из плейлиста ищется по длине оригинала, а не найденной записи: клип со вступлением больше не путает поиск, а заранее найденный текст подхватывается сразу.
+
+<!-- en -->
+**Fixes**
+- **Songs from playlists play as music again.** In 1.9.9, songs from imported playlists (and from the radio and the search) opened as clips when video was on: no lyrics, no music view, no scrobbles, and they landed in Continue Watching. A song is now always a song: its sound only, with lyrics and cover. music.youtube.com links open as songs too. History written down during the bug repairs itself.
+- **When the original release isn't found,** Pylon first looks for another recording of the song by the same artist (the album version, a remaster), and only then for a plain video. When the recording runs longer or shorter than the original, Pylon says how to shift the lyrics. The Lyrics menu gets a "Lyrics Later by N s" item with the difference, and the timing can now be moved with Shift+G and Shift+H.
+- A song that isn't on YouTube no longer stops the playlist: Pylon moves on to the next one. After three misses in a row it stops, so it doesn't skip through the whole list while YouTube is unreachable.
+- Lyrics for a playlist song are looked up by the original's length, not the found recording's: a clip with an intro no longer throws the search off, and lyrics found ahead are used at once.
+
 ## 1.9.10
 
 <!-- ru -->

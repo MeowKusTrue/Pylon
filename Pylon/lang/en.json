@@ -1207,5 +1207,10 @@
   "The library search also lists songs from YouTube Music to play, queue or start a radio from. What you type is sent to YouTube.": "The library search also lists songs from YouTube Music to play, queue or start a radio from. What you type is sent to YouTube.",
   "Saving “{0}” for offline: {1} of {2}": "Saving “{0}” for offline: {1} of {2}",
   "“{0}” is saved for offline: {1} songs": "“{0}” is saved for offline: {1} songs",
-  "“{0}”: {1} saved, {2} not found": "“{0}”: {1} saved, {2} not found"
+  "“{0}”: {1} saved, {2} not found": "“{0}”: {1} saved, {2} not found",
+  "Lyrics later": "Lyrics later",
+  "Lyrics sooner": "Lyrics sooner",
+  "Lyrics Later by {0} s (the recording's intro)": "Lyrics Later by {0} s (the recording's intro)",
+  "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.": "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.",
+  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics."
 }

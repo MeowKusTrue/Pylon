@@ -614,6 +614,7 @@ public partial class MainWindow : Window
     }
 
     bool _metaPending, _ytDlpDeclined;
+    int _missedInRow; // songs not found on YouTube one after another
 
     /// <summary>
     /// The next two web items (Spotify imports, YouTube) are resolved while this one plays, so the switch to them is
@@ -657,7 +658,19 @@ public partial class MainWindow : Window
         if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
         // a failed search stops here with the reason (YouTube blocked, "confirm you're not a bot"…) instead of handing
         // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
-        if (s == null) { Osd(YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 6); return search; }
+        if (s == null)
+        {
+            Osd(YtDlp.LastError ?? L.T(search ? "Not found on YouTube" : "yt-dlp couldn't open this page"), 6);
+            // a song that isn't there is skipped, so a playlist plays on; three in a row means YouTube itself is unreachable
+            // (offline, "confirm you're not a bot"): then it stops instead of running through the whole list
+            if (search && ++_missedInRow < 3)
+            {
+                await Task.Delay(1500);
+                if (_index == i && _queue.ElementAtOrDefault(i) == src) NextInQueue();
+            }
+            return search;
+        }
+        _missedInRow = 0;
         // through a proxy the site's addresses only open from that proxy: Pylon fetches them for libVLC (StreamRelay)
         var media = new Media(Vlc, new Uri(StreamRelay.Wrap(s.Url, s.UserAgent, s.Referer)));
         try
@@ -981,6 +994,7 @@ public partial class MainWindow : Window
         long len = _mp.Length, t = Math.Max(0, _mp.Time);
         if (len > 0)
         {
+            CheckRecordingLength(len);
             if (!_mp.IsPlaying) ShowPosition((double)t / len); // while playing, SmoothSeek moves the thumb every frame
         }
         if (_index >= 0)

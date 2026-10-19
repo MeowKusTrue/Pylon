@@ -1207,5 +1207,10 @@
   "The library search also lists songs from YouTube Music to play, queue or start a radio from. What you type is sent to YouTube.": "Поиск по библиотеке показывает и песни из YouTube Music: их можно включить, поставить в очередь или запустить по ним радио. Запрос уходит в YouTube.",
   "Saving “{0}” for offline: {1} of {2}": "Сохраняю «{0}» для офлайна: {1} из {2}",
   "“{0}” is saved for offline: {1} songs": "«{0}» сохранён для офлайна: {1} песен",
-  "“{0}”: {1} saved, {2} not found": "«{0}»: сохранено {1}, не найдено {2}"
+  "“{0}”: {1} saved, {2} not found": "«{0}»: сохранено {1}, не найдено {2}",
+  "Lyrics later": "Текст позже",
+  "Lyrics sooner": "Текст раньше",
+  "Lyrics Later by {0} s (the recording's intro)": "Текст позже на {0} с (вступление записи)",
+  "This recording is {0} s longer than the original. If the lyrics run early: Shift+G, or right-click → Lyrics.": "Эта запись на {0} с длиннее оригинала. Если текст спешит: Shift+G или правый клик → Текст песни.",
+  "This recording is {0} s shorter than the original. If the lyrics run late: Shift+H, or right-click → Lyrics.": "Эта запись на {0} с короче оригинала. Если текст отстаёт: Shift+H или правый клик → Текст песни."
 }
