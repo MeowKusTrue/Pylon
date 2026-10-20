@@ -310,6 +310,7 @@ public partial class MainWindow
                 case "proxytest": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), (await YtDlp.TestProxyAsync()).Replace('\n', '|') + Environment.NewLine); break;
                 case "seekto": SeekTo(long.Parse(arg)); break; // a user seek (Watch Together sends it to everyone)
                 case "toggle": TogglePlay(); break; // the play / pause button
+                case "vol": Volume.Value = double.Parse(arg) / MaxVolume; ApplyVolume(); break; // the volume slider, in percent
                 case "remoteany": RemoteView.DebugAnySession = true; WatchOtherPlayers(); break; // a paused session shows too
                 case "throw": _ = Dispatcher.BeginInvoke(() => throw new InvalidOperationException("test of the safety net")); break; // must be logged, not fatal
                 case "spectrum": MusicSpectrum.DebugFill(1.3); break;

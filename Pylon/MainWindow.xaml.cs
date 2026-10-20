@@ -376,7 +376,10 @@ public partial class MainWindow : Window
     float _tailGain = 1;          // its measured level
     DispatcherTimer? _fade, _gapless;
     long _heardMs, _heardAt;      // the main player's last clock tick and when it came (its clock moves in ~0.3 s steps)
-    const int StartLag = 100;     // from Play() to the first sample heard on a fresh player (ms; 150 overlapped by 70)
+    const int Prebuffer = 150;    // music on waveOut starts paused this long (StartMedia)
+    int _prebufferId;             // another song meanwhile cancels the start
+    bool _prebuffering;           // the song is still filling its buffer: play / pause now keeps it paused
+    const int StartLag = 50 + Prebuffer; // from Play() to the first sample heard on a fresh player (ms; tuned on recorded marker tones)
 
     /// <summary>Where playback is now, between the clock's ticks.</summary>
     long HeardMs => _heardMs + (_mp.IsPlaying ? (long)((Stopwatch.GetTimestamp() - _heardAt) * 1000.0 / Stopwatch.Frequency * _mp.Rate) : 0);
@@ -498,7 +501,7 @@ public partial class MainWindow : Window
         var (id, mp) = (++_softId, _mp);
         for (var k = 1; k <= 6 && id == _softId && mp == _mp; k++)
         {
-            mp.Volume = AudioChain.VlcVolume(VolumeLevel * (from + (to - from) * k / 6));
+            AudioChain.SetVolume(mp, VolumeLevel * (from + (to - from) * k / 6));
             await Task.Delay(25);
         }
     }
@@ -959,7 +962,12 @@ public partial class MainWindow : Window
         if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
 
         if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
-        if (!autoplay) media.AddOption(":start-paused");
+        // waveOut starts playing with almost nothing buffered: with the computer busy it ran dry for 5-10 ms in the first
+        // 0.15 s now and then (in 1-2 starts of 3, in libVLC on its own too). Music starts paused for a moment and has a
+        // buffer by then (3 starts in 4 clean; the rest past 0.1 s)
+        _prebuffering = false;
+        var prebuffer = autoplay && _isAudio && AudioChain.Output == "waveout";
+        if (!autoplay || prebuffer) media.AddOption(":start-paused");
         if (_second != null) SetSecondSubtitle(null, null); // it belonged to the previous video
         if (_isAudio) media.AddOption(":no-sub-autodetect-file"); // music: libVLC tried every .ttml / .lrc beside it as a subtitle
         // fragmented MP4 (OBS recordings and replays, DASH downloads): libVLC's own MP4 reader starts decoding mid-group
@@ -986,6 +994,17 @@ public partial class MainWindow : Window
         var playAt = Stopwatch.StartNew();
         _mp.Play(media);
         _switchStartMedia = playAt.ElapsedMilliseconds;
+        if (prebuffer)
+        {
+            var (mp, id) = (_mp, ++_prebufferId);
+            _prebuffering = true;
+            _ = Task.Delay(Prebuffer).ContinueWith(_ => Dispatcher.BeginInvoke(() =>
+            {
+                if (mp != _mp || id != _prebufferId) return;
+                _prebuffering = false;
+                mp.SetPause(false);
+            }));
+        }
         if (Perf.Enabled && !_isAudio)
             new DispatcherTimer(TimeSpan.FromMilliseconds(5), DispatcherPriority.Send, (t, _) =>
             {
@@ -1257,6 +1276,7 @@ public partial class MainWindow : Window
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
         _duckPaused = false;
+        if (_prebuffering) { _prebuffering = false; _prebufferId++; PlayBtn.IsChecked = true; return; } // paused while it was still filling: stays paused
         if (_softPausing) { _softPausing = false; _ = SoftVolume(0, 1); PlayBtn.IsChecked = false; return; } // pressed again while fading out
         if (_hosting) PartyPaused(_mp.IsPlaying, _partyFrom ?? PartyName); // a watch party: everyone sees who paused
         var pausing = _mp.IsPlaying;
@@ -1277,7 +1297,7 @@ public partial class MainWindow : Window
         else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
         else
         {
-            if (SoftFades) { _mp.Volume = 0; _ = SoftVolume(0, 1); }
+            if (SoftFades) { AudioChain.SetVolume(_mp, 0); _ = SoftVolume(0, 1); }
             _mp.SetPause(false);
         }
         PlayBtn.IsChecked = !_mp.IsPlaying; // optimistic; Refresh() corrects it
@@ -1375,7 +1395,7 @@ public partial class MainWindow : Window
 
     void ApplyVolume()
     {
-        _mp.Volume = AudioChain.VlcVolume(VolumeLevel);
+        AudioChain.SetVolume(_mp, VolumeLevel);
         UpdateVolumeIcon();
     }
 
@@ -2618,7 +2638,7 @@ public partial class MainWindow : Window
         _sleepTimer!.Interval = TimeSpan.FromMilliseconds(100);
         if (left > TimeSpan.Zero)
         {
-            _mp.Volume = AudioChain.VlcVolume(VolumeLevel * left.TotalSeconds / 10); // fade out
+            AudioChain.SetVolume(_mp, VolumeLevel * left.TotalSeconds / 10); // fade out
             return;
         }
         _sleepTimer.Stop();

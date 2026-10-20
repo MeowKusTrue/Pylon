@@ -209,8 +209,13 @@ Check("default player: formats to take", !take.Contains(".mkv") && take.Contains
 }
 
 // ── audio output: waveOut by default; its volume follows DirectSound's curve; a device saved under one output's name is found under the other's
-Check("waveOut volume matches the old curve", AudioChain.Output == "waveout" && AudioChain.VlcVolume(1) == 25 && AudioChain.VlcVolume(2) == 200
-    && AudioChain.VlcVolume(0.5) == 3 && AudioChain.VlcVolume(0) == 0 && AudioChain.VlcVolume(0.1) == 1, $"{AudioChain.VlcVolume(1)} {AudioChain.VlcVolume(0.5)}");
+{
+    double Level(double v) { var (w, r) = AudioChain.SplitVolume(v); return w * r; } // what waveOut is told, in percent
+    Check("waveOut volume matches the old curve", AudioChain.Output == "waveout" && AudioChain.SplitVolume(1) == (200, 1f) && AudioChain.SplitVolume(1.25).Whole == 200
+        && Math.Abs(Level(1.25) - 390.625) < 1e-3 && Math.Abs(Level(0.25) - 3.125) < 1e-4 && AudioChain.SplitVolume(0.25).Whole == 4 && Math.Abs(Level(0.5) - 25) < 1e-4
+        && AudioChain.SplitVolume(0) == (0, 1f),
+        $"{AudioChain.SplitVolume(0.25)} {AudioChain.SplitVolume(0.5)}");
+}
 Check("devices across outputs", AudioChain.DeviceName("CABLE Input (VB-Audio Virtual C ($1,$64)") == "CABLE Input (VB-Audio Virtual C"
     && AudioChain.SameDevice("CABLE Input (VB-Audio Virtual C", "CABLE Input (VB-Audio Virtual Cable)")
     && !AudioChain.SameDevice("Speakers (Realtek(R) Audio)", "Speakers (2- USB Audio Device)"));

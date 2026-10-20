@@ -59,6 +59,42 @@ public static class AudioChain
     /// </summary>
     public static bool SetGain(MediaPlayer mp, float gain)
     {
+        var v = VolumeState.GetOrCreateValue(mp);
+        v.Gain = gain;
+        return ApplyGain(mp, gain * v.Rest);
+    }
+
+    sealed class VolumeBox { public float Gain = 1, Rest = 1; }
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MediaPlayer, VolumeBox> VolumeState = new();
+
+    /// <summary>
+    /// The slider's level (1 = 100 %) on a player. libVLC takes whole percents, too coarse for waveOut's 200·v³ at low
+    /// levels (25 % on the slider is 3.1): the whole part goes to libVLC's volume, which the output applies at once, and
+    /// the rest rides on the player's gain, which reaches the ear ~0.4 s later (measured): a small correction, and above
+    /// 100 % the boost (waveOut can't go past the file's level; DirectSound boosted in software too).
+    /// </summary>
+    public static void SetVolume(MediaPlayer mp, double level)
+    {
+        var (whole, rest) = SplitVolume(level);
+        mp.Volume = whole;
+        var v = VolumeState.GetOrCreateValue(mp);
+        if (Math.Abs(v.Rest - rest) < 0.001) return;
+        v.Rest = rest;
+        ApplyGain(mp, v.Gain * rest);
+    }
+
+    /// <summary>libVLC's whole-percent volume for a level, and the factor left over for the gain.</summary>
+    public static (int Whole, float Extra) SplitVolume(double level)
+    {
+        if (level <= 0) return (0, 1);
+        if (Output != "waveout") return ((int)Math.Round(level * 100), 1);
+        var exact = 200 * level * level * level;
+        var whole = Math.Clamp((int)Math.Ceiling(exact - 1e-9), 1, 200);
+        return (whole, (float)(exact / whole));
+    }
+
+    static bool ApplyGain(MediaPlayer mp, float gain)
+    {
         if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create
             || (_trigger ??= Export<VarName>("var_TriggerCallback")) is not { } trigger
             || (_children ??= Export<ListChildren>("vlc_list_children")) is not { } children
@@ -97,13 +133,10 @@ public static class AudioChain
     /// </summary>
     public static string Output => Settings.Str("audio.output") == "DirectSound" ? "directsound" : "waveout";
 
-    /// <summary>
-    /// libVLC's volume for a slider level (1 = 100 %). DirectSound turns volume v into v³ and sits 12 dB below waveOut at
-    /// 100 %; waveOut is linear (both measured on a recorded tone: DirectSound 50 % -18 dB, 200 % +18 dB; waveOut 50 % -6 dB,
-    /// 200 % +6 dB). So waveOut gets 25·v³ and every slider position sounds as it did before 2.0.2.
-    /// </summary>
-    public static int VlcVolume(double level) =>
-        Output == "waveout" ? level <= 0 ? 0 : Math.Clamp((int)Math.Round(25 * level * level * level), 1, 200) : (int)Math.Round(level * 100);
+    // Volume, measured on a recorded tone: DirectSound turns libVLC volume v into v³ on its own stream (50 % -18 dB,
+    // 100 % = the file's level). waveOut sets Windows' volume for the whole app (the Volume Mixer, which Windows keeps
+    // between runs), linearly, and reaches the file's level at 200 (100 is -6 dB). So waveOut gets 200·v³ (SplitVolume),
+    // and every slider position sounds as it did with DirectSound.
 
     /// <summary>A device's name without waveOut's " ($1,$64)" (waveOut also cuts names to 31 characters).</summary>
     public static string DeviceName(string description) => System.Text.RegularExpressions.Regex.Replace(description, @" \(\$\d+,\$\d+\)$", "");
