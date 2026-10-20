@@ -164,6 +164,50 @@ Check("default player: formats to take", !take.Contains(".mkv") && take.Contains
         && !MainWindow.IsFragmentedMp4(Path.ChangeExtension(moof, ".mkv")));
 }
 
+// ── TS / MPEG-PS: the keyframe near a seek target, from the file itself (keyframes every 2 s, 30 fps, start at 1.4 s)
+{
+    static byte[] PesHead(int sid, long pts)
+    {
+        var b = new byte[14];
+        b[2] = 1; b[3] = (byte)sid; b[6] = 0x80; b[7] = 0x80; b[8] = 5;
+        b[9] = (byte)(0x21 | (pts >> 29 & 0x0E)); b[10] = (byte)(pts >> 22); b[11] = (byte)(pts >> 14 | 1); b[12] = (byte)(pts >> 7); b[13] = (byte)(pts << 1 | 1);
+        return b;
+    }
+    static byte[] TsPacket(int pid, bool start, bool rai, byte[] payload)
+    {
+        var p = new byte[188];
+        p[0] = 0x47; p[1] = (byte)((start ? 0x40 : 0) | pid >> 8); p[2] = (byte)pid; p[3] = 0x30; // adaptation field + payload
+        p[4] = 1; p[5] = (byte)(rai ? 0x40 : 0);
+        payload.CopyTo(p, 6);
+        for (var i = 6 + payload.Length; i < 188; i++) p[i] = 0xFF;
+        return p;
+    }
+    var ts = new MemoryStream();
+    var ps = new MemoryStream();
+    for (var k = 0; k < 30 * 40; k++)
+    {
+        var pts = 126000 + k * 3000L;
+        var key = k % 60 == 0;
+        ts.Write(TsPacket(0x100, true, key, PesHead(0xE0, pts)));
+        ts.Write(TsPacket(0x101, true, false, PesHead(0xC0, pts)));
+        for (var j = 0; j < 20; j++) ts.Write(TsPacket(0x100, false, false, []));
+        ps.Write([0, 0, 1, 0xBA, .. new byte[10]]);
+        ps.Write(PesHead(0xE0, pts));
+        ps.Write(key ? [0, 0, 1, 0xB3, 0x50, 0x02, 0xD0] : [0, 0, 1, 0x00, 0x10, 0x10]);
+        ps.Write(new byte[3000]);
+    }
+    var tsFile = Path.Combine(Path.GetTempPath(), "pylon-check.ts");
+    var psFile = Path.Combine(Path.GetTempPath(), "pylon-check.mpg");
+    File.WriteAllBytes(tsFile, ts.ToArray());
+    File.WriteAllBytes(psFile, ps.ToArray());
+    foreach (var file in new[] { tsFile, psFile })
+    {
+        long? F(long ms, bool fwd) => Keyframes.Near(file, ms, fwd, 40_000)?.Ms;
+        var got = new[] { F(5000, true), F(5000, false), F(4000, true), F(4000, false), F(39_000, true) };
+        Check($"keyframes: {Path.GetExtension(file)}", got[0] == 6000 && got[1] == 4000 && got[2] == 4000 && got[3] == 4000 && got[4] == null, string.Join(" ", got.Select(g => g?.ToString() ?? "-")));
+    }
+}
+
 // ── shortcuts: every layout works and gives no key two jobs
 foreach (var layout in Hotkeys.Layouts.Keys)
 {

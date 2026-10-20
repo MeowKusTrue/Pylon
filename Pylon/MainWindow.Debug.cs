@@ -67,7 +67,9 @@ public partial class MainWindow
                         var fps = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video) is { } vt && vt.Data.Video.FrameRateDen > 0
                             ? vt.Data.Video.FrameRateNum / (double)vt.Data.Video.FrameRateDen : 30;
                         var need = (int)(fps * 0.4 * 0.8); // 80 % of the video's own pace over 400 ms
-                        foreach (var target in new[] { 0.2, 0.37, 0.53, 0.11, 0.71 }.Select(f => (long)(_mp.Length * f)))
+                        var targets = arg.Length > 0 ? arg.Split(',').Select(long.Parse).ToArray() // "seekresume:24000,46000" = these times
+                            : new[] { 0.2, 0.37, 0.53, 0.11, 0.71 }.Select(f => (long)(_mp.Length * f)).ToArray();
+                        foreach (var target in targets)
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             var start = _mp.Media?.Statistics.DisplayedPictures ?? 0;

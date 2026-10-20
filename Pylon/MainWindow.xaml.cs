@@ -879,7 +879,7 @@ public partial class MainWindow : Window
         // fragmented MP4 (OBS recordings and replays, DASH downloads): libVLC's own MP4 reader starts decoding mid-group
         // after a seek, so the picture froze until the next keyframe (up to 2 s) while the sound already played on.
         // libavformat (FFmpeg's reader, as in MPC-HC) seeks to the keyframe and catches up: ~0.1 s instead of 0.6-1.6 s.
-        if (!isUrl && !_isAudio && IsFragmentedMp4(src)) media.AddOption(":demux=avformat");
+        if (!isUrl && !_isAudio && (IsFragmentedMp4(src) || Keyframes.IsTs(src))) media.AddOption(":demux=avformat"); // TS: see Keyframes
         foreach (var sub in Library.Data.Subtitles.GetValueOrDefault(src) ?? [])
             if (File.Exists(sub)) media.AddSlave(MediaSlaveType.Subtitle, 4, new Uri(sub).AbsoluteUri);
         // recording and network streaming both duplicate what's playing; local playback stays on the display branch

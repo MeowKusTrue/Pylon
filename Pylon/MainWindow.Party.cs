@@ -126,6 +126,7 @@ public partial class MainWindow
     {
         ms = Math.Max(0, ms);
         if (_mp.Length > 0) ms = Math.Min(ms, _mp.Length - 500); // a guest on the host's live stream knows no length: the host clamps
+        _seekFrom = SeekBase;
         _seekTarget = ms;
         _seekAsked = Environment.TickCount64;
         // at most one seek per 120 ms, always to the latest position: dragging the bar asked for one per mouse move, and
@@ -138,7 +139,7 @@ public partial class MainWindow
         }
     }
 
-    long _seekTarget = -1, _seekAsked, _seekDone;
+    long _seekTarget = -1, _seekAsked, _seekDone, _seekFrom;
     DispatcherTimer? _seekTimer;
 
     /// <summary>Where the next relative jump starts: just after a seek libVLC still reports the old time for a moment.</summary>
@@ -156,8 +157,32 @@ public partial class MainWindow
             return;
         }
         if (!_mp.IsSeekable) return;
+        if (CurrentPath is { } path && !path.Contains("://") && Keyframes.Handles(path)) { SeekToKeyframe(path, ms); return; }
         _mp.Time = ms;
         if (_hosting) Note(PartyName, L.F("{0} jumped to {1}", PartyName, Fmt(ms)));
+    }
+
+    /// <summary>
+    /// TS / MPEG-PS: to the keyframe at or after the target when moving forward, at or before it when moving back (so a
+    /// 5 s jump always moves), as MPC-HC does; the time shown is where it landed. No keyframe within 3 s: precise.
+    /// </summary>
+    async void SeekToKeyframe(string path, long ms)
+    {
+        var (forward, length) = (ms >= _seekFrom, _mp.Length);
+        var (hit, size) = await Task.Run(() => (Keyframes.Near(path, ms, forward, length), new FileInfo(path).Length));
+        if (CurrentPath != path || _seekTarget != ms) return; // a newer seek came meanwhile: that one moves
+        if (hit is not { } k) _mp.Time = ms;
+        else
+        {
+            // TS goes through FFmpeg's demuxer. Its seek lands just past the packet it finds, so aimed at the keyframe it
+            // missed it and waited a whole GOP (2.2 s in M2TS); aimed 30 ms early it misses the frame before and starts
+            // on the keyframe: 0.16-0.2 s in TS and M2TS. In MPEG-PS neither demuxer looks for keyframes when seeking by
+            // time (0.5-0.7 s), so there it is the keyframe's bytes: libVLC's PS demuxer seeks by position, a sector early.
+            if (Keyframes.IsTs(path)) _mp.Time = Math.Max(0, k.Ms - 30);
+            else _mp.Position = (float)(Math.Max(0, k.Offset - 2048) / (double)size);
+            _seekTarget = k.Ms; // the next relative jump starts from where this one landed
+        }
+        if (_hosting) Note(PartyName, L.F("{0} jumped to {1}", PartyName, Fmt(_seekTarget)));
     }
 
     async Task PartySend(string path)
