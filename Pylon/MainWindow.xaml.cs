@@ -408,7 +408,9 @@ public partial class MainWindow : Window
             var end = len;
             if (Settings.Bool("playback.smartfade") && Waveform.Cached(cur) is { } wave) end = Math.Min(len, (long)(Waveform.Music(wave).End * len) + 300);
             var left = end - now;
-            if (left <= secs * 1000 && left >= 500) StartTransition(next, left, fade: true);
+            // the gain reaches the ear ~0.4 s after it is set: the fade runs that much ahead, or the old song was still at a
+            // fifth of its level when its file ended (a click, measured on waveOut)
+            if (left <= secs * 1000 && left >= 500) StartTransition(next, Math.Max(300, left - 450), fade: true);
         }
         else if (AudioChain.Output == "waveout" && Settings.Bool("playback.gapless") && _gapless == null && len - HeardMs is > 0 and < 1200)
         {
@@ -454,7 +456,9 @@ public partial class MainWindow : Window
                 AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2) * _trackGain);
                 AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2) * tailGain);
             }
-            if (k >= 1) EndCrossfade();
+            // the old player stops once what it still has in the output (~0.4 s) has played at the faded level: stopped at
+            // once, its last moment was cut off (a click)
+            if (k >= 1 && clock.Elapsed.TotalSeconds >= duration + 0.8) EndCrossfade();
         }, Dispatcher);
     }
 
@@ -493,17 +497,26 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Music: pause, resume and skip ramp the volume over ~150 ms instead of cutting the sound mid-wave (a click). The
-    /// player's volume, not its gain: the output applies volume at once, while gain reaches the samples ~0.5 s ahead of
-    /// what is heard, so a gain ramp was still in the buffer when the pause cut it (measured: a 5 ms stop either way).
+    /// player's volume, not its gain: the output applies volume at once, while gain reaches the samples ~0.4 s ahead of
+    /// what is heard, so a gain ramp was still in the buffer when the pause cut it. One volume unit at a time on a precise
+    /// clock: six 25 ms steps were each a jump in the wave and were heard as crackle (measured: leftover -19 dB against -71 dB).
+    /// Only whole percents on the way (the gain's fraction would restart the chain each step); the exact level at the end.
     /// </summary>
     async Task SoftVolume(double from, double to)
     {
-        var (id, mp) = (++_softId, _mp);
-        for (var k = 1; k <= 6 && id == _softId && mp == _mp; k++)
+        var (id, mp, level) = (++_softId, _mp, VolumeLevel);
+        await Task.Run(() =>
         {
-            AudioChain.SetVolume(mp, VolumeLevel * (from + (to - from) * k / 6));
-            await Task.Delay(25);
-        }
+            // one volume unit at a time (the finest libVLC takes), evenly over 150 ms
+            int v0 = AudioChain.SplitVolume(level * from).Whole, v1 = AudioChain.SplitVolume(level * to).Whole, steps = Math.Max(1, Math.Abs(v1 - v0));
+            var clock = Stopwatch.StartNew();
+            for (var k = 1; k <= steps && id == _softId; k++)
+            {
+                while (clock.Elapsed.TotalMilliseconds < k * 150.0 / steps) Thread.Yield();
+                mp.Volume = v0 + (v1 - v0) * k / steps;
+            }
+        });
+        if (id == _softId && mp == _mp && to > 0) ApplyVolume();
     }
 
     EventHandler<LogEventArgs>? _logHandler;
@@ -1289,8 +1302,12 @@ public partial class MainWindow : Window
             await SoftVolume(1, 0);
             if (id != _softId || !_softPausing) return; // played again meanwhile
             _softPausing = false;
-            _mp.SetPause(true);
-            ApplyVolume(); // paused: back at its level, whatever plays it next
+            var paused = _mp;
+            paused.SetPause(true);
+            // back at its level for whatever plays it next, once the output has really stopped: set at once, a few ms of
+            // full sound slipped out after the fade (a click)
+            await Task.Delay(200);
+            if (paused == _mp && id == _softId && !_mp.IsPlaying) ApplyVolume();
             return;
         }
         if (pausing) _mp.SetPause(true);
