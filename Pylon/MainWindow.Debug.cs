@@ -71,17 +71,17 @@ public partial class MainWindow
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
                             var start = _mp.Media?.Statistics.DisplayedPictures ?? 0;
-                            _mp.Time = target;
+                            SeekTo(target);
                             // smooth again: 20 new pictures within the last 400 ms (60 fps video), first time it holds
                             var marks = new List<(double T, int N)>();
                             double resumed = -1;
                             while (sw.ElapsedMilliseconds < 4000)
                             {
-                                await Task.Delay(10);
+                                await Task.Delay(40);
                                 var n = (_mp.Media?.Statistics.DisplayedPictures ?? 0) - start;
                                 marks.Add((sw.Elapsed.TotalMilliseconds, n));
                                 var back = marks.FirstOrDefault(m => m.T >= sw.Elapsed.TotalMilliseconds - 400);
-                                if (resumed < 0 && marks.Count > 5 && n - back.N >= need) { resumed = back.T; }
+                                if (resumed < 0 && marks.Count > 2 && n - back.N >= need) { resumed = back.T; }
                             }
                             res.Add($"{resumed:0}");
                             // pictures shown per 100 ms after the seek, for reading by eye
@@ -91,6 +91,14 @@ public partial class MainWindow
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"seek resume ms ({fps:0} fps, len {_mp.Length / 1000}s, tracks {_mp.Media?.Tracks.Length}, shown {_mp.Media?.Statistics.DisplayedPictures}, decoded {_mp.Media?.Statistics.DecodedVideo}, vout {_mp.VoutCount}, hwnd {_mp.Hwnd}): " + string.Join(" / ", res) + Environment.NewLine);
                     }
                     break;
+                case "fps": // pictures shown and decoded per second over 10 s of plain playback
+                    {
+                        var st0 = _mp.Media!.Statistics;
+                        await Task.Delay(10000);
+                        var st = _mp.Media!.Statistics;
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"fps shown {(st.DisplayedPictures - st0.DisplayedPictures) / 10.0:0.0} decoded {(st.DecodedVideo - st0.DecodedVideo) / 10.0:0.0} lost {(st.LostPictures - st0.LostPictures) / 10.0:0.0}" + Environment.NewLine);
+                        break;
+                    }
                 case "lyricswheel": // a notch down on the lyrics: they scroll and the scrollbar shows
                     LyricsPane.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = MouseWheelEvent, Source = LyricsPane });
                     break;

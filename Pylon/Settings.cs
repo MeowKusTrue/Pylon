@@ -169,7 +169,10 @@ public static class Settings
         if (Int("playback.audiotrack") > 0) Add($"--audio-track={Int("playback.audiotrack") - 1}");
         if (Int("playback.subtrack") > 0) Add($"--sub-track={Int("playback.subtrack") - 1}");
         if (!Bool("playback.precise")) Add("--input-fast-seek");
-        Add("--no-avcodec-hurry-up"); Add("--no-avcodec-corrupted"); // no grey smears after seeks in heavy video (1440p60 HEVC recordings)
+        // no grey smears after seeks in heavy video (1440p60 HEVC recordings): frames decoded without their references stay
+        // hidden. Hurry-up stays on: without it, 60 fps H.264 with B-frames on the GPU fell to 30 fps after the second seek
+        // and stayed there (libVLC 3.0.24, measured); the smears came from the corrupted frames, not from hurrying.
+        Add("--no-avcodec-corrupted");
         Add($"--avi-index={Array.IndexOf(["Ask", "Always", "Never"], Str("playback.avi")) switch { 1 => 1, 2 => 2, _ => 0 }}");
         if (Str("playback.tsfolder") is { Length: > 0 } ts) Add($"--input-timeshift-path={ts}");
         Add($"--input-timeshift-granularity={Str("playback.tssize") switch { "Small" => 10_000_000, "Large" => 200_000_000, _ => 50_000_000 }}");

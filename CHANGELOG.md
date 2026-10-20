@@ -3,6 +3,16 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.0.1
+
+<!-- ru -->
+**Исправления**
+- **Видео 60 кадров/с больше не замедляется после перемоток.** H.264 с B-кадрами (так сжато большинство скачанных видео) после второй перемотки начинал показывать около 30 кадров в секунду вместо 60 и так и оставался. Теперь 60, а после перемотки картинка идёт через 0,05–0,2 с. Записи OBS в H.264 тоже: 0,16 с вместо 1–2 с.
+
+<!-- en -->
+**Fixes**
+- **60 fps video no longer slows down after seeking.** H.264 with B-frames (how most downloaded videos are encoded) dropped to about 30 frames a second after the second seek and stayed there. Now it plays at 60, and after a seek the picture carries on in 0.05–0.2 s. OBS recordings in H.264 too: 0.16 s instead of 1–2 s.
+
 ## 2.0.0
 
 <!-- ru -->
