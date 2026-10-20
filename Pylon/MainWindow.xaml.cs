@@ -73,7 +73,7 @@ public partial class MainWindow : Window
             ShowActivated = false;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = -20000;
-            ContentRendered += async (_, _) => { await Task.Delay(1500); Perf.Mark("idle +1.5 s"); Close(); };
+            ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
         }
         Settings.Load();
         Library.Load();
@@ -170,6 +170,7 @@ public partial class MainWindow : Window
             ApplyPriority();
             UpdateControlButtons();
             if (Environment.GetEnvironmentVariable("PYLON_DATA") == null) SingleInstance.Listen(this); // an isolated copy never takes files meant for the main one
+            Perf.Mark("startup work done");
             var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
             if (args.Length > 0) Open(args);
             if (Settings.Bool("ui.compact")) ToggleMiniplayer();
@@ -472,8 +473,12 @@ public partial class MainWindow : Window
             if (list.Count == 0) return;
         }
         // libVLC on Windows rejects "C:/x/y" — normalize every local path; big folders are walked off the UI thread
-        var expanded = await Task.Run(() => list.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
-            .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList());
+        // (and network shares, which can stall); a few local files are done here: the hop to another thread let the first
+        // window frame go first, ~0.25 s at launch
+        List<string> Expand() => list.Select(p => p.Contains("://") ? p : Path.GetFullPath(p))
+            .SelectMany(p => Directory.Exists(p) ? Library.MediaFiles(p, deep) : [p]).ToList();
+        var local = list.Count <= 20 && list.All(p => p.Contains("://") || !p.StartsWith(@"\\") && File.Exists(p));
+        var expanded = local ? Expand() : await Task.Run(Expand);
         if (expanded.Count == 0) return;
         if (append && _index >= 0) Enqueue(expanded);
         else PlayList(expanded, 0);
@@ -790,12 +795,50 @@ public partial class MainWindow : Window
         Sidebar.Render();
     }
 
+    /// <summary>An MP4 / MOV whose samples sit in fragments (moov holds an mvex box): reads a few box headers, no more.</summary>
+    public static bool IsFragmentedMp4(string path)
+    {
+        if (Path.GetExtension(path).ToLowerInvariant() is not (".mp4" or ".m4v" or ".mov" or ".3gp")) return false;
+        try
+        {
+            using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096);
+            var head = new byte[16];
+            long BoxSize(out string type, long at)
+            {
+                f.Position = at;
+                if (f.Read(head, 0, 8) < 8) { type = ""; return 0; }
+                type = System.Text.Encoding.ASCII.GetString(head, 4, 4);
+                long size = (uint)(head[0] << 24 | head[1] << 16 | head[2] << 8 | head[3]);
+                if (size == 1 && f.Read(head, 8, 8) == 8) size = (long)System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(head.AsSpan(8));
+                return size < 8 ? 0 : size;
+            }
+            for (long at = 0, n = 0; at < f.Length && n < 16; n++) // ftyp, (free), moov...
+            {
+                var size = BoxSize(out var type, at);
+                if (size == 0) return false;
+                if (type == "moof") return true;
+                if (type == "moov")
+                    for (long c = at + 8, m = 0; c < at + size && m < 64; m++)
+                    {
+                        var cs = BoxSize(out var child, c);
+                        if (cs == 0) break;
+                        if (child == "mvex") return true;
+                        c += cs;
+                    }
+                at += size;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return false;
+    }
+
     void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay, bool? audio = null)
     {
         var ext = isUrl ? "" : Path.GetExtension(src);
         _isAudio = audio ?? (AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video)));
         _lyricsFor = null;
         _remoteForced = false; // something of Pylon's own plays: the stage is Pylon's again
+        Perf.Mark("start media");
         ApplyMeta(media, src, isUrl, parsed: false);
         var title = _title;
         var folder = isUrl ? null : Path.GetFileName(Path.GetDirectoryName(src));
@@ -831,7 +874,12 @@ public partial class MainWindow : Window
 
         if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
         if (!autoplay) media.AddOption(":start-paused");
+        if (_second != null) SetSecondSubtitle(null, null); // it belonged to the previous video
         if (_isAudio) media.AddOption(":no-sub-autodetect-file"); // music: libVLC tried every .ttml / .lrc beside it as a subtitle
+        // fragmented MP4 (OBS recordings and replays, DASH downloads): libVLC's own MP4 reader starts decoding mid-group
+        // after a seek, so the picture froze until the next keyframe (up to 2 s) while the sound already played on.
+        // libavformat (FFmpeg's reader, as in MPC-HC) seeks to the keyframe and catches up: ~0.1 s instead of 0.6-1.6 s.
+        if (!isUrl && !_isAudio && IsFragmentedMp4(src)) media.AddOption(":demux=avformat");
         foreach (var sub in Library.Data.Subtitles.GetValueOrDefault(src) ?? [])
             if (File.Exists(sub)) media.AddSlave(MediaSlaveType.Subtitle, 4, new Uri(sub).AbsoluteUri);
         // recording and network streaming both duplicate what's playing; local playback stays on the display branch
@@ -852,6 +900,13 @@ public partial class MainWindow : Window
         var playAt = Stopwatch.StartNew();
         _mp.Play(media);
         _switchStartMedia = playAt.ElapsedMilliseconds;
+        if (Perf.Enabled && !_isAudio)
+            new DispatcherTimer(TimeSpan.FromMilliseconds(5), DispatcherPriority.Send, (t, _) =>
+            {
+                if (media.Statistics.DisplayedPictures == 0) return;
+                ((DispatcherTimer)t!).Stop();
+                Perf.Mark("first video picture");
+            }, Dispatcher).Start();
         MaybeTrackPopup(_index);
         Library.Remember(src, title, _artist, h?.Time ?? 0, media.Duration, _isAudio);
         Library.CountPlay(src);
@@ -1148,6 +1203,41 @@ public partial class MainWindow : Window
     }
 
     public void NextFrame() => _mp.NextFrame();
+
+    /// <summary>Edit a file's tags; the playing one is stopped for the save and goes on where it was. The library index follows.</summary>
+    public void EditTags(string path)
+    {
+        var current = string.Equals(path, CurrentPath, StringComparison.OrdinalIgnoreCase);
+        long at = 0;
+        var playing = false;
+        if (!DialogWindow.EditTags(this, path,
+                release: () => { if (!current) return; at = _mp.Time; playing = _mp.IsPlaying; _mp.Stop(); },
+                resume: () => { if (current) PlayAt(_index, startAt: at, autoplay: playing); })) return;
+        try
+        {
+            using var f = TagLib.File.Create(path);
+            var m = Library.Data.Meta.GetValueOrDefault(path) ?? new TrackMeta();
+            (m.Title, m.Artist, m.Album, m.Genre, m.Art) = (f.Tag.Title, f.Tag.JoinedPerformers, f.Tag.Album, f.Tag.JoinedGenres, null); // the cover is read again
+            m.Stamp = File.GetLastWriteTimeUtc(path).Ticks;
+            Library.Data.Meta[path] = m;
+        }
+        catch (Exception e) when (e is IOException or TagLib.UnsupportedFormatException or TagLib.CorruptFileException) { Library.Data.Meta.Remove(path); }
+        Library.Touch();
+        Sidebar.Render();
+    }
+
+    /// <summary>
+    /// One frame back. libVLC 3 only steps forward, so: pause, then a precise seek one frame earlier (the decoder runs
+    /// from the keyframe before it and shows exactly that frame).
+    /// </summary>
+    public void PreviousFrame()
+    {
+        if (_index < 0 || _isAudio) return;
+        if (_mp.IsPlaying) _mp.SetPause(true);
+        var fps = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video) is { } v && v.Data.Video.FrameRateDen > 0
+            ? v.Data.Video.FrameRateNum / (double)v.Data.Video.FrameRateDen : 25;
+        _mp.Time = Math.Max(0, _mp.Time - (long)Math.Ceiling(1000 / fps));
+    }
 
     public void Jump(long deltaMs)
     {
@@ -2250,6 +2340,7 @@ public partial class MainWindow : Window
         Item("Customize Player", "paint-brush-duotone", null, ShowCustomize),
         Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
+        Item("Report a Problem…", "info-duotone", null, () => BugReport.Open(this, CurrentPath, _mp, Vlc.Version)),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
 
@@ -2628,6 +2719,7 @@ public partial class MainWindow : Window
                 Item("Repeat All", null, null, () => Settings.Set("playback.repeat", Settings.Str("playback.repeat") == "All" ? "Off" : "All"), check: Settings.Str("playback.repeat") == "All"),
                 Item("Shuffle", null, null, () => Settings.Set("playback.shuffle", !Settings.Bool("playback.shuffle")), check: Settings.Bool("playback.shuffle")),
                 Item("Next Frame", null, KeyOf("frame"), NextFrame),
+                Item("Previous Frame", null, KeyOf("prevframe"), PreviousFrame, enabled: _index >= 0 && !_isAudio),
                 Item("A-B Loop", null, KeyOf("abloop"), ToggleAbLoop, check: _loopA >= 0, enabled: _index >= 0),
                 Item("Intro Ends Here", null, null, MarkIntroEnd, enabled: !_isAudio && SeriesFolder != null),
                 Item("Forget Intro", null, null, () => { Library.Data.IntroEnds.Remove(SeriesFolder!); Library.Touch(); }, enabled: SeriesFolder is { } sf && Library.Data.IntroEnds.ContainsKey(sf)),
@@ -2644,6 +2736,9 @@ public partial class MainWindow : Window
                 Item("Reset 360° View", null, null, () => _view.Reset(), enabled: _is360),
                 Item("Contact Sheet…", null, null, MakeContactSheet, enabled: !_isAudio && CurrentPath is { } cs && !cs.Contains("://")),
                 Sub("Deinterlace", null, new[] { "Automatic", "On", "Off" }.Select(o => (object)Item(o, null, null, () => Settings.Set("video.deint", o), check: Settings.Str("video.deint") == o))),
+                // the GPU's own enhancements (NVIDIA RTX Video, Intel VSR), one click instead of Settings → Video
+                Item("Super Resolution (RTX / Intel)", null, null, () => Settings.Set("video.upscale", Settings.Str("video.upscale") == "Super Resolution" ? "Linear" : "Super Resolution"), check: Settings.Str("video.upscale") == "Super Resolution"),
+                Item("HDR from SDR (RTX Video HDR)", null, null, () => Settings.Set("video.hdr", Settings.Str("video.hdr") == "Generate HDR from SDR" ? "Auto" : "Generate HDR from SDR"), check: Settings.Str("video.hdr") == "Generate HDR from SDR"),
                 Sub("Background", null, Settings.Find("ui.videobg")!.Options.Select(o => (object)Item(o, null, null, () => Settings.Set("ui.videobg", o), check: Settings.Str("ui.videobg") == o))),
             ]),
             Sub("Audio", "speaker-high", AudioMenuItems()),
@@ -2704,6 +2799,7 @@ public partial class MainWindow : Window
             path == null ? Item("Add to Playlist", null, null, () => { }, enabled: false) : Sub("Add to Playlist", null, playlists),
             !local || !_isAudio ? Item("Add to Music", null, null, () => { }, enabled: false)
                 : Sub("Add to Music", null, Library.MusicTargets().Select(d => (object)Item(d, "folder", null, () => AddToMusic([path!], d)))),
+            Item("Edit Tags…", null, null, () => EditTags(path!), enabled: local),
             Item("Show in Explorer", null, null, () => Process.Start("explorer.exe", $"/select,\"{path}\""), enabled: local),
             Item("Convert…", null, KeyOf("convert"), OpenConverter, enabled: local),
         ];
@@ -2763,8 +2859,42 @@ public partial class MainWindow : Window
         if (items.Count > 0) items.Add(new Separator());
         items.Add(Item("Add Subtitles…", "file-duotone", null, AddSubtitles, enabled: _index >= 0 && CurrentPath?.Contains("://") == false));
         if (OnlineSubtitles.Possible) items.Add(Item("Find Subtitles Online…", "magnifying-glass", null, FindSubtitlesOnline, enabled: _index >= 0 && !_isAudio && CurrentPath?.Contains("://") == false));
+        var local = _index >= 0 && !_isAudio && CurrentPath?.Contains("://") == false;
+        items.Add(Item("Sync Subtitles Automatically", null, null, SyncSubtitles, enabled: local && SubText.Beside(CurrentPath!).Count > 0));
+        if (local) items.Add(Sub("Second Subtitle", null, SecondSubtitleItems()));
+        items.Add(Item(_whisper != null ? "Stop Subtitles from Speech" : "Subtitles from Speech…", "microphone-stage", null, SubtitlesFromSpeech, enabled: local || _whisper != null));
         items.Add(Item("Subtitle Settings…", null, null, () => OpenSettings("Subtitles")));
         return items;
+    }
+
+    CancellationTokenSource? _syncing;
+
+    /// <summary>Matches a subtitle file to the speech in the video (SubSync) and switches to the corrected copy.</summary>
+    async void SyncSubtitles()
+    {
+        if (CurrentPath is not { } video) return;
+        var files = SubText.Beside(video);
+        var subs = files.Count == 1 ? files[0] : DialogWindow.Choose(this, "Sync Subtitles Automatically", "Which subtitles?", [.. files.Select(Path.GetFileName)!]) is var k and >= 0 ? files[k] : null;
+        if (subs == null) return;
+        _syncing?.Cancel();
+        _syncing = new CancellationTokenSource();
+        Osd(L.T("Listening to the dialogue…"), 60);
+        SubSync.Result? r;
+        try { r = await SubSync.FindAsync(video, subs, _mp.Length / 1000.0, new Progress<double>(p => Osd(L.F("Listening to the dialogue… {0}%", (int)(p * 100)), 60)), _syncing.Token); }
+        catch (OperationCanceledException) { return; }
+        if (CurrentPath != video) return;
+        if (r == null) { Osd(L.T("Couldn't match these subtitles to the speech"), 4); return; }
+        if (Math.Abs(r.Offset) < 0.08 && r.Scale == 1) { Osd(L.T("These subtitles are already in sync"), 3); return; }
+        string fixedFile;
+        try { fixedFile = SubSync.WriteFixed(subs, r); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Osd(L.T("Couldn't save the corrected subtitles"), 3); return; }
+        var list = Library.Data.Subtitles.TryGetValue(video, out var l) ? l : Library.Data.Subtitles[video] = [];
+        list.Remove(subs);
+        if (!list.Contains(fixedFile, StringComparer.OrdinalIgnoreCase)) list.Add(fixedFile);
+        Library.Touch();
+        _mp.AddSlave(MediaSlaveType.Subtitle, new Uri(fixedFile).AbsoluteUri, true);
+        var speed = r.Scale == 1 ? "" : " · " + L.F("speed ×{0:0.###}", r.Scale);
+        Osd(L.F("Subtitles moved by {0:+0.0;-0.0} s", r.Offset) + speed, 4);
     }
 
     async void FindSubtitlesOnline()

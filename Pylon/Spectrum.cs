@@ -268,7 +268,7 @@ public static class AudioTap
     static long _fftAt;
     static readonly Complex[] Buf = new Complex[N];
 
-    static void Fft(Complex[] a)
+    internal static void Fft(Complex[] a)
     {
         for (int i = 1, j = 0; i < a.Length; i++)
         {

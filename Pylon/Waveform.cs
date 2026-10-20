@@ -119,7 +119,7 @@ public static class Waveform
     }
 
     /// <summary>Where the samples of the "data" chunk start, -1 if the header doesn't show one.</summary>
-    static int DataOffset(ReadOnlySpan<byte> head)
+    internal static int DataOffset(ReadOnlySpan<byte> head)
     {
         for (var p = 12; p + 8 <= head.Length;)
         {

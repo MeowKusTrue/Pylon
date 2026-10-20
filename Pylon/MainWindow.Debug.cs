@@ -61,6 +61,36 @@ public partial class MainWindow
                 case "settingssearch": _settings!.SearchBox.Text = arg; _settings.SearchBox.Focus(); break;
                 case "winstate": WindowState = arg == "min" ? WindowState.Minimized : WindowState.Normal; break; // sleep / wake
                 case "lyricsreshow": LyricsPane.Restyle(); break; // the same lyrics built again (same height)
+                case "seekresume": // seeks; for each, how long until pictures flow again (libVLC's displayed-picture count, real video output)
+                    {
+                        var res = new List<string>();
+                        var fps = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video) is { } vt && vt.Data.Video.FrameRateDen > 0
+                            ? vt.Data.Video.FrameRateNum / (double)vt.Data.Video.FrameRateDen : 30;
+                        var need = (int)(fps * 0.4 * 0.8); // 80 % of the video's own pace over 400 ms
+                        foreach (var target in new[] { 0.2, 0.37, 0.53, 0.11, 0.71 }.Select(f => (long)(_mp.Length * f)))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            var start = _mp.Media?.Statistics.DisplayedPictures ?? 0;
+                            _mp.Time = target;
+                            // smooth again: 20 new pictures within the last 400 ms (60 fps video), first time it holds
+                            var marks = new List<(double T, int N)>();
+                            double resumed = -1;
+                            while (sw.ElapsedMilliseconds < 4000)
+                            {
+                                await Task.Delay(10);
+                                var n = (_mp.Media?.Statistics.DisplayedPictures ?? 0) - start;
+                                marks.Add((sw.Elapsed.TotalMilliseconds, n));
+                                var back = marks.FirstOrDefault(m => m.T >= sw.Elapsed.TotalMilliseconds - 400);
+                                if (resumed < 0 && marks.Count > 5 && n - back.N >= need) { resumed = back.T; }
+                            }
+                            res.Add($"{resumed:0}");
+                            // pictures shown per 100 ms after the seek, for reading by eye
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".trace.txt"), $"{target}: " + string.Join(" ", Enumerable.Range(1, 30)
+                                .Select(k => marks.LastOrDefault(m => m.T <= k * 100).N - marks.LastOrDefault(m => m.T <= (k - 1) * 100).N)) + Environment.NewLine);
+                        }
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"seek resume ms ({fps:0} fps, len {_mp.Length / 1000}s, tracks {_mp.Media?.Tracks.Length}, shown {_mp.Media?.Statistics.DisplayedPictures}, decoded {_mp.Media?.Statistics.DecodedVideo}, vout {_mp.VoutCount}, hwnd {_mp.Hwnd}): " + string.Join(" / ", res) + Environment.NewLine);
+                    }
+                    break;
                 case "lyricswheel": // a notch down on the lyrics: they scroll and the scrollbar shows
                     LyricsPane.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = MouseWheelEvent, Source = LyricsPane });
                     break;

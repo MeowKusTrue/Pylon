@@ -28,6 +28,7 @@ public static class Hotkeys
         new("next", "Playback", "Next track", "N", w => w.Next()),
         new("prev", "Playback", "Previous track", "P", w => w.Previous()),
         new("frame", "Playback", "Next frame", "OemPeriod", w => w.NextFrame()),
+        new("prevframe", "Playback", "Previous frame", "OemComma", w => w.PreviousFrame()),
         new("faster", "Playback", "Faster", "OemPlus", w => w.ChangeRate(+1)),
         new("slower", "Playback", "Slower", "OemMinus", w => w.ChangeRate(-1)),
         new("normalspeed", "Playback", "Normal speed", "Oem2", w => w.ChangeRate(0)),
@@ -94,7 +95,7 @@ public static class Hotkeys
         },
         ["MPC-HC-style"] = new()
         {
-            ["fullscreen"] = "Alt+Return|F", ["stop"] = "OemPeriod", ["frame"] = "Ctrl+Right", ["back1"] = "Alt+Left", ["fwd1"] = "Alt+Right",
+            ["fullscreen"] = "Alt+Return|F", ["stop"] = "OemPeriod", ["frame"] = "Ctrl+Right", ["prevframe"] = "Ctrl+Left", ["back1"] = "Alt+Left", ["fwd1"] = "Alt+Right",
             ["back2"] = "Left", ["fwd2"] = "Right", ["back3"] = "Shift+Left", ["fwd3"] = "Shift+Right",
             ["next"] = "Next", ["prev"] = "Prior", ["mute"] = "Ctrl+M|M", ["miniplayer"] = "Ctrl+Shift+M", ["snapshot"] = "Alt+I",
             ["faster"] = "Ctrl+Up", ["slower"] = "Ctrl+Down", ["quit"] = "Alt+X|Ctrl+Q",

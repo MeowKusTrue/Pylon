@@ -42,6 +42,9 @@ public static class Settings
 {
     static readonly string FilePath = Path.Combine(Library.Dir, "settings.json");
     static Dictionary<string, string> _values = new();
+
+    /// <summary>Every value the user changed (for the problem report, which drops anything secret).</summary>
+    public static IReadOnlyDictionary<string, string> Changed_ => _values;
     static readonly DispatcherTimer SaveTimer = new(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Save(), Dispatcher.CurrentDispatcher) { IsEnabled = false };
 
     /// <summary>Raised on the UI thread with the changed key (or "*" after a reset).</summary>

@@ -119,6 +119,51 @@ Check("default player: formats to take", !take.Contains(".mkv") && take.Contains
     }
 }
 
+// ── subtitles: SRT / ASS read and shifted; auto-sync finds a shift and a 23.976 → 25 speed-up from speech marks
+{
+    var srt = "1\n00:00:01,500 --> 00:00:03,000\nHello <i>there</i>\n\n2\n00:01:02,250 --> 00:01:04,000\nSecond\n";
+    var cues = SubText.Parse(srt, ".srt");
+    var shifted = SubText.Parse(SubText.Shift(srt, ".srt", 2, 1), ".srt");
+    var ass = "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:05.10,0:00:06.00,Default,,0,0,0,,{\\i1}Hi\\Nthere\n";
+    var assCues = SubText.Parse(ass, ".ass");
+    Check("subtitles: read and shift", cues.Count == 2 && cues[0].Text == "Hello there" && Math.Abs(cues[1].Start - 62.25) < 0.001
+        && Math.Abs(shifted[0].Start - 3.5) < 0.001 && assCues.Count == 1 && assCues[0].Text == "Hi\nthere" && Math.Abs(assCues[0].Start - 5.1) < 0.001);
+
+    // speech where the (shifted, sped-up) lines really are; the file's cues are the unshifted ones
+    var rnd = new Random(7);
+    var lines = new List<SubText.Cue>();
+    for (double t = 10; t < 1700; t += 4 + rnd.NextDouble() * 9) lines.Add(new SubText.Cue(t, t + 1 + rnd.NextDouble() * 3, "x"));
+    const double offset = 3.4, scale = 25 / 23.976;
+    var frames = (int)(1800 / 0.02);
+    var speech = new float[frames];
+    for (var i = 0; i < frames; i++) speech[i] = -1;
+    foreach (var c in lines)
+        for (var i = (int)((c.Start * scale + offset) / 0.02); i < (int)((c.End * scale + offset) / 0.02) && i < frames; i++) speech[i] = rnd.NextDouble() < 0.85 ? 1 : -1; // pauses between words
+    var r = SubSync.Match(speech, lines, frames);
+    Check("subtitles: auto-sync", r != null && Math.Abs(r.Offset - offset) < 0.1 && Math.Abs(r.Scale - scale) < 0.001, r == null ? "no match" : $"{r.Offset:0.00}s ×{r.Scale:0.0000} z={r.Confidence:0}");
+}
+
+// ── fragmented MP4 (OBS, DASH) is told apart from a plain one: it gets FFmpeg's demuxer, which seeks to the keyframe
+{
+    static byte[] Box(string type, params byte[][] body)
+    {
+        var len = 8 + body.Sum(b => b.Length);
+        return [.. new[] { (byte)(len >> 24), (byte)(len >> 16), (byte)(len >> 8), (byte)len }, .. System.Text.Encoding.ASCII.GetBytes(type), .. body.SelectMany(b => b)];
+    }
+    var ftyp = Box("ftyp", new byte[8]);
+    string Mp4(string name, params byte[][] boxes)
+    {
+        var path = Path.Combine(Path.GetTempPath(), name);
+        File.WriteAllBytes(path, boxes.SelectMany(b => b).ToArray());
+        return path;
+    }
+    var plain = Mp4("pylon-check-plain.mp4", ftyp, Box("moov", Box("mvhd", new byte[100]), Box("trak")), Box("mdat", new byte[64]));
+    var mvex = Mp4("pylon-check-mvex.mp4", ftyp, Box("moov", Box("mvhd", new byte[100]), Box("mvex", Box("trex", new byte[24]))));
+    var moof = Mp4("pylon-check-moof.mov", ftyp, Box("moov", Box("mvhd", new byte[100])), Box("moof", Box("mfhd", new byte[8])), Box("mdat", new byte[64]));
+    Check("fragmented MP4 detected", !MainWindow.IsFragmentedMp4(plain) && MainWindow.IsFragmentedMp4(mvex) && MainWindow.IsFragmentedMp4(moof)
+        && !MainWindow.IsFragmentedMp4(Path.ChangeExtension(moof, ".mkv")));
+}
+
 // ── shortcuts: every layout works and gives no key two jobs
 foreach (var layout in Hotkeys.Layouts.Keys)
 {

@@ -17,6 +17,7 @@ public partial class App : Application
             return;
         }
         Perf.Mark("startup");
+        if (e.Args.Length > 0) GpuWarmup.Start(); // opened with a file: the driver starts while the window is built
         ErrorLog.Install(this);
         SmoothScroll.Install();
         Motion.HookMenus();

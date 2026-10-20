@@ -604,6 +604,7 @@ public partial class LibraryPanel : UserControl
             add,
             .. folder != null || files!.Any(Library.IsAudio) ? new object[] { music } : [],
             new Separator(),
+            .. single && !target.Contains("://") && (Library.IsAudio(target) || Path.GetExtension(target).ToLowerInvariant() is ".mp4" or ".m4v" or ".mkv" or ".webm") ? new object[] { Item("Edit Tags…", "tag", () => Player.EditTags(target)) } : [],
             Item("Show in Explorer", "folder-open", () => Reveal(target)),
         ];
     }

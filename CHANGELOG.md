@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.0.0
+
+<!-- ru -->
+**Новое**
+- **Вторые субтитры.** Сверху картинки можно показать ещё одни субтитры, например перевод рядом с оригиналом, чтобы учить язык. Подходит файл рядом с видео, любой выбранный файл или дорожка внутри видео. Субтитры → Вторые субтитры.
+- **Автосинхронизация субтитров.** Если субтитры отстают или спешат, Pylon сам находит, где в видео говорят, и сдвигает их. Исправляет и разную частоту кадров (23,976 ↔ 25). Исправленная копия сохраняется рядом с оригиналом (`.synced.srt`). Субтитры → Синхронизировать субтитры автоматически.
+- **Субтитры из речи.** Если субтитров нет совсем, Pylon делает их из речи в видео через whisper.cpp, на вашем компьютере и без интернета после первой загрузки. На видеокартах NVIDIA работает быстрее. Можно сразу перевести на английский. Субтитры → Субтитры из речи…
+- **Редактор тегов.** Название, исполнитель, альбом, год, номер, жанр и обложка (с компьютера или найденная в интернете). Правой кнопкой по песне → Изменить теги…
+- **Предыдущий кадр:** клавиша `,` (в раскладке MPC-HC `Ctrl+←`).
+- **Super Resolution и HDR из SDR** включаются прямо из меню Видео, без похода в настройки.
+- **Сообщить о проблеме.** Меню ⋯ → Сообщить о проблеме…: Pylon собирает архив с версиями, видеокартой и журналами ошибок (без названий файлов, паролей и ключей) и открывает страницу GitHub, куда его приложить.
+- **Совместный просмотр без Pylon.** На странице приглашения появились кнопки «Смотреть в браузере» (прямо на странице, ничего ставить не надо) и «Скачать Pylon».
+
+**Исправления**
+- **Картинка больше не замирает после перемотки.** У записей OBS и других «фрагментированных» MP4 звук после перемотки шёл сразу, а картинка стояла 1–2 секунды. Теперь картинка продолжается почти мгновенно (~0,1 с), как в MPC-HC.
+- **Видео открывается быстрее** примерно на 0,6–0,9 с, когда Pylon запускают двойным щелчком по файлу: видеодрайвер готовится, пока строится окно, и файл начинает открываться, не дожидаясь, пока окно нарисуется.
+
+<!-- en -->
+**New**
+- **A second subtitle.** Show another subtitle at the top of the picture, such as a translation next to the original for learning a language. It can be a file beside the video, any file you choose, or a track inside the video. Subtitles → Second Subtitle.
+- **Automatic subtitle sync.** When subtitles run early or late, Pylon finds where people speak in the video and shifts them to match. It also fixes a frame-rate mix-up (23.976 ↔ 25). The fixed copy is saved beside the original (`.synced.srt`). Subtitles → Sync Subtitles Automatically.
+- **Subtitles from speech.** When a video has no subtitles at all, Pylon makes them from its speech with whisper.cpp, on your computer and offline after the first download. Faster on NVIDIA cards. It can translate into English as well. Subtitles → Subtitles from Speech…
+- **Tag editor.** Title, artist, album, year, track number, genre and cover (from your computer or found online). Right-click a song → Edit Tags…
+- **Previous frame:** the `,` key (`Ctrl+←` in the MPC-HC layout).
+- **Super Resolution and HDR from SDR** can be switched on right from the Video menu.
+- **Report a problem.** ⋯ menu → Report a Problem…: Pylon packs a zip with versions, graphics card and error logs (no file names, passwords or keys) and opens the GitHub page to attach it to.
+- **Watch Together without Pylon.** The invite page has "Watch in the browser" (right on the page, nothing to install) and "Download Pylon" buttons.
+
+**Fixes**
+- **The picture no longer freezes after a seek.** With recordings from OBS and other "fragmented" MP4s, the sound carried on right after a seek but the picture stood still for 1–2 seconds. Now it carries on almost at once (~0.1 s), as in MPC-HC.
+- **Videos open faster,** by about 0.6–0.9 s when Pylon is started by double-clicking a file: the graphics driver gets ready while the window is built, and the file starts opening without waiting for the window to be drawn.
+
 ## 1.9.14
 
 <!-- ru -->

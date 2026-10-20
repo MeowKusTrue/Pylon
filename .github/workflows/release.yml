@@ -44,4 +44,9 @@ jobs:
           # bridge for 1.0-1.2 (their updater looks for *-setup-win-x64.exe) and the changelog as the release notes
           $bridge = "dist\releases\Pylon-$version-setup-win-x64.exe"
           if (Test-Path $bridge) { gh release upload $env:GITHUB_REF_NAME $bridge --clobber }
-          gh release edit $env:GITHUB_REF_NAME --notes-file dist\notes.md
+          # the release page starts with which file to take (many download from here); the app's own "what's new" stays plain
+          $setup = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/Pylon-win-Setup.exe"
+          $hint = "**Скачайте [Pylon-win-Setup.exe]($setup) и запустите — это всё.** Остальные файлы ниже нужны для обновлений, их скачивать не надо.`n`n" +
+                  "**Download [Pylon-win-Setup.exe]($setup) and open it — that's all.** The other files below are for updates; you don't need them.`n`n---`n`n"
+          Set-Content dist\release-page.md ($hint + (Get-Content dist\notes.md -Raw)) -Encoding utf8
+          gh release edit $env:GITHUB_REF_NAME --notes-file dist\release-page.md

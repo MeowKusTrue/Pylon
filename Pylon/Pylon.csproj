@@ -12,7 +12,7 @@
     <RootNamespace>Pylon</RootNamespace>
     <ApplicationIcon>Assets\pylon.ico</ApplicationIcon>
 
-    <Version>1.9.14</Version>
+    <Version>2.0.0</Version>
     <Product>Pylon</Product>
     <Description>A media player built on libVLC, with a redesigned VLC interface.</Description>
     <Copyright>GPL-3.0-or-later</Copyright>
@@ -29,6 +29,7 @@
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="SharpVectors.Wpf" Version="1.8.6" />
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="Velopack" Version="1.2.161" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
   </ItemGroup>

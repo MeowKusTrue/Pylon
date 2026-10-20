@@ -5,7 +5,7 @@ The host's Pylon sends, per room:
   POST /r/<room>/host/state?key=K   JSON state every second; the reply carries guests' commands {"cmds": ["toggle"]}
   POST /r/<room>/host/stream?key=K  one endless chunked upload of MPEG-TS (a copy of playback, nothing re-encoded)
 Guests (Pylon, or VLC with the stream address) use:
-  GET  /r/<room>/                   a page with "Open in Pylon" (pylon://join) and the stream address for VLC
+  GET  /r/<room>/                   the invite page: "Open in Pylon" (pylon://join), "Download Pylon", watch in the browser (mpegts.js), the VLC address
   GET  /r/<room>/api/state          the host's state, with "stream": "stream.ts"
   GET  /r/<room>/api/toggle?n=Ann   pause / play for everyone (the host's Pylon carries it out and says who did it)
   GET  /r/<room>/api/seek?v=MS&n=Ann  move everyone to MS milliseconds
@@ -88,20 +88,51 @@ def reply(writer, status, body, ctype="application/json; charset=utf-8"):
 
 
 def page(room_url, title):
+    """The invite page: open in Pylon, download Pylon, or watch right here (mpegts.js turns the MPEG-TS copy into
+    something a <video> plays; H.264 everywhere, HEVC where the browser and GPU can). English or Russian by the browser."""
     t = html.escape(title or "Pylon")
-    join = "pylon://join/?url=" + urllib.parse.quote(room_url, safe="")
+    join = html.escape("pylon://join/?url=" + urllib.parse.quote(room_url, safe=""))
     stream = html.escape(room_url + "stream.ts")
     return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{t} · Pylon</title><style>
 body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#111;color:#eee;font:16px/1.5 system-ui,sans-serif;padding:24px;box-sizing:border-box}}
-main{{max-width:520px}} h1{{font-size:24px;margin:0 0 6px}} p{{color:#aaa}}
-a.b{{display:inline-block;background:#d37918;color:#111;text-decoration:none;font-weight:600;padding:12px 20px;border-radius:10px;margin:12px 0}}
-code{{display:block;background:#1e1e1e;padding:10px 12px;border-radius:8px;word-break:break-all;color:#ddd}}
-</style></head><body><main><h1 id="t">{t}</h1><p>Watch together in Pylon: it plays the host's picture and sound, in step.</p>
-<a class="b" href="{html.escape(join)}">Open in Pylon</a>
-<p>No Pylon? Open this address in VLC (Media → Open Network Stream):</p><code>{stream}</code></main>
-<script>setInterval(async()=>{{try{{const s=await (await fetch('api/state')).json();document.getElementById('t').textContent=s.title||'Pylon'}}catch(e){{}}}},3000)</script>
-</body></html>"""
+main{{width:min(960px,100%)}} h1{{font-size:24px;margin:0 0 6px}} p{{color:#aaa;margin:8px 0}}
+.row{{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}}
+a.b,button.b{{display:inline-block;border:0;cursor:pointer;background:#2a2a2a;color:#eee;text-decoration:none;font:600 15px system-ui,sans-serif;padding:12px 18px;border-radius:10px}}
+.b.main{{background:#d37918;color:#111}}
+video{{display:none;width:100%;max-height:70vh;background:#000;border-radius:12px;margin-top:8px}}
+details{{color:#888;margin-top:14px}} code{{display:block;background:#1e1e1e;padding:10px 12px;border-radius:8px;word-break:break-all;color:#ddd;margin-top:6px}}
+#msg{{color:#e8a35c}}
+</style></head><body><main><h1 id="t">{t}</h1><p data-i="lead">Watch together: the host's picture and sound, in step.</p>
+<div class="row"><a class="b main" href="{join}" data-i="open">Open in Pylon</a>
+<button class="b" id="here" data-i="here">Watch in the browser</button>
+<a class="b" href="https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Setup.exe" data-i="get">Download Pylon (Windows)</a></div>
+<p id="msg"></p><video id="v" controls playsinline></video>
+<div class="row" id="ctl" style="display:none"><button class="b" id="pp" data-i="pp">Pause / play for everyone</button></div>
+<details><summary data-i="vlc">Watch in VLC instead</summary><p data-i="vlc2">Media → Open Network Stream, this address:</p><code>{stream}</code></details>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+<script>
+const ru = (navigator.language||'').toLowerCase().startsWith('ru');
+const T = {{lead:'Смотреть вместе: картинка и звук хоста, синхронно.', open:'Открыть в Pylon', here:'Смотреть в браузере',
+  get:'Скачать Pylon (Windows)', pp:'Пауза / продолжить у всех', vlc:'Или смотреть в VLC', vlc2:'Медиа → Открыть URL, этот адрес:',
+  codec:'Этот формат видео браузер не показывает — откройте в Pylon или VLC.', wait:'Подключаюсь к потоку…', ended:'Хост остановил показ.'}};
+const E = {{codec:"This video format doesn't play in the browser: open it in Pylon or VLC.", wait:'Connecting to the stream…', ended:'The host stopped sharing.'}};
+if (ru) document.querySelectorAll('[data-i]').forEach(e => {{ const k = e.dataset.i; if (T[k]) e.textContent = T[k]; }});
+const say = k => document.getElementById('msg').textContent = (ru ? T : E)[k] || '';
+setInterval(async()=>{{try{{const s=await (await fetch('api/state')).json();document.getElementById('t').textContent=s.title||'Pylon'}}catch(e){{}}}},3000);
+document.getElementById('here').onclick = () => {{
+  const v = document.getElementById('v');
+  if (!window.mpegts || !mpegts.getFeatureList().mseLivePlayback) {{ say('codec'); return; }}
+  say('wait'); v.style.display = 'block'; document.getElementById('ctl').style.display = 'flex';
+  const p = mpegts.createPlayer({{ type: 'mpegts', isLive: true, url: 'stream.ts' }}, {{ liveBufferLatencyChasing: true, enableStashBuffer: false }});
+  p.attachMediaElement(v); p.load();
+  p.on(mpegts.Events.ERROR, (type, detail) => say(detail === 'CodecUnsupported' || type === 'MediaError' ? 'codec' : 'ended'));
+  v.addEventListener('playing', () => say(''));
+  p.play().catch(() => {{}});
+}};
+document.getElementById('pp').onclick = () => fetch('api/toggle?n=' + encodeURIComponent(ru ? 'Гость в браузере' : 'Browser guest'));
+</script></body></html>"""
 
 
 async def handle(reader, writer):

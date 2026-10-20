@@ -8,7 +8,15 @@
 synced lyrics, an equalizer and effects, a converter and streaming to TV.</p>
 
 <p align="center">
-  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=download" alt="Latest release"></a>
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Setup.exe"><img src="docs/brand/download-windows.svg" width="340" alt="Download Pylon for Windows"></a>
+</p>
+
+<p align="center"><sub>One click downloads <b>Pylon-win-Setup.exe</b> (the latest version). Open it and Pylon installs itself, no admin rights needed.<br>
+That's the only file you need: the other files on the release page are for updates.
+· <a href="https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Portable.zip">Portable version (zip)</a> · <a href="https://github.com/MeowKusTrue/Pylon/releases">All versions</a></sub></p>
+
+<p align="center">
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=latest" alt="Latest release"></a>
   <a href="https://github.com/MeowKusTrue/Pylon/releases"><img src="https://img.shields.io/github/downloads/MeowKusTrue/Pylon/total" alt="Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MeowKusTrue/Pylon" alt="License: GPL-3.0"></a>
 </p>
@@ -51,12 +59,16 @@ Pylon brings **[Juxtopposed](https://www.youtube.com/@juxtopposed)'s open "VLC R
 
 ## Install
 
-Download from [Releases](../../releases):
+**[Download Pylon-win-Setup.exe](https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Setup.exe)** and open it. That's all.
 
-- `Pylon-win-Setup.exe` is the installer. It installs per user into `%LocalAppData%\Pylon`, without admin rights, and registers file types.
-- `Pylon-win-Portable.zip` runs from any folder and updates itself too, but doesn't register file types.
+| File on the release page | Who needs it |
+|---|---|
+| `Pylon-win-Setup.exe` | **Everyone.** The installer: per user into `%LocalAppData%\Pylon`, no admin rights, registers file types. |
+| `Pylon-win-Portable.zip` | If you want Pylon in a folder of your choice (a USB stick). Updates itself too, but doesn't register file types. |
+| `Pylon-x.y.z-setup-win-x64.exe` | Nobody new: it moves Pylon 1.0–1.2 to the current installer when they update. |
+| `*.nupkg`, `RELEASES`, `releases.win.json` | Nobody: Pylon's own updates download these. |
 
-Windows doesn't let apps set themselves as the default player. To choose Pylon, go to **Settings → Library → Default player**.
+To make Pylon the default player for every audio and video format: **Settings → General → Default player → Make Pylon the default** (one click).
 
 Coming from Pylon 1.0–1.2? Update from the app as usual. It moves to the new installer and removes the old copy; your settings and library stay.
 

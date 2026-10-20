@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="340" height="72" viewBox="0 0 340 72" role="img" aria-label="Download for Windows">
+  <title>Download for Windows</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e88a24"/>
+      <stop offset="1" stop-color="#c96d10"/>
+    </linearGradient>
+  </defs>
+  <rect width="340" height="72" rx="16" fill="url(#g)"/>
+  <rect x="1" y="1" width="338" height="70" rx="15" fill="none" stroke="#ffffff" stroke-opacity=".18"/>
+  <g transform="translate(26 22)" fill="#1a1206">
+    <rect width="13" height="13" rx="1.5"/><rect x="15" width="13" height="13" rx="1.5"/>
+    <rect y="15" width="13" height="13" rx="1.5"/><rect x="15" y="15" width="13" height="13" rx="1.5"/>
+  </g>
+  <text x="72" y="33" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#1a1206">Download for Windows</text>
+  <text x="72" y="53" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12.5" fill="#1a1206" fill-opacity=".72">Windows 10 and 11</text>
+</svg>

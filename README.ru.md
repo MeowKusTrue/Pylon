@@ -8,7 +8,15 @@
 синхронизированные тексты песен, эквалайзер и эффекты, конвертер и трансляция на телевизор.</p>
 
 <p align="center">
-  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=скачать" alt="Последняя версия"></a>
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Setup.exe"><img src="docs/brand/download-windows-ru.svg" width="340" alt="Скачать Pylon для Windows"></a>
+</p>
+
+<p align="center"><sub>Нажмите — скачается <b>Pylon-win-Setup.exe</b> (последняя версия). Запустите его, и Pylon установится сам, без прав администратора.<br>
+Больше ничего скачивать не нужно: остальные файлы на странице релиза — для обновлений.
+· <a href="https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Portable.zip">Портативная версия (zip)</a> · <a href="https://github.com/MeowKusTrue/Pylon/releases">Все версии</a></sub></p>
+
+<p align="center">
+  <a href="https://github.com/MeowKusTrue/Pylon/releases/latest"><img src="https://img.shields.io/github/v/release/MeowKusTrue/Pylon?label=версия" alt="Последняя версия"></a>
   <a href="https://github.com/MeowKusTrue/Pylon/releases"><img src="https://img.shields.io/github/downloads/MeowKusTrue/Pylon/total?label=загрузки" alt="Загрузки"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MeowKusTrue/Pylon?label=лицензия" alt="Лицензия GPL-3.0"></a>
 </p>
@@ -51,12 +59,16 @@ Pylon воплощает в настоящий плеер открытый ре�
 
 ## Установка
 
-Скачайте со страницы [Releases](../../releases):
+**[Скачайте Pylon-win-Setup.exe](https://github.com/MeowKusTrue/Pylon/releases/latest/download/Pylon-win-Setup.exe)** и запустите. Всё.
 
-- `Pylon-win-Setup.exe` — установщик. Ставится для текущего пользователя в `%LocalAppData%\Pylon` без прав администратора и регистрирует типы файлов.
-- `Pylon-win-Portable.zip` — портативная версия: распакуйте куда угодно. Тоже обновляется сама, но типы файлов не регистрирует.
+| Файл на странице релиза | Кому нужен |
+|---|---|
+| `Pylon-win-Setup.exe` | **Всем.** Установщик: для текущего пользователя в `%LocalAppData%\Pylon`, без прав администратора, регистрирует типы файлов. |
+| `Pylon-win-Portable.zip` | Если хотите держать Pylon в своей папке (на флешке). Тоже обновляется сам, но типы файлов не регистрирует. |
+| `Pylon-x.y.z-setup-win-x64.exe` | Новым пользователям не нужен: переводит Pylon 1.0–1.2 на нынешний установщик при обновлении. |
+| `*.nupkg`, `RELEASES`, `releases.win.json` | Никому: их скачивают обновления самого Pylon. |
 
-Windows не разрешает программам самим назначать себя плеером по умолчанию. Чтобы выбрать Pylon, откройте **Настройки → Библиотека → Плеер по умолчанию**.
+Чтобы Pylon открывал все аудио- и видеоформаты: **Настройки → Общие → Плеер по умолчанию → Сделать Pylon плеером по умолчанию** (одна кнопка).
 
 Стоит Pylon 1.0–1.2? Обновитесь из приложения как обычно: он перейдёт на новый установщик и удалит старую копию, настройки и библиотека сохранятся.
 
