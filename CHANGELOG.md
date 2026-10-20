@@ -8,6 +8,7 @@ Each version's section becomes its GitHub release notes (`.github/workflows/rele
 <!-- ru -->
 **Исправления**
 - **Песни и видео больше не обрываются раньше конца.** Вывод звука DirectSound в libVLC выбрасывал то, что ещё не доиграло в буфере, поэтому у каждого файла терялись последние полсекунды–секунда (последняя нота, хвост фразы). Теперь звук идёт через waveOut и доигрывает до самого конца. Громкость на каждом положении ползунка та же, что раньше, выбранное устройство вывода сохраняется. Если что-то звучит не так, DirectSound можно вернуть: Настройки → Аудио → «Вывод звука».
+- **Мягкая пауза без хрипа.** Затухание при паузе и продолжении шло крупными ступеньками, и они слышались как хрип. Теперь оно ровное. Убран и щелчок в конце плавного перехода между песнями.
 
 **Новое**
 - **Без пауз между песнями.** Следующая песня начинается ровно тогда, когда заканчивается текущая, без тишины на стыке. Концертные и сведённые альбомы звучат слитно. Можно выключить в Настройки → Воспроизведение.
@@ -15,6 +16,7 @@ Each version's section becomes its GitHub release notes (`.github/workflows/rele
 <!-- en -->
 **Fixes**
 - **Songs and videos no longer stop short of their end.** libVLC's DirectSound output threw away what was still in its buffer, so every file lost its last half second to a second (the last note, the end of a line). Sound now goes through waveOut and plays to the very end. Every slider position is as loud as before, and the chosen output device is kept. If something sounds wrong, DirectSound can be brought back: Settings → Audio → "Audio output".
+- **Soft pause without crackle.** The fade on pause and resume went in coarse steps that were heard as crackle; now it's smooth. The click at the end of a crossfade is gone too.
 
 **New**
 - **No gaps between songs.** The next song starts right as this one ends, with no silence at the seam. Live and mixed albums play as one. It can be turned off in Settings → Playback.
