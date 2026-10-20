@@ -88,11 +88,36 @@ public static class AudioChain
     }
 
     /// <summary>
-    /// DirectSound, not WASAPI (mmdevice): it takes any sample rate and Windows' engine converts it, so libVLC never has
-    /// to resample. mmdevice only takes the device's rate (48 kHz), and libVLC's converters in this build either sound bad
-    /// (ugly) or break playback after a seek (speex). Measured: 2950 sync errors and a busy core over 7 seeks vs 2 and 2 %.
+    /// waveOut, or DirectSound (Settings → Audio). Both take any sample rate and Windows' engine converts it, so libVLC
+    /// never resamples: WASAPI (mmdevice) only takes the device's rate, and libVLC's converters in this build either sound
+    /// bad (ugly) or break playback after a seek (speex; 2950 sync errors and a busy core over 7 seeks vs 2 and 2 %).
+    /// waveOut by default since 2.0.2: libVLC's DirectSound can't drain, so the end of the file came while 0.5-1.2 s was
+    /// still buffered and that was thrown away; every song and video lost its end (heard with marker tones recorded off a
+    /// virtual cable). waveOut plays to the last sample, as cleanly (65.8 dB SNR on a 1 kHz tone either way).
     /// </summary>
-    public const string Output = "directsound";
+    public static string Output => Settings.Str("audio.output") == "DirectSound" ? "directsound" : "waveout";
+
+    /// <summary>
+    /// libVLC's volume for a slider level (1 = 100 %). DirectSound turns volume v into v³ and sits 12 dB below waveOut at
+    /// 100 %; waveOut is linear (both measured on a recorded tone: DirectSound 50 % -18 dB, 200 % +18 dB; waveOut 50 % -6 dB,
+    /// 200 % +6 dB). So waveOut gets 25·v³ and every slider position sounds as it did before 2.0.2.
+    /// </summary>
+    public static int VlcVolume(double level) =>
+        Output == "waveout" ? level <= 0 ? 0 : Math.Clamp((int)Math.Round(25 * level * level * level), 1, 200) : (int)Math.Round(level * 100);
+
+    /// <summary>A device's name without waveOut's " ($1,$64)" (waveOut also cuts names to 31 characters).</summary>
+    public static string DeviceName(string description) => System.Text.RegularExpressions.Regex.Replace(description, @" \(\$\d+,\$\d+\)$", "");
+
+    /// <summary>The saved device among the player's: the same name, or one that starts like it (saved from the other output).</summary>
+    public static string? DeviceId(MediaPlayer mp, string saved)
+    {
+        var list = mp.AudioOutputDeviceEnum.Select(d => (Name: DeviceName(d.Description), d.DeviceIdentifier)).ToList();
+        return list.FirstOrDefault(d => d.Name == saved).DeviceIdentifier ?? list.FirstOrDefault(d => SameDevice(d.Name, saved)).DeviceIdentifier;
+    }
+
+    /// <summary>One device under both outputs' names: "CABLE Input (VB-Audio Virtual Cable)" is "CABLE Input (VB-Audio Virtual C" in waveOut.</summary>
+    public static bool SameDevice(string a, string b) =>
+        a == b || Math.Min(a.Length, b.Length) >= 12 && (a.StartsWith(b, StringComparison.OrdinalIgnoreCase) || b.StartsWith(a, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Audio filters other than the equalizer, in chain order.</summary>
     public static List<string> Filters() => Settings.AudioFilterNames();

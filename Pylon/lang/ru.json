@@ -1296,5 +1296,9 @@
   "Crossfade within an album": "Переход внутри альбома",
   "Off: songs of one album follow each other without a crossfade, as live and mixed albums are meant to be heard.": "Выключено: песни одного альбома идут друг за другом без перехода, как и задумано у концертных и сведённых альбомов.",
   "Soft pause": "Мягкая пауза",
-  "Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound.": "Музыка на мгновение плавно затихает и нарастает при паузе, продолжении и переключении, а не обрывается на полузвуке."
+  "Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound.": "Музыка на мгновение плавно затихает и нарастает при паузе, продолжении и переключении, а не обрывается на полузвуке.",
+  "Audio output": "Вывод звука",
+  "waveOut plays every file to its last moment. DirectSound (Pylon 1.9.6 to 2.0.1) cut the last half second or so.": "waveOut доигрывает каждый файл до самого конца. DirectSound (Pylon с 1.9.6 по 2.0.1) обрезал последние полсекунды или около того.",
+  "No gaps between songs": "Без пауз между песнями",
+  "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).": "Без перехода следующая песня начинается ровно тогда, когда заканчивается текущая (с выводом звука waveOut)."
 }

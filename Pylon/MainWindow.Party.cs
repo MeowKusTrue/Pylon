@@ -340,6 +340,14 @@ public partial class MainWindow
 
     async void LoadWaveform(string src)
     {
+        // a track not scanned before is decoded at 40× speed on another libVLC: started with the song, it kept the CPU
+        // from the player's decoder now and then, and waveOut (less buffered than DirectSound) ran dry for 5 ms right at
+        // the start (2 starts in 6 vs 0 in 4 without the scan); a moment later nothing is lost
+        if (Waveform.Cached(src) == null)
+        {
+            await Task.Delay(1500);
+            if (CurrentPath != src) return;
+        }
         var peaks = await Waveform.GetAsync(src);
         if (peaks == null || CurrentPath != src) return;
         if (Settings.Bool("ui.realwave"))

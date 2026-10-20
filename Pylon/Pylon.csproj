@@ -12,7 +12,7 @@
     <RootNamespace>Pylon</RootNamespace>
     <ApplicationIcon>Assets\pylon.ico</ApplicationIcon>
 
-    <Version>2.0.1</Version>
+    <Version>2.0.2</Version>
     <Product>Pylon</Product>
     <Description>A media player built on libVLC, with a redesigned VLC interface.</Description>
     <Copyright>GPL-3.0-or-later</Copyright>

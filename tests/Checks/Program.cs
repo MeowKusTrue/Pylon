@@ -208,6 +208,13 @@ Check("default player: formats to take", !take.Contains(".mkv") && take.Contains
     }
 }
 
+// ── audio output: waveOut by default; its volume follows DirectSound's curve; a device saved under one output's name is found under the other's
+Check("waveOut volume matches the old curve", AudioChain.Output == "waveout" && AudioChain.VlcVolume(1) == 25 && AudioChain.VlcVolume(2) == 200
+    && AudioChain.VlcVolume(0.5) == 3 && AudioChain.VlcVolume(0) == 0 && AudioChain.VlcVolume(0.1) == 1, $"{AudioChain.VlcVolume(1)} {AudioChain.VlcVolume(0.5)}");
+Check("devices across outputs", AudioChain.DeviceName("CABLE Input (VB-Audio Virtual C ($1,$64)") == "CABLE Input (VB-Audio Virtual C"
+    && AudioChain.SameDevice("CABLE Input (VB-Audio Virtual C", "CABLE Input (VB-Audio Virtual Cable)")
+    && !AudioChain.SameDevice("Speakers (Realtek(R) Audio)", "Speakers (2- USB Audio Device)"));
+
 // ── shortcuts: every layout works and gives no key two jobs
 foreach (var layout in Hotkeys.Layouts.Keys)
 {

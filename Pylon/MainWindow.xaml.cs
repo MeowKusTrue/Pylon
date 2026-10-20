@@ -88,7 +88,9 @@ public partial class MainWindow : Window
         _preview = new SeekPreviewer(Dispatcher);
         PreviewImage.Source = _preview.Bitmap;
 
-        Settings.AudioDevices = () => ["System default", .. _mp.AudioOutputDeviceEnum.Select(d => d.Description)];
+        // the saved device keeps its saved name in the lists (and its tick), whichever output named it
+        Settings.AudioDevices = () => ["System default", .. _mp.AudioOutputDeviceEnum.Select(d => AudioChain.DeviceName(d.Description))
+            .Select(n => AudioChain.SameDevice(n, Settings.Str("audio.device")) ? Settings.Str("audio.device") : n).Distinct()];
         Settings.OpenHotkeys = w => DialogWindow.EditHotkeys(w);
         Settings.ClearHistory = w =>
         {
@@ -109,7 +111,7 @@ public partial class MainWindow : Window
         {
             ApplyVolume();
             if (_mp.Mute) SetMute(false);
-            Osd(L.F("Volume {0}%", _mp.Volume));
+            Osd(L.F("Volume {0}%", VolumePercent));
         };
         Seek.Seek += p => { if (_mp.Length > 0 || _party != null) SeekTo((long)(p * _mp.Length)); else if (_mp.IsSeekable) _mp.Position = (float)p; };
         MiniSeek.Seek += p => { if (_mp.Length > 0 || _party != null) SeekTo((long)(p * _mp.Length)); else if (_mp.IsSeekable) _mp.Position = (float)p; };
@@ -280,10 +282,11 @@ public partial class MainWindow : Window
         // the output device is chosen before anything plays: switching it on a playing stream left libVLC's clock off by a
         // quarter second for good, so it dropped and resampled audio every 200 ms (crackling sound, a busy core)
         var device = Settings.Str("audio.device");
-        if (device != "System default" && mp.AudioOutputDeviceEnum.FirstOrDefault(d => d.Description == device) is { DeviceIdentifier: { } id }) mp.SetOutputDevice(id);
+        if (device != "System default" && AudioChain.DeviceId(mp, device) is { } id) mp.SetOutputDevice(id);
         // libVLC raises events on its own thread; never call back into libVLC from there. A song fading out in a
         // crossfade is no longer the main player: its events are ignored.
         mp.EndReached += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
+        mp.TimeChanged += (_, e) => { if (mp == _mp) (_heardMs, _heardAt) = (e.Time, Stopwatch.GetTimestamp()); };
         mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
         mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
@@ -369,9 +372,14 @@ public partial class MainWindow : Window
 
     // ───────── crossfade, soft pause ─────────
 
-    MediaPlayer? _tail;           // the song fading out
+    MediaPlayer? _tail;           // the song fading out, or playing out its last moment (gapless)
     float _tailGain = 1;          // its measured level
-    DispatcherTimer? _fade;
+    DispatcherTimer? _fade, _gapless;
+    long _heardMs, _heardAt;      // the main player's last clock tick and when it came (its clock moves in ~0.3 s steps)
+    const int StartLag = 100;     // from Play() to the first sample heard on a fresh player (ms; 150 overlapped by 70)
+
+    /// <summary>Where playback is now, between the clock's ticks.</summary>
+    long HeardMs => _heardMs + (_mp.IsPlaying ? (long)((Stopwatch.GetTimestamp() - _heardAt) * 1000.0 / Stopwatch.Frequency * _mp.Rate) : 0);
     bool _fadeStarting;
     string? _skipLead;            // the song a smart crossfade started: it begins past its silence once it plays
 
@@ -391,13 +399,26 @@ public partial class MainWindow : Window
         if (next < 0 || next >= _queue.Count || _queue[next].Contains("://") || !AudioExt.Contains(Path.GetExtension(_queue[next]))) return;
         var secs = Settings.Num("playback.crossfade");
         long len = _mp.Length, now = _mp.Time;
-        if (secs > 0 && (Settings.Bool("playback.albumfade") || !SameAlbum(cur, _queue[next])))
+        // short clips aren't crossfaded: they play out (without a gap, below)
+        if (secs > 0 && len >= secs * 3000 && (Settings.Bool("playback.albumfade") || !SameAlbum(cur, _queue[next])))
         {
             var end = len;
             if (Settings.Bool("playback.smartfade") && Waveform.Cached(cur) is { } wave) end = Math.Min(len, (long)(Waveform.Music(wave).End * len) + 300);
             var left = end - now;
-            if (len < secs * 3000 || left > secs * 1000 || left < 500) return; // short clips just play out
-            StartTransition(next, left, fade: true);
+            if (left <= secs * 1000 && left >= 500) StartTransition(next, left, fade: true);
+        }
+        else if (AudioChain.Output == "waveout" && Settings.Bool("playback.gapless") && _gapless == null && len - HeardMs is > 0 and < 1200)
+        {
+            // without a gap: the next song starts on a fresh player StartLag before this one's last sample, which plays out
+            // on the old one (waveOut only: DirectSound throws the buffered end away). The refresh is too coarse for this.
+            _gapless = new DispatcherTimer(TimeSpan.FromMilliseconds(Math.Max(0, len - HeardMs - StartLag)), DispatcherPriority.Send, (_, _) =>
+            {
+                _gapless?.Stop();
+                _gapless = null;
+                if (_tail == null && CurrentPath == cur && _mp.IsPlaying && NextIndex(+1) == next && _mp.Length - HeardMs < 1200)
+                    StartTransition(next, Math.Max(0, _mp.Length - HeardMs) + 400, fade: false);
+            }, Dispatcher);
+            _gapless.Start();
         }
     }
 
@@ -410,6 +431,7 @@ public partial class MainWindow : Window
         _mp = NewPlayer();
         _mp.Mute = tail.Mute;
         if (fade) AudioChain.SetGain(_mp, 0); // silent from its first sample
+        _heardMs = 0;
         Video.MediaPlayer = _mp;    // the view must never keep the player that is about to be disposed
         if (fade && Settings.Bool("playback.smartfade")) _skipLead = _queue[next];
         _fadeStarting = true;
@@ -436,6 +458,8 @@ public partial class MainWindow : Window
     /// <summary>Finishes a crossfade at once (it ran out, or the user did something else).</summary>
     void EndCrossfade()
     {
+        _gapless?.Stop();
+        _gapless = null;
         _fade?.Stop();
         _fade = null;
         if (_tail is not { } tail) return;
@@ -472,10 +496,9 @@ public partial class MainWindow : Window
     async Task SoftVolume(double from, double to)
     {
         var (id, mp) = (++_softId, _mp);
-        var full = Volume.Value * MaxVolume;
         for (var k = 1; k <= 6 && id == _softId && mp == _mp; k++)
         {
-            mp.Volume = (int)Math.Round(full * (from + (to - from) * k / 6));
+            mp.Volume = AudioChain.VlcVolume(VolumeLevel * (from + (to - from) * k / 6));
             await Task.Delay(25);
         }
     }
@@ -1214,7 +1237,7 @@ public partial class MainWindow : Window
         _session?.SetState(_mp.IsPlaying, _index >= 0);
         if (_ticks % 5 == 0 && _index >= 0) _session?.SetTimeline(TimeSpan.FromMilliseconds(t), TimeSpan.FromMilliseconds(len));
         var spectrum = Spectrum.On;
-        AudioTap.Volume = _mp.Volume / 100.0;
+        AudioTap.Volume = VolumeLevel;
         MusicSpectrum.Active = _mp.IsPlaying && spectrum; // music only: video has no visualizer
         MusicSpectrum.Idle = !_mp.IsPlaying && _index >= 0 && spectrum; // paused: keeps breathing
         Scene.Active = _mp.IsPlaying && _isAudio && SceneView.On;
@@ -1347,10 +1370,12 @@ public partial class MainWindow : Window
     }
 
     double MaxVolume => double.TryParse(Settings.Str("audio.maxvol").TrimEnd('%'), out var m) ? m : 125;
+    double VolumeLevel => Volume.Value * MaxVolume / 100; // 1 = 100 %
+    int VolumePercent => (int)Math.Round(Volume.Value * MaxVolume);
 
     void ApplyVolume()
     {
-        _mp.Volume = (int)Math.Round(Volume.Value * MaxVolume);
+        _mp.Volume = AudioChain.VlcVolume(VolumeLevel);
         UpdateVolumeIcon();
     }
 
@@ -1359,7 +1384,7 @@ public partial class MainWindow : Window
         _mp.Mute = mute;
         Volume.Muted = mute;
         UpdateVolumeIcon();
-        Osd(mute ? L.T("Muted") : L.F("Volume {0}%", _mp.Volume));
+        Osd(mute ? L.T("Muted") : L.F("Volume {0}%", VolumePercent));
     }
 
     public void ToggleMute() => SetMute(!_mp.Mute);
@@ -1369,7 +1394,7 @@ public partial class MainWindow : Window
         Volume.Value = Math.Clamp(Volume.Value + sign * Settings.Num("audio.step") / MaxVolume, 0, 1);
         ApplyVolume();
         if (_mp.Mute) SetMute(false);
-        Osd(L.F("Volume {0}%", _mp.Volume));
+        Osd(L.F("Volume {0}%", VolumePercent));
     }
 
     void UpdateVolumeIcon() => MuteBtn.Tag = MiniMute.Tag = _mp.Mute ? "speaker-x" : Volume.Value <= 0 ? "speaker-none" : Volume.Value < 0.4 ? "speaker-low" : "speaker-high";
@@ -2593,7 +2618,7 @@ public partial class MainWindow : Window
         _sleepTimer!.Interval = TimeSpan.FromMilliseconds(100);
         if (left > TimeSpan.Zero)
         {
-            _mp.Volume = (int)Math.Round(Volume.Value * MaxVolume * left.TotalSeconds / 10); // fade out
+            _mp.Volume = AudioChain.VlcVolume(VolumeLevel * left.TotalSeconds / 10); // fade out
             return;
         }
         _sleepTimer.Stop();
