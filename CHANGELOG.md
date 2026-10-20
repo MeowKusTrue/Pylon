@@ -6,12 +6,24 @@ Each version's section becomes its GitHub release notes (`.github/workflows/rele
 ## 2.0.1
 
 <!-- ru -->
+**Новое**
+- **Умный переход между песнями.** Переход начинается там, где песня затихает, а не в самом конце файла, а следующая песня начинается сразу с музыки, без тишины в начале. Раньше при песне с тихим хвостом между треками бывало почти 3 секунды тишины, теперь их нет.
+- **Внутри одного альбома без перехода.** Песни одного альбома идут друг за другом, как задумано (концертные и сведённые альбомы не смешиваются). Включается отдельно: Настройки → Воспроизведение → «Переход внутри альбома».
+- **Мягкая пауза.** Музыка на мгновение плавно затихает и нарастает при паузе, продолжении и переключении песни, а не обрывается на полузвуке. Можно выключить там же.
+
 **Исправления**
 - **Видео 60 кадров/с больше не замедляется после перемоток.** H.264 с B-кадрами (так сжато большинство скачанных видео) после второй перемотки начинал показывать около 30 кадров в секунду вместо 60 и так и оставался. Теперь 60, а после перемотки картинка идёт через 0,05–0,2 с. Записи OBS в H.264 тоже: 0,16 с вместо 1–2 с.
+- **Перемотка в TS, M2TS, MPG и VOB без замирания картинки.** В этих форматах нет списка ключевых кадров, и после перемотки картинка ждала следующий (до 2 с). Теперь Pylon сам находит ближайший ключевой кадр и перематывает на него, как MPC-HC: картинка через 0,16–0,2 с (MPG/VOB — до 0,5 с). Касается записей с ТВ-тюнеров, IPTV, камер (AVCHD) и DVD.
 
 <!-- en -->
+**New**
+- **Smart crossfade.** The crossfade starts where the song goes quiet, not at the very end of the file, and the next song starts right with the music, past its silence. A song with a quiet tail used to leave almost 3 seconds of silence between tracks; now there is none.
+- **No crossfade within an album.** Songs of one album follow each other as intended (live and mixed albums aren't blended). It can be turned on in Settings → Playback → "Crossfade within an album".
+- **Soft pause.** Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound. It can be turned off there too.
+
 **Fixes**
 - **60 fps video no longer slows down after seeking.** H.264 with B-frames (how most downloaded videos are encoded) dropped to about 30 frames a second after the second seek and stayed there. Now it plays at 60, and after a seek the picture carries on in 0.05–0.2 s. OBS recordings in H.264 too: 0.16 s instead of 1–2 s.
+- **Seeking in TS, M2TS, MPG and VOB without a frozen picture.** These formats have no list of keyframes, so after a seek the picture waited for the next one (up to 2 s). Now Pylon finds the nearest keyframe itself and seeks to it, as MPC-HC does: the picture carries on in 0.16–0.2 s (MPG/VOB up to 0.5 s). For TV tuner and IPTV recordings, camcorders (AVCHD) and DVDs.
 
 ## 2.0.0
 

@@ -1290,5 +1290,11 @@
   "Couldn't read the video's sound": "Couldn't read the video's sound",
   "Downloading whisper.cpp…": "Downloading whisper.cpp…",
   "Recognizing speech…": "Recognizing speech…",
-  "whisper.cpp stopped with code {0}": "whisper.cpp stopped with code {0}"
+  "whisper.cpp stopped with code {0}": "whisper.cpp stopped with code {0}",
+  "Smart crossfade": "Smart crossfade",
+  "Starts the crossfade where the song goes quiet instead of at the very end of the file, and starts the next song past its silence.": "Starts the crossfade where the song goes quiet instead of at the very end of the file, and starts the next song past its silence.",
+  "Crossfade within an album": "Crossfade within an album",
+  "Off: songs of one album follow each other without a crossfade, as live and mixed albums are meant to be heard.": "Off: songs of one album follow each other without a crossfade, as live and mixed albums are meant to be heard.",
+  "Soft pause": "Soft pause",
+  "Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound.": "Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound."
 }

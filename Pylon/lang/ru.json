@@ -1290,5 +1290,11 @@
   "Couldn't read the video's sound": "Не удалось прочитать звук видео",
   "Downloading whisper.cpp…": "Скачиваю whisper.cpp…",
   "Recognizing speech…": "Распознаю речь…",
-  "whisper.cpp stopped with code {0}": "whisper.cpp завершился с кодом {0}"
+  "whisper.cpp stopped with code {0}": "whisper.cpp завершился с кодом {0}",
+  "Smart crossfade": "Умный переход",
+  "Starts the crossfade where the song goes quiet instead of at the very end of the file, and starts the next song past its silence.": "Переход начинается там, где песня затихает, а не в самом конце файла, а следующая песня начинается сразу с музыки, без тишины в начале.",
+  "Crossfade within an album": "Переход внутри альбома",
+  "Off: songs of one album follow each other without a crossfade, as live and mixed albums are meant to be heard.": "Выключено: песни одного альбома идут друг за другом без перехода, как и задумано у концертных и сведённых альбомов.",
+  "Soft pause": "Мягкая пауза",
+  "Music fades out and in for a moment on pause, resume and skip instead of stopping mid-sound.": "Музыка на мгновение плавно затихает и нарастает при паузе, продолжении и переключении, а не обрывается на полузвуке."
 }

@@ -367,48 +367,68 @@ public partial class MainWindow : Window
         else if (others) _quietTicks = 0;
     }
 
-    // ───────── crossfade ─────────
+    // ───────── crossfade, soft pause ─────────
 
     MediaPlayer? _tail;           // the song fading out
     float _tailGain = 1;          // its measured level
     DispatcherTimer? _fade;
     bool _fadeStarting;
+    string? _skipLead;            // the song a smart crossfade started: it begins past its silence once it plays
 
     /// <summary>
-    /// Music only: a few seconds before a song ends it keeps playing on its own player and fades out while the next one
-    /// starts on a fresh main player and fades in (equal power). Each player's loudness is its own gain
-    /// (<see cref="AudioChain.SetGain"/>); the volume slider would move both. Everything else goes through PlayAt.
+    /// Music only, a crossfade into the next song in the queue (a local audio file): this one keeps playing on its own
+    /// player and fades out while the next starts on a fresh main player and fades in (equal power). Smart: it starts
+    /// where the song goes quiet, not at the very end of the file, and the next song starts past its silence (both from
+    /// the cached waveform). Not between two songs of one album unless asked: live and mixed albums flow from track to
+    /// track on their own. Each player's loudness is its own gain (<see cref="AudioChain.SetGain"/>); the volume slider
+    /// would move both. Everything else goes through PlayAt.
     /// </summary>
     void MaybeCrossfade()
     {
-        var secs = Settings.Num("playback.crossfade");
-        if (secs <= 0 || _tail != null || !_isAudio || !_mp.IsPlaying || _sleepEndOfItem) return;
+        if (_tail != null || !_isAudio || !_mp.IsPlaying || _sleepEndOfItem || CurrentPath is not { } cur) return;
         if (Settings.Str("playback.repeat") == "One" || Settings.Bool("playback.stopeach")) return;
-        long len = _mp.Length, left = len - _mp.Time;
-        if (len < secs * 3000 || left > secs * 1000 || left < 500) return; // short clips just play out
         var next = NextIndex(+1);
         if (next < 0 || next >= _queue.Count || _queue[next].Contains("://") || !AudioExt.Contains(Path.GetExtension(_queue[next]))) return;
+        var secs = Settings.Num("playback.crossfade");
+        long len = _mp.Length, now = _mp.Time;
+        if (secs > 0 && (Settings.Bool("playback.albumfade") || !SameAlbum(cur, _queue[next])))
+        {
+            var end = len;
+            if (Settings.Bool("playback.smartfade") && Waveform.Cached(cur) is { } wave) end = Math.Min(len, (long)(Waveform.Music(wave).End * len) + 300);
+            var left = end - now;
+            if (len < secs * 3000 || left > secs * 1000 || left < 500) return; // short clips just play out
+            StartTransition(next, left, fade: true);
+        }
+    }
 
+
+    void StartTransition(int next, long durationMs, bool fade)
+    {
         SaveProgress(finished: true);
         _tailGain = _trackGain;
         var tail = _tail = _mp;
         _mp = NewPlayer();
         _mp.Mute = tail.Mute;
-        AudioChain.SetGain(_mp, 0); // silent from its first sample
+        if (fade) AudioChain.SetGain(_mp, 0); // silent from its first sample
         Video.MediaPlayer = _mp;    // the view must never keep the player that is about to be disposed
+        if (fade && Settings.Bool("playback.smartfade")) _skipLead = _queue[next];
         _fadeStarting = true;
         PlayAt(next, autoplay: true);
         _fadeStarting = false;
+        if (!fade) AudioChain.SetGain(_mp, _trackGain); // StartMedia leaves the gain to the fade while a song plays out
         ApplyVolume();
 
         var clock = Stopwatch.StartNew();
-        var duration = left / 1000.0;
+        var duration = durationMs / 1000.0;
         var tailGain = _tailGain;
         _fade = new DispatcherTimer(TimeSpan.FromMilliseconds(30), DispatcherPriority.Render, (_, _) =>
         {
             var k = Math.Clamp(clock.Elapsed.TotalSeconds / duration, 0, 1);
-            AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2) * _trackGain);
-            AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2) * tailGain);
+            if (fade)
+            {
+                AudioChain.SetGain(_mp, (float)Math.Sin(k * Math.PI / 2) * _trackGain);
+                AudioChain.SetGain(tail, (float)Math.Cos(k * Math.PI / 2) * tailGain);
+            }
             if (k >= 1) EndCrossfade();
         }, Dispatcher);
     }
@@ -422,6 +442,42 @@ public partial class MainWindow : Window
         _tail = null;
         if (_mp != null) AudioChain.SetGain(_mp, _trackGain);
         Task.Run(() => { tail.Stop(); tail.Dispose(); }); // Stop() blocks on the decoder threads
+    }
+
+    /// <summary>Two files of one album: the same album tag, in the same folder.</summary>
+    static bool SameAlbum(string a, string b) =>
+        Library.Data.Meta.GetValueOrDefault(a)?.Album is { Length: > 0 } x && Library.Data.Meta.GetValueOrDefault(b)?.Album is { } y
+        && x.Equals(y, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(Path.GetDirectoryName(a), Path.GetDirectoryName(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A song a smart crossfade started: on past its silence (one waveform bin early, so no first note is cut).</summary>
+    void SkipLeadingSilence()
+    {
+        if (_skipLead == null || _skipLead != CurrentPath) return;
+        _skipLead = null;
+        if (Waveform.Cached(CurrentPath) is not { } wave || _mp.Length <= 0) return;
+        var lead = (long)(Math.Max(0, Waveform.Music(wave).Start - 1.0 / Waveform.Bins) * _mp.Length);
+        if (lead > 1000 && _mp.Time < lead - 500) _mp.Time = lead;
+    }
+
+    bool SoftFades => _isAudio && Settings.Bool("playback.softpause") && _party == null && !_hosting;
+    int _softId;
+    bool _softPausing;
+
+    /// <summary>
+    /// Music: pause, resume and skip ramp the volume over ~150 ms instead of cutting the sound mid-wave (a click). The
+    /// player's volume, not its gain: the output applies volume at once, while gain reaches the samples ~0.5 s ahead of
+    /// what is heard, so a gain ramp was still in the buffer when the pause cut it (measured: a 5 ms stop either way).
+    /// </summary>
+    async Task SoftVolume(double from, double to)
+    {
+        var (id, mp) = (++_softId, _mp);
+        var full = Volume.Value * MaxVolume;
+        for (var k = 1; k <= 6 && id == _softId && mp == _mp; k++)
+        {
+            mp.Volume = (int)Math.Round(full * (from + (to - from) * k / 6));
+            await Task.Delay(25);
+        }
     }
 
     EventHandler<LogEventArgs>? _logHandler;
@@ -530,10 +586,17 @@ public partial class MainWindow : Window
         Sidebar.Render();
     }
 
-    public void PlayQueueAt(int i)
+    public async void PlayQueueAt(int i)
     {
         SaveProgress();
+        if (SoftFades && _mp.IsPlaying && _tail == null && i >= 0 && i < _queue.Count) // music: the song fades out first
+        {
+            var id = _softId + 1;
+            await SoftVolume(1, 0);
+            if (id != _softId) return;
+        }
         PlayAt(i);
+        ApplyVolume();
     }
 
     public void RemoveFromQueue(int i)
@@ -926,6 +989,7 @@ public partial class MainWindow : Window
 
     void OnPlaying()
     {
+        SkipLeadingSilence();
         if (_switch != null) { SwitchTiming = $"parsed {_switchParsed} ms, StartMedia blocked the UI {_switchStartMedia} ms, playing {_switch.ElapsedMilliseconds} ms"; _switch = null; }
         LoadChapters();
         Detect360();
@@ -1163,17 +1227,36 @@ public partial class MainWindow : Window
 
     // ───────────────────────── actions (buttons, hotkeys, menus) ─────────────────────────
 
-    public void TogglePlay()
+    public async void TogglePlay()
     {
         if (_party != null && _partyHttp != null) { _ = PartySend($"api/toggle?n={Uri.EscapeDataString(PartyName)}"); return; } // the host leads: pause for everyone
         if (RemoteShown) { RemotePane.TogglePlay(); return; }
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
         EndCrossfade();
         _duckPaused = false;
+        if (_softPausing) { _softPausing = false; _ = SoftVolume(0, 1); PlayBtn.IsChecked = false; return; } // pressed again while fading out
         if (_hosting) PartyPaused(_mp.IsPlaying, _partyFrom ?? PartyName); // a watch party: everyone sees who paused
-        if (_mp.IsPlaying) { _mp.SetPause(true); SaveProgress(); }
+        var pausing = _mp.IsPlaying;
+        if (pausing) SaveProgress();
+        if (pausing && SoftFades)
+        {
+            PlayBtn.IsChecked = true;
+            _softPausing = true;
+            var id = _softId + 1;
+            await SoftVolume(1, 0);
+            if (id != _softId || !_softPausing) return; // played again meanwhile
+            _softPausing = false;
+            _mp.SetPause(true);
+            ApplyVolume(); // paused: back at its level, whatever plays it next
+            return;
+        }
+        if (pausing) _mp.SetPause(true);
         else if (_mp.State is VLCState.Ended or VLCState.Stopped) PlayAt(_index, startAt: 0);
-        else _mp.SetPause(false);
+        else
+        {
+            if (SoftFades) { _mp.Volume = 0; _ = SoftVolume(0, 1); }
+            _mp.SetPause(false);
+        }
         PlayBtn.IsChecked = !_mp.IsPlaying; // optimistic; Refresh() corrects it
     }
 

@@ -309,6 +309,7 @@ public partial class MainWindow
                 case "playlists": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", Library.Data.Playlists.Select(pl => $"{pl.Name}: {pl.Items.Count} items, thumb={(pl.Thumb != null && File.Exists(pl.Thumb))}, source={pl.Source != null}, art={pl.Items.Count(i => Library.Data.Meta.GetValueOrDefault(i)?.Art != null)}, isrc={pl.Items.Count(i => Library.Data.Meta.GetValueOrDefault(i)?.Isrc != null)}")) + Environment.NewLine); break;
                 case "proxytest": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), (await YtDlp.TestProxyAsync()).Replace('\n', '|') + Environment.NewLine); break;
                 case "seekto": SeekTo(long.Parse(arg)); break; // a user seek (Watch Together sends it to everyone)
+                case "toggle": TogglePlay(); break; // the play / pause button
                 case "remoteany": RemoteView.DebugAnySession = true; WatchOtherPlayers(); break; // a paused session shows too
                 case "throw": _ = Dispatcher.BeginInvoke(() => throw new InvalidOperationException("test of the safety net")); break; // must be logged, not fatal
                 case "spectrum": MusicSpectrum.DebugFill(1.3); break;

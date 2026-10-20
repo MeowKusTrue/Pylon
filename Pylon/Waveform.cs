@@ -37,12 +37,35 @@ public static class Waveform
         finally { Gate.Release(); }
     }
 
-    static byte[]? Load(string path)
+    /// <summary>The waveform if it was analyzed before (in memory or the disk cache); nothing is decoded.</summary>
+    public static byte[]? Cached(string path)
+    {
+        if (Memory.TryGetValue(path, out var known)) return known;
+        try { return CacheFile(path) is { } f && File.Exists(f) && File.ReadAllBytes(f) is { Length: Bins } c ? c : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>
+    /// Where the music starts and ends, as parts of the length (0..1): bins below a hundredth of the loudest one's level
+    /// (about -40 dB; stored as 255 · ratio^0.7 ≈ 10) are silence.
+    /// </summary>
+    public static (double Start, double End) Music(byte[] wave)
+    {
+        int first = Array.FindIndex(wave, b => b > 10), last = Array.FindLastIndex(wave, b => b > 10);
+        return first < 0 ? (0, 1) : (first / (double)Bins, (last + 1) / (double)Bins);
+    }
+
+    static string? CacheFile(string path)
     {
         var info = new FileInfo(path);
         if (!info.Exists) return null;
         var key = Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{path.ToLowerInvariant()}|{info.Length}|{info.LastWriteTimeUtc.Ticks}")))[..20];
-        var cached = Path.Combine(CacheDir, key + ".bin");
+        return Path.Combine(CacheDir, key + ".bin");
+    }
+
+    static byte[]? Load(string path)
+    {
+        if (CacheFile(path) is not { } cached) return null;
         var level = Path.ChangeExtension(cached, ".db"); // waveforms cached before 1.6 have no loudness: analyzed again once
         if (File.Exists(cached) && File.ReadAllBytes(cached) is { Length: Bins } c
             && double.TryParse(File.Exists(level) ? File.ReadAllText(level) : "", System.Globalization.CultureInfo.InvariantCulture, out var known))
