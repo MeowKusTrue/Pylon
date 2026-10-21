@@ -282,7 +282,11 @@ public partial class MainWindow : Window
         // the output device is chosen before anything plays: switching it on a playing stream left libVLC's clock off by a
         // quarter second for good, so it dropped and resampled audio every 200 ms (crackling sound, a busy core)
         var device = Settings.Str("audio.device");
-        if (device != "System default" && AudioChain.DeviceId(mp, device) is { } id) mp.SetOutputDevice(id);
+        if (device != "System default" && AudioChain.DeviceId(mp, device) is { } id)
+        {
+            mp.SetOutputDevice(id);
+            AudioChain.SetDeviceVar(mp, id); // and for the output a stream's display branch opens (a host heard it on the speakers)
+        }
         // libVLC raises events on its own thread; never call back into libVLC from there. A song fading out in a
         // crossfade is no longer the main player: its events are ignored.
         mp.EndReached += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
@@ -513,7 +517,7 @@ public partial class MainWindow : Window
             for (var k = 1; k <= steps && id == _softId; k++)
             {
                 while (clock.Elapsed.TotalMilliseconds < k * 150.0 / steps) Thread.Yield();
-                mp.Volume = v0 + (v1 - v0) * k / steps;
+                AudioChain.SetWholeVolume(mp, v0 + (v1 - v0) * k / steps);
             }
         });
         if (id == _softId && mp == _mp && to > 0) ApplyVolume();
@@ -1248,6 +1252,7 @@ public partial class MainWindow : Window
     void Refresh()
     {
         MaybeCrossfade();
+        if (_hosting) UpdatePartyPill(); // the number of viewers
         UpdateDiscord();
         UpdateScrobble();
         UpdateSkip();
@@ -2477,7 +2482,8 @@ public partial class MainWindow : Window
         }),
         Item("Lyrics for Spotify", "microphone-stage-duotone", null, () => new SpotifyLyricsWindow(this).Show()),
         _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true)
-            : Item("Watch Together…", "users-three-duotone", null, _hosting ? HostParty : WatchTogether, check: _hosting),
+            : _hosting ? Sub("Watch Together", "users-three-duotone", PartyMenu())
+            : Item("Watch Together…", "users-three-duotone", null, WatchTogether),
         SleepMenu("moon-duotone"),
         Item("Effects & Filters", "sliders-horizontal-duotone", KeyOf("effects"), ToggleEffects),
         Item("Keyboard Shortcuts", "keyboard-duotone", null, () => DialogWindow.EditHotkeys(this)),

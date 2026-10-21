@@ -29,6 +29,42 @@ public static class AudioChain
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate void ListRelease(IntPtr list);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate int VolumeSetFn(IntPtr aout, float volume);
+    static VolumeSetFn? _volumeSet;
+
+    /// <summary>
+    /// Every audio output under the player, at any depth: its own (a child), and the one the display branch of a stream
+    /// output opens for itself further down (Watch Together, casting, recording), which libVLC's volume call doesn't reach.
+    /// The objects are only valid inside the callback (struct vlc_list_t { int i_type; int i_count; vlc_value_t *p_values; }).
+    /// </summary>
+    static void ForEachOutput(IntPtr obj, Action<IntPtr> act, int depth = 0)
+    {
+        if (depth > 6 || (_children ??= Export<ListChildren>("vlc_list_children")) is not { } children
+            || (_release ??= Export<ListRelease>("vlc_list_release")) is not { } release) return;
+        var list = children(obj);
+        if (list == IntPtr.Zero) return;
+        try
+        {
+            var (count, values) = (Marshal.ReadInt32(list, 4), Marshal.ReadIntPtr(list, 8));
+            for (var i = 0; i < count; i++)
+            {
+                var child = Marshal.ReadIntPtr(values, i * 8);
+                if (child == IntPtr.Zero) continue;
+                if (Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(child)) == "audio output") act(child); // object_type comes first
+                else ForEachOutput(child, act, depth + 1);
+            }
+        }
+        finally { release(list); }
+    }
+
+    /// <summary>libVLC's whole-percent volume on the player and on any output a stream's display branch opened.</summary>
+    public static void SetWholeVolume(MediaPlayer mp, int whole)
+    {
+        mp.Volume = whole;
+        if ((_volumeSet ??= Export<VolumeSetFn>("aout_VolumeSet")) is { } volumeSet) ForEachOutput(mp.NativeReference, aout => volumeSet(aout, whole / 100f));
+    }
+
     const int VarString = 0x0040, VarFloat = 0x0050;
     static IntPtr _lib;
     static VarSetChecked? _set;
@@ -76,7 +112,7 @@ public static class AudioChain
     public static void SetVolume(MediaPlayer mp, double level)
     {
         var (whole, rest) = SplitVolume(level);
-        mp.Volume = whole;
+        SetWholeVolume(mp, whole);
         var v = VolumeState.GetOrCreateValue(mp);
         if (Math.Abs(v.Rest - rest) < 0.001) return;
         v.Rest = rest;
@@ -96,30 +132,14 @@ public static class AudioChain
     static bool ApplyGain(MediaPlayer mp, float gain)
     {
         if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create
-            || (_trigger ??= Export<VarName>("var_TriggerCallback")) is not { } trigger
-            || (_children ??= Export<ListChildren>("vlc_list_children")) is not { } children
-            || (_release ??= Export<ListRelease>("vlc_list_release")) is not { } release) return false;
+            || (_trigger ??= Export<VarName>("var_TriggerCallback")) is not { } trigger) return false;
         if (!GainVar.TryGetValue(mp, out _))
         {
             create(mp.NativeReference, "gain", VarFloat);
             GainVar.Add(mp, new());
         }
         set(mp.NativeReference, "gain", VarFloat, (IntPtr)BitConverter.SingleToInt32Bits(gain));
-        // the output is a child object of the player: struct vlc_list_t { int i_type; int i_count; vlc_value_t *p_values; }
-        var list = children(mp.NativeReference);
-        if (list == IntPtr.Zero) return true;
-        try
-        {
-            var count = Marshal.ReadInt32(list, 4);
-            var values = Marshal.ReadIntPtr(list, 8);
-            for (var i = 0; i < count; i++)
-            {
-                var obj = Marshal.ReadIntPtr(values, i * 8);
-                if (obj != IntPtr.Zero && Marshal.PtrToStringUTF8(Marshal.ReadIntPtr(obj)) == "audio output") // object_type comes first
-                    trigger(obj, "audio-replay-gain-mode");
-            }
-        }
-        finally { release(list); }
+        ForEachOutput(mp.NativeReference, aout => trigger(aout, "audio-replay-gain-mode"));
         return true;
     }
 
@@ -269,6 +289,18 @@ public static class AudioChain
     const int VarBool = 0x0020;
 
     static void SetString(VarSetChecked set, MediaPlayer mp, string name, string value) => SetString(set, mp.NativeReference, name, value);
+
+    /// <summary>
+    /// The chosen device, also for outputs the player doesn't open itself: the display branch of a stream output
+    /// (Watch Together, casting, recording) opens its own and took Windows' default device; it reads this from the player.
+    /// </summary>
+    public static void SetDeviceVar(MediaPlayer mp, string id)
+    {
+        if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create) return;
+        var name = Output == "waveout" ? "waveout-audio-device" : "directx-audio-device";
+        create(mp.NativeReference, name, VarString);
+        SetString(set, mp, name, id);
+    }
 
     static void SetString(VarSetChecked set, IntPtr obj, string name, string value)
     {

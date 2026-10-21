@@ -30,6 +30,9 @@ public sealed class PartyRelay : IDisposable
     /// <summary>The relay answered the last state update.</summary>
     public bool Connected { get; private set; }
 
+    /// <summary>How many are watching (the relay counts browsers, Pylons and VLCs seen in the last seconds).</summary>
+    public int? Viewers { get; private set; }
+
     /// <param name="server">The relay's address, e.g. https://party.example.com</param>
     /// <param name="state">What guests see (the phone remote's state object); called on the UI thread.</param>
     /// <param name="command">A guest's command ("toggle"); run on the UI thread.</param>
@@ -59,6 +62,7 @@ public sealed class PartyRelay : IDisposable
                     using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(_stop.Token));
                     if (doc.RootElement.TryGetProperty("cmds", out var cmds))
                         foreach (var c in cmds.EnumerateArray()) if (c.GetString() is { } cmd) _command(cmd);
+                    Viewers = doc.RootElement.TryGetProperty("viewers", out var v) && v.TryGetInt32(out var n) ? n : null;
                 }
             }
             catch (Exception e) when (e is HttpRequestException or TaskCanceledException or TimeoutException or JsonException or InvalidOperationException) { Connected = false; }

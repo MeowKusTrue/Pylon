@@ -3,6 +3,30 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.0.3
+
+<!-- ru -->
+**Совместный просмотр**
+- **Новый плеер в браузере.** Страница приглашения теперь — полноценный плеер: большая картинка, своя панель (пауза у всех, громкость, картинка в картинке, полный экран, клавиши пробел / F / M), полоса времени хоста (клик — перемотка у всех), уведомления «Аня поставила на паузу», ваше имя, счётчик зрителей. Для музыки вместо чёрного экрана — название и визуализатор.
+- **Гости больше не отваливаются при переключении трека.** Раньше после смены песни или видео у хоста картинка у гостей замирала. Теперь Pylon и браузер сами переподключаются к потоку, а если картинка встала дольше чем на 4–5 секунд, тоже.
+- **У хоста не двоится звук.** Во время показа звук уходил на устройство Windows по умолчанию, а не на выбранное (у кого выбраны наушники — играло и в колонках). Теперь он идёт туда, куда выбрано, и ползунок громкости работает во время показа.
+- **Удобнее включать и выключать.** Пока идёт показ, в заголовке окна горит «● В эфире · 2» (сколько смотрят); по клику — скопировать ссылку, показать приглашение или остановить. То же — в меню ⋯ → Совместный просмотр.
+
+**Исправления**
+- **Субтитры из речи снова работают.** В новых сборках whisper.cpp лежит старый `main.exe`, который только пишет «устарел» и выходит, и Pylon запускал его («whisper.cpp завершился с кодом 1»). Теперь берётся `whisper-cli.exe`.
+- **Субтитры из речи на видеокарте NVIDIA действительно считаются на видеокарте.** Скачиваемая сборка для CUDA 11.8 не содержала нужных библиотек, и всё тихо шло на процессоре. Теперь скачивается сборка CUDA 12 (около 650 МБ), старая заменяется при первом запуске.
+
+<!-- en -->
+**Watch Together**
+- **A new player in the browser.** The invite page is now a proper player: a big picture, its own controls (pause for everyone, volume, picture in picture, fullscreen, Space / F / M keys), the host's timeline (a click moves everyone), notes like "Ann paused", your name, a viewer count. Music shows its title and a visualizer instead of a black screen.
+- **Guests no longer drop out when the host changes tracks.** The guests' picture used to freeze after the host's next song or video. Pylon and the browser now open the stream again on their own, and also when the picture stands still for 4-5 seconds.
+- **The host no longer hears double.** While sharing, sound went to Windows' default device instead of the chosen one (headphones chosen: the speakers played too). It now goes where it should, and the volume slider works while sharing.
+- **Easier to turn on and off.** While sharing, the title bar shows "● On air · 2" (how many are watching); a click copies the link, shows the invite or stops. The same in ⋯ → Watch Together.
+
+**Fixes**
+- **Subtitles from speech work again.** Newer whisper.cpp builds still carry an old `main.exe` that only says it's deprecated and quits, and Pylon ran that one ("whisper.cpp stopped with code 1"). It now runs `whisper-cli.exe`.
+- **Subtitles from speech on an NVIDIA card really run on the card.** The CUDA 11.8 build Pylon downloaded lacked the libraries it needs, so everything quietly ran on the CPU. Pylon now downloads the CUDA 12 build (about 650 MB) and replaces the old one on first use.
+
 ## 2.0.2
 
 <!-- ru -->

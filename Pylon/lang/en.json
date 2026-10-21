@@ -1300,5 +1300,12 @@
   "Audio output": "Audio output",
   "waveOut plays every file to its last moment. DirectSound (Pylon 1.9.6 to 2.0.1) cut the last half second or so.": "waveOut plays every file to its last moment. DirectSound (Pylon 1.9.6 to 2.0.1) cut the last half second or so.",
   "No gaps between songs": "No gaps between songs",
-  "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).": "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output)."
+  "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).": "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).",
+  "On air": "On air",
+  "On air · {0}": "On air · {0}",
+  "In a watch party": "In a watch party",
+  "Copy Invite Link": "Copy Invite Link",
+  "Invite link copied": "Invite link copied",
+  "Show Invite": "Show Invite",
+  "Stop Watch Together": "Stop Watch Together"
 }

@@ -1300,5 +1300,12 @@
   "Audio output": "Вывод звука",
   "waveOut plays every file to its last moment. DirectSound (Pylon 1.9.6 to 2.0.1) cut the last half second or so.": "waveOut доигрывает каждый файл до самого конца. DirectSound (Pylon с 1.9.6 по 2.0.1) обрезал последние полсекунды или около того.",
   "No gaps between songs": "Без пауз между песнями",
-  "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).": "Без перехода следующая песня начинается ровно тогда, когда заканчивается текущая (с выводом звука waveOut)."
+  "Without a crossfade, the next song starts right as this one ends (with the waveOut audio output).": "Без перехода следующая песня начинается ровно тогда, когда заканчивается текущая (с выводом звука waveOut).",
+  "On air": "В эфире",
+  "On air · {0}": "В эфире · {0}",
+  "In a watch party": "Совместный просмотр",
+  "Copy Invite Link": "Скопировать ссылку",
+  "Invite link copied": "Ссылка скопирована",
+  "Show Invite": "Показать приглашение",
+  "Stop Watch Together": "Остановить совместный просмотр"
 }

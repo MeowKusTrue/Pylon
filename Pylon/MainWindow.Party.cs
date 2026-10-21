@@ -62,6 +62,25 @@ public partial class MainWindow
         if (DialogWindow.Party(this, _relay?.RoomUrl ?? _remote!.Url, _relay != null)) StopHosting();
     }
 
+    /// <summary>The title bar badge while hosting or following a party ("On air · 2"); its menu has what you need meanwhile.</summary>
+    void UpdatePartyPill()
+    {
+        var text = _hosting ? (_relay?.Viewers is > 0 and var n ? L.F("On air · {0}", n) : L.T("On air")) : _party != null ? L.T("In a watch party") : null;
+        PartyPill.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
+        if (text != null && PartyText.Text != text) PartyText.Text = text;
+    }
+
+    void PartyPill_Click(object sender, RoutedEventArgs e) => ShowMenu(PartyPill, PartyMenu());
+
+    object[] PartyMenu() => _hosting
+        ? [
+            Item("Copy Invite Link", "copy", null, () => { Clipboard.SetText(_relay?.RoomUrl ?? _remote?.Url ?? ""); Osd(L.T("Invite link copied"), 2); }),
+            Item("Show Invite", "broadcast", null, HostParty),
+            new Separator(),
+            Item("Stop Watch Together", "stop", null, StopHosting),
+        ]
+        : [Item("Leave Watch Party", "sign-out", null, LeaveParty)];
+
     void StartHosting()
     {
         if (_party != null) LeaveParty(); // one party at a time
@@ -75,6 +94,7 @@ public partial class MainWindow
         if (Settings.Str("party.relay").Trim() is { Length: > 0 } server)
             _relay ??= new PartyRelay(server, () => RemoteCommand("state", 0, null), RelayCommand, () => _cast?.StreamUrl);
         _discordSig = null; // the profile gets its button
+        UpdatePartyPill();
     }
 
     void StopHosting()
@@ -86,6 +106,7 @@ public partial class MainWindow
         _pausedBy = null;
         StopStreaming();
         if (!_phoneRemote) { _remote?.Dispose(); _remote = null; } // the phone remote may still use the same server
+        UpdatePartyPill();
         Osd(L.T("Watch Together stopped"), 2);
     }
 
@@ -104,6 +125,7 @@ public partial class MainWindow
         _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         (_partyMissing, _seenNote, _waiting) = (null, -1, false);
         _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
+        UpdatePartyPill();
         Osd(L.T("Joined the watch party"), 3);
     }
 
@@ -112,6 +134,7 @@ public partial class MainWindow
         _partyTimer?.Stop();
         _partyHttp?.Dispose();
         (_party, _partyHttp, _partyTimer) = (null, null, null);
+        UpdatePartyPill();
         Osd(L.T("Left the watch party"), 2);
     }
 
@@ -213,6 +236,9 @@ public partial class MainWindow
     /// Follows the host: same file (by name) or the host's stream, play / pause, the position within 1.5 s, and what the
     /// others did ("Ann paused — waiting for them" stays on screen until someone presses play).
     /// </summary>
+    string? _partyStreamFile;       // guest: the host's file when its stream was opened here
+    long _partyLastTime = -1, _partyMovedAt;
+
     async Task FollowParty()
     {
         if (_party == null || _partyHttp == null || _partyBusy) return;
@@ -233,9 +259,16 @@ public partial class MainWindow
                 if (host.TryGetProperty("stream", out var st) && st.GetString() is { Length: > 0 } s)
                 {
                     var stream = s.Contains("://") ? s : _party + s;
-                    if (CurrentPath != stream && Environment.TickCount64 - _partyStreamAt > 10_000) // a stream that failed is tried again later
+                    // the host's next track starts its timestamps over in the same stream, and the copy here stood still on
+                    // the last picture ("the connection dropped"): a new file there opens the stream afresh; so does a
+                    // picture that hasn't moved for 4 s while the host plays
+                    var now = Environment.TickCount64;
+                    if (CurrentPath == stream && _mp.Time != _partyLastTime) (_partyLastTime, _partyMovedAt) = (_mp.Time, now);
+                    var stuck = CurrentPath == stream && playing && now - _partyMovedAt > 4000;
+                    if ((CurrentPath != stream && now - _partyStreamAt > 10_000) // a stream that failed is tried again later
+                        || (CurrentPath == stream && _partyStreamFile != file && now - _partyStreamAt > 1500) || stuck)
                     {
-                        _partyStreamAt = Environment.TickCount64;
+                        (_partyStreamAt, _partyMovedAt, _partyStreamFile) = (now, now, file);
                         PlayList([stream], 0);
                     }
                     return;

@@ -31,11 +31,26 @@ public static class Whisper
 
     /// <summary>What still has to be downloaded for these options, in MB (0 = ready).</summary>
     public static int MissingMb(Options o) =>
-        (FindExe(BuildDir(o.Gpu)) == null ? (o.Gpu ? 271 : 8) : 0) + (File.Exists(Path.Combine(Dir, "models", ModelFile(o.Quality))) ? 0 : ModelMb(o.Quality));
+        (Installed(o.Gpu) == null ? (o.Gpu ? 653 : 8) : 0) + (File.Exists(Path.Combine(Dir, "models", ModelFile(o.Quality))) ? 0 : ModelMb(o.Quality));
 
-    static string? FindExe(string dir) =>
-        Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "*.exe", SearchOption.AllDirectories)
-            .FirstOrDefault(f => Path.GetFileName(f) is "whisper-cli.exe" or "main.exe") : null;
+    /// <summary>
+    /// The installed build's program, if it can do its job. A GPU build needs cuBLAS beside it: the CUDA 11.8 one Pylon
+    /// fetched until 2.0.3 ships without it, so its GPU part never loaded and it quietly ran on the CPU; it is replaced.
+    /// </summary>
+    static string? Installed(bool gpu) =>
+        FindExe(BuildDir(gpu)) is { } exe && (!gpu || Directory.EnumerateFiles(Path.GetDirectoryName(exe)!, "cublas64_*.dll").Any()) ? exe : null;
+
+    /// <summary>
+    /// whisper-cli.exe; main.exe only from builds that have nothing else: newer releases still ship a main.exe that just
+    /// says it's deprecated and quits, and it came first alphabetically ("whisper.cpp stopped with code 1").
+    /// </summary>
+    static string? FindExe(string dir)
+    {
+        if (!Directory.Exists(dir)) return null;
+        var exes = Directory.EnumerateFiles(dir, "*.exe", SearchOption.AllDirectories).ToList();
+        return exes.FirstOrDefault(f => Path.GetFileName(f).Equals("whisper-cli.exe", StringComparison.OrdinalIgnoreCase))
+            ?? exes.FirstOrDefault(f => Path.GetFileName(f).Equals("main.exe", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>The whole job; reports (stage text, 0..1) and returns the .srt path, or null (with the reason in Error).</summary>
     public static async Task<string?> RunAsync(string video, double duration, Options o, IProgress<(string Stage, double P)> progress, CancellationToken cancel)
@@ -43,7 +58,7 @@ public static class Whisper
         Error = null;
         try
         {
-            var exe = FindExe(BuildDir(o.Gpu)) ?? await InstallBuild(o.Gpu, progress, cancel);
+            var exe = Installed(o.Gpu) ?? await InstallBuild(o.Gpu, progress, cancel);
             if (exe == null) { Error ??= L.T("Couldn't download whisper.cpp"); return null; }
             var model = Path.Combine(Dir, "models", ModelFile(o.Quality));
             if (!File.Exists(model) && !await Download($"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{ModelFile(o.Quality)}", model, L.T("Downloading the speech model…"), progress, cancel)) return null;
@@ -72,11 +87,12 @@ public static class Whisper
 
     public static string? Error { get; private set; }
 
-    /// <summary>The newest whisper.cpp release that has Windows builds: the CPU one, or CUDA 11.8 (smaller, runs on RTX 20–50).</summary>
+    /// <summary>The newest whisper.cpp release that has Windows builds: the CPU one, or CUDA 12 for NVIDIA cards.</summary>
     static async Task<string?> InstallBuild(bool gpu, IProgress<(string, double)> progress, CancellationToken cancel)
     {
         using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=10", cancel));
-        var pattern = gpu ? new Regex(@"cu(da|blas)-11[^/]*x64\.zip$") : new Regex(@"^whisper-bin-x64\.zip$");
+        // CUDA 12: its zip carries cuBLAS (the 11.8 one doesn't); the driver it needs (551+) comes with any card from the RTX 20s on
+        var pattern = gpu ? new Regex(@"cu(da|blas)-12[^/]*x64\.zip$") : new Regex(@"^whisper-bin-x64\.zip$");
         var url = doc.RootElement.EnumerateArray()
             .SelectMany(r => r.GetProperty("assets").EnumerateArray())
             .Select(a => (Name: a.GetProperty("name").GetString() ?? "", Url: a.GetProperty("browser_download_url").GetString() ?? ""))
@@ -152,11 +168,13 @@ public static class Whisper
         p.PriorityClass = ProcessPriorityClass.BelowNormal; // the computer stays usable meanwhile
         var percent = new Regex(@"progress\s*=\s*(\d+)%");
         var errors = new System.Text.StringBuilder();
+        var tail = new Queue<string>(); // the last lines it printed, for a failure that names no error
         p.ErrorDataReceived += (_, e) =>
         {
             if (e.Data == null) return;
-            if (percent.Match(e.Data) is { Success: true } m) progress.Report((stage, int.Parse(m.Groups[1].Value) / 100.0));
-            else if (e.Data.Contains("error", StringComparison.OrdinalIgnoreCase)) errors.AppendLine(e.Data);
+            if (percent.Match(e.Data) is { Success: true } m) { progress.Report((stage, int.Parse(m.Groups[1].Value) / 100.0)); return; }
+            if (e.Data.Contains("error", StringComparison.OrdinalIgnoreCase)) lock (errors) errors.AppendLine(e.Data);
+            lock (tail) { tail.Enqueue(e.Data.Trim()); if (tail.Count > 3) tail.Dequeue(); }
         };
         p.OutputDataReceived += (_, _) => { };
         p.BeginErrorReadLine();
@@ -164,7 +182,8 @@ public static class Whisper
         try { await p.WaitForExitAsync(cancel); }
         catch (OperationCanceledException) { try { p.Kill(true); } catch (InvalidOperationException) { } throw; }
         if (p.ExitCode == 0 && File.Exists(outBase + ".srt")) return true;
-        Error = errors.Length > 0 ? errors.ToString().Trim() : L.F("whisper.cpp stopped with code {0}", p.ExitCode);
+        Error = errors.Length > 0 ? errors.ToString().Trim()
+            : L.F("whisper.cpp stopped with code {0}", p.ExitCode) + (tail.Count > 0 ? ": " + string.Join(" ", tail.Where(t => t.Length > 0)) : "");
         return false;
     }
 }

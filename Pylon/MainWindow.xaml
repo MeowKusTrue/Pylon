@@ -34,6 +34,14 @@
                         <TextBlock x:Name="FolderText" FontSize="14" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
+                <!-- Watch Together is on: what's going on, and its menu (copy the link, stop) one click away -->
+                <Button x:Name="PartyPill" Style="{StaticResource FlatButton}" Padding="8,0,10,0" Height="26" Margin="8,0,0,0" Click="PartyPill_Click"
+                        WindowChrome.IsHitTestVisibleInChrome="True" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="8" Height="8" Fill="#EF4444" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PartyText" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <TextBlock x:Name="TitleText" Text="Pylon" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"
