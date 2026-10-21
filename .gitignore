@@ -3,3 +3,4 @@ obj/
 dist/
 .vs/
 *.user
+__pycache__/
