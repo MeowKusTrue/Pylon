@@ -26,13 +26,8 @@ public partial class App : Application
         Settings.Load();
         L.Init();
         Perf.Mark("settings + strings");
-        // a copy on its own profile (PYLON_DATA: tests, a second profile) is a separate player: it never hands its files
-        // to the Pylon that's already running
-        if (Environment.GetEnvironmentVariable("PYLON_SNAP") == null && Environment.GetEnvironmentVariable("PYLON_DATA") == null && SingleInstance.ForwardToRunning(e.Args))
-        {
-            Shutdown();
-            return;
-        }
+        SessionEnding += (_, _) => (MainWindow as Pylon.MainWindow)?.Quit();
+        Pylon.MainWindow.PrewarmEngine();
         new MainWindow().Show();
     }
 }

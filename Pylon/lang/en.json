@@ -1307,5 +1307,7 @@
   "Copy Invite Link": "Copy Invite Link",
   "Invite link copied": "Invite link copied",
   "Show Invite": "Show Invite",
-  "Stop Watch Together": "Stop Watch Together"
+  "Stop Watch Together": "Stop Watch Together",
+  "Keep Pylon ready in the background": "Keep Pylon ready in the background",
+  "Closing the window hides it, and Pylon starts with Windows without a window: files open at once. Quit Pylon from the tray icon.": "Closing the window hides it, and Pylon starts with Windows without a window: files open at once. Quit Pylon from the tray icon."
 }

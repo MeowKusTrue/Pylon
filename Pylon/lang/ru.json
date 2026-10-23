@@ -1307,5 +1307,7 @@
   "Copy Invite Link": "Скопировать ссылку",
   "Invite link copied": "Ссылка скопирована",
   "Show Invite": "Показать приглашение",
-  "Stop Watch Together": "Остановить совместный просмотр"
+  "Stop Watch Together": "Остановить совместный просмотр",
+  "Keep Pylon ready in the background": "Держать Pylon наготове в фоне",
+  "Closing the window hides it, and Pylon starts with Windows without a window: files open at once. Quit Pylon from the tray icon.": "Закрытое окно прячется, а Pylon запускается вместе с Windows без окна: файлы открываются сразу. Выйти совсем — через иконку в трее."
 }

@@ -22,6 +22,15 @@ public static class Program
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { System.Windows.MessageBox.Show(e.Message, "Pylon"); }
             return;
         }
+        Perf.Mark("main");
+        // a Pylon is already running (in the background, usually): hand it the files before Velopack and WPF even load
+        // (~0.1 s instead of ~0.4 s); the autostart copy just leaves. Velopack's own hooks (--veloapp-…) go on below.
+        if (Environment.GetEnvironmentVariable("PYLON_SNAP") == null && !(args is [var first, ..] && first.StartsWith("--veloapp", StringComparison.Ordinal))
+            && (args is ["--background"] ? SingleInstance.IsRunning() : SingleInstance.ForwardToRunning(args)))
+        {
+            Perf.Mark("forwarded");
+            return;
+        }
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); })
             .OnAfterUpdateFastCallback(_ => { if (Probe == null) ShellRegistration.Register(); }) // the files moved: refresh paths
@@ -33,6 +42,7 @@ public static class Program
             RunProbe(Probe);
             return;
         }
+        Perf.Mark("velopack done");
         var app = new App();
         app.InitializeComponent();
         app.Run();

@@ -378,6 +378,8 @@ public static class Settings
                 T("ui.compact", "Start in compact mode", false, "Open in the miniplayer."),
                 T("ui.tray", "Show a system tray icon", false, "Minimizing hides Pylon to the tray; click the icon to bring it back."),
                 T("ui.traymin", "Start minimized to the tray", false),
+                T("general.background", "Keep Pylon ready in the background", true,
+                    "Closing the window hides it, and Pylon starts with Windows without a window: files open at once. Quit Pylon from the tray icon."),
                 T("ui.front", "Bring Pylon to the front when playback starts", false)),
             Sec("Messages",
                 T("osd.enable", "Show feedback for shortcuts", true),

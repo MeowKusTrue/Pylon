@@ -124,9 +124,21 @@ public static partial class ShellRegistration
         }
     }
 
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// <summary>"Keep Pylon ready in the background": start with Windows, no window. Installed copies only.</summary>
+    public static void Autostart(bool on)
+    {
+        if (!Updater.IsInstalled) return;
+        using var run = Registry.CurrentUser.CreateSubKey(RunKey);
+        if (on) run.SetValue("Pylon", $"\"{Exe}\" --background");
+        else run.DeleteValue("Pylon", throwOnMissingValue: false);
+    }
+
     public static void Unregister()
     {
         using var hkcu = Registry.CurrentUser;
+        using (var run = hkcu.OpenSubKey(RunKey, writable: true)) run?.DeleteValue("Pylon", throwOnMissingValue: false);
         foreach (var key in new[] { $@"{Classes}\Pylon.Video", $@"{Classes}\Pylon.Audio", $@"{Classes}\Applications\Pylon.exe", $@"{Classes}\Directory\shell\Pylon.Play", $@"{Classes}\Pylon.MusicMenu", $@"{Classes}\pylon", @"Software\Pylon" }
                      .Concat(Formats().Select(f => $@"{Classes}\{f.Id}"))
                      .Concat(MainWindow.AudioExt.Select(e => $@"{Classes}\SystemFileAssociations\{e}\shell\Pylon.AddToMusic")))

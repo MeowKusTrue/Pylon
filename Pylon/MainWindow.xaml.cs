@@ -27,6 +27,9 @@ public partial class MainWindow : Window
 
     static readonly bool SnapMode = Environment.GetEnvironmentVariable("PYLON_SNAP") != null;
 
+    /// <summary>Started with Windows (--background): built and drawn once off-screen, then hidden until a file comes.</summary>
+    static readonly bool Background = Environment.GetCommandLineArgs().Skip(1).SequenceEqual(["--background"]);
+
     MediaPlayer _mp = null!;
     readonly List<string> _queue = [];
     List<int> _shuffle = [];
@@ -67,7 +70,15 @@ public partial class MainWindow : Window
         }
 #endif
         Perf.Mark("window created");
-        if (Perf.Enabled)
+        if (Background)
+        {
+            ShowActivated = false;
+            ShowInTaskbar = false;
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = -32000;
+            ContentRendered += (_, _) => GoBackground();
+        }
+        if (Perf.Enabled && !Background)
         {
             // profiling run: off-screen, no focus, closes itself after the first frame
             ShowActivated = false;
@@ -80,7 +91,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(ShellRegistration.MusicMenu, DispatcherPriority.ApplicationIdle);
         Perf.Mark("settings + library loaded");
         ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent"));
-        Core.Initialize();
+        if (_prewarmed == null) Core.Initialize();
         Perf.Mark("theme applied");
         SourceInitialized += (_, _) => ApplyCorners();
         CreateEngine(resume: false);
@@ -123,7 +134,7 @@ public partial class MainWindow : Window
         _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); var wasPlaying = _mp.IsPlaying; TogglePlay(); FlashPlayState(!wasPlaying); }, Dispatcher) { IsEnabled = false };
         _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _duck = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => DuckTick(), Dispatcher);
-        if (Settings.Bool("ui.tray") && Settings.Bool("ui.traymin") && !SnapMode && Environment.GetCommandLineArgs().Length <= 1)
+        if (Settings.Bool("ui.tray") && Settings.Bool("ui.traymin") && !SnapMode && !Background && Environment.GetCommandLineArgs().Length <= 1)
         {
             WindowState = WindowState.Minimized; // start in the tray: hidden once loaded
             ShowInTaskbar = false;
@@ -133,8 +144,8 @@ public partial class MainWindow : Window
 
         SourceInitialized += (_, _) =>
         {
-            StartMediaSession();
-            RestoreSavedBounds();
+            Dispatcher.BeginInvoke(StartMediaSession, DispatcherPriority.ApplicationIdle);
+            if (!Background) RestoreSavedBounds();
             HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WndProc);
         };
         ContentRendered += (_, _) => Perf.Mark("first frame");
@@ -166,28 +177,24 @@ public partial class MainWindow : Window
             HookOverlayWindow();
             Topmost = Settings.Bool("ui.ontop");
             Library.IndexMusic(Dispatcher);
+            Dispatcher.BeginInvoke(() => ShellRegistration.Autostart(Settings.Bool("general.background")), DispatcherPriority.ApplicationIdle);
             new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background, async (t, _) => { ((DispatcherTimer)t!).Interval = TimeSpan.FromHours(6); await SyncSpotifyLists(); }, Dispatcher).Start();
             Hotkeys.RegisterGlobal(this);
             StartCastDiscovery();
             ApplyPriority();
             UpdateControlButtons();
-            if (Environment.GetEnvironmentVariable("PYLON_DATA") == null) SingleInstance.Listen(this); // an isolated copy never takes files meant for the main one
+            if (!SnapMode) SingleInstance.Listen(this);
             Perf.Mark("startup work done");
             var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
-            if (args.Length > 0) Open(args);
+            if (args.Length > 0 && !Background) Open(args);
             if (Settings.Bool("ui.compact")) ToggleMiniplayer();
 #if DEBUG
             DebugSnapshot();
             if (SnapMode) return;
 #endif
+            if (Background) return; // asked when the window first shows (Reveal)
             if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => new OnboardingWindow(this).ShowDialog(), DispatcherPriority.ApplicationIdle);
-            else
-            {
-                ShowWhatsNewIfUpdated();
-                AskFileTypesOnce();
-                if (Settings.Bool("general.updates")) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
-                YtDlp.UpdateIfDue();
-            }
+            else StartupChecks();
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
         // minimized or in the tray: nothing on screen to animate, so lyrics, spectrum, seek bar and backgrounds rest
@@ -195,7 +202,7 @@ public partial class MainWindow : Window
         StateChanged += (_, _) =>
         {
             Motion.SetAsleep(WindowState == WindowState.Minimized || !IsVisible);
-            if (WindowState == WindowState.Minimized && _tray != null) Hide(); // minimized to the tray
+            if (WindowState == WindowState.Minimized && _tray != null && Settings.Bool("ui.tray")) Hide(); // minimized to the tray
             FitMaximized();
             MaxBtn.Tag = WindowState == WindowState.Maximized ? "copy" : "square";
             if (_mini && WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
@@ -206,13 +213,21 @@ public partial class MainWindow : Window
         {
             if (e.Data.GetData(DataFormats.FileDrop) is string[] files) Open(files, append: Settings.Bool("library.enqueue"));
         };
-        Closing += (_, _) =>
+        Closing += (_, e) =>
         {
             if (!_mini && !_fullscreen) SaveBounds();
-            Sidebar.Shutdown();
             SaveProgress();
-            Library.Save();
             Settings.Set("app.volume", Math.Round(Volume.Value * MaxVolume));
+            if (KeepInBackground)
+            {
+                e.Cancel = true;
+                GoBackground();
+                Library.Save();
+                Settings.Save();
+                return;
+            }
+            Sidebar.Shutdown();
+            Library.Save();
             Settings.Save();
         };
         Closed += (_, _) =>
@@ -238,17 +253,42 @@ public partial class MainWindow : Window
     // ───────────────────────── engine ─────────────────────────
 
     /// <summary>(Re)creates libVLC with the arguments the settings ask for. With resume, the current item continues where it was.</summary>
-    void CreateEngine(bool resume)
+    static List<string> EngineArgsNow()
     {
         var args = Settings.EngineArgs();
-        if (_rescan) { args.Add("--reset-plugins-cache"); _rescan = false; }
         if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) args.Add("--aout=dummy"); // silent UI test runs
+        return args;
+    }
+
+    static Task<LibVLC?>? _prewarmed;
+    static List<string>? _prewarmedArgs;
+
+    /// <summary>Loads libVLC on a pool thread while the window is still being built (about 0.9 s that used to run after it).</summary>
+    public static void PrewarmEngine()
+    {
+        var args = _prewarmedArgs = EngineArgsNow();
+        _prewarmed = Task.Run(() =>
+        {
+            try { Core.Initialize(); return new LibVLC([.. args]); }
+            catch (VLCException) { return null; }
+        });
+    }
+
+    void CreateEngine(bool resume)
+    {
+        var args = EngineArgsNow();
+        if (_rescan) { args.Add("--reset-plugins-cache"); _rescan = false; }
         var oldMp = _mp;
         var oldVlc = Vlc;
         var time = oldMp?.Time ?? 0;
         var playing = oldMp?.IsPlaying ?? false;
 
-        try { Vlc = new LibVLC(args.ToArray()); }
+        var pre = _prewarmed;
+        _prewarmed = null;
+        try
+        {
+            Vlc = pre != null && _prewarmedArgs!.SequenceEqual(args) && pre.GetAwaiter().GetResult() is { } warm ? warm : new LibVLC(args.ToArray());
+        }
         catch (VLCException)
         {
             // a bad "additional command line option" must not leave the player without an engine
@@ -306,7 +346,8 @@ public partial class MainWindow : Window
 
     void ApplyTray()
     {
-        if (!Settings.Bool("ui.tray") || SnapMode)
+        // in the background the tray icon is the way back in and out, whatever the setting says
+        if (!(Settings.Bool("ui.tray") || KeepInBackground && !IsVisible) || SnapMode)
         {
             _tray?.Dispose();
             _tray = null;
@@ -327,7 +368,7 @@ public partial class MainWindow : Window
                 Item("Next Item", "skip-forward", null, Next, enabled: _index >= 0 && _index < _queue.Count - 1),
                 new Separator(),
                 Item("Show Pylon", "app-window", null, ShowFromTray),
-                Item("Quit Pylon", "sign-out", null, Close),
+                Item("Quit Pylon", "sign-out", null, Quit),
             }) cm.Items.Add(item);
             cm.IsOpen = true;
         };
@@ -884,7 +925,7 @@ public partial class MainWindow : Window
         _track = (title, _artist, media.Meta(MetadataType.Album), media.Duration / 1000.0);
         _tags = string.Join("\n", Enum.GetValues<MetadataType>().Select(t => media.Meta(t)).Where(v => !string.IsNullOrEmpty(v)));
         if (_cast != null) _cast.Title = title;
-        _session?.SetTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
+        SessionTrack(_isAudio, title, _artist, _track.Album, media.Meta(MetadataType.ArtworkURL));
         TitleText.Text = Settings.Bool("ui.titlefile") ? title : "Pylon";
         MiniTitle.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
         Title = $"{title} - Pylon";
@@ -1179,7 +1220,7 @@ public partial class MainWindow : Window
         TitleText.Text = Settings.Bool("ui.titlefile") ? song.Title : "Pylon";
         Title = $"{song.Title} - Pylon";
         if (meta.Art != null) SetArtwork(meta.Art);
-        _session?.SetTrack(true, song.Title, song.Artist, song.Album, meta.Art);
+        SessionTrack(true, song.Title, song.Artist, song.Album, meta.Art);
         Library.Remember(src, song.Title, song.Artist, _mp.Time, _mp.Length, true);
         Library.Touch();
         _lyricsFor = null;
@@ -1209,7 +1250,7 @@ public partial class MainWindow : Window
         
         var url = new Uri(file).AbsoluteUri;
         SetArtwork(url);
-        _session?.SetTrack(true, _title, _artist, _track.Album, url);
+        SessionTrack(true, _title, _artist, _track.Album, url);
     }
 
     static BitmapImage? LoadFull(string url)
@@ -1591,8 +1632,60 @@ public partial class MainWindow : Window
     {
         SingleInstance.Release();
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false });
+        Quit();
+    }
+
+    // ───────── background: closing hides, files open at once ─────────
+
+    bool _quitting, _checked;
+
+    // isolated test copies (PYLON_DATA, profiling) exit on close unless PYLON_BACKGROUND asks for this mode
+    bool KeepInBackground => Settings.Bool("general.background") && !_quitting && !SnapMode
+                             && (Environment.GetEnvironmentVariable("PYLON_BACKGROUND") != null || Environment.GetEnvironmentVariable("PYLON_DATA") == null && !Perf.Enabled);
+
+    /// <summary>Really exits (tray menu, restart, update, Windows signing out).</summary>
+    public void Quit()
+    {
+        _quitting = true;
         Close();
     }
+
+    /// <summary>The window goes away but the process stays: WPF and libVLC loaded, the next file shows in ~0.2 s.</summary>
+    void GoBackground()
+    {
+        if (_fullscreen) ToggleFullscreen();
+        Hide();
+        ShowInTaskbar = true;
+        if (Left <= -30000) RestoreSavedBounds(); // drawn off-screen at autostart: back to where the user keeps it
+        ClearQueue();
+        ApplyTray();
+        Dispatcher.BeginInvoke(() =>
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, -1, -1); // to the standby list: back in ms, not from disk
+        }, DispatcherPriority.ApplicationIdle);
+    }
+
+    /// <summary>A file came in or Pylon was started again: the window from the background (or from the tray, or minimized).</summary>
+    public void Reveal()
+    {
+        ShowFromTray();
+        if (!_checked && Settings.Bool("app.onboarded")) StartupChecks();
+        else if (Updater.DueForCheck()) CheckForUpdates(manual: false); // a process that lives for days still updates
+        ApplyTray();
+    }
+
+    void StartupChecks()
+    {
+        _checked = true;
+        ShowWhatsNewIfUpdated();
+        AskFileTypesOnce();
+        if (Settings.Bool("general.updates")) Dispatcher.BeginInvoke(() => CheckForUpdates(manual: false), DispatcherPriority.ApplicationIdle);
+        YtDlp.UpdateIfDue();
+    }
+
+    [DllImport("kernel32.dll")] static extern bool SetProcessWorkingSetSize(IntPtr process, nint min, nint max);
 
     bool _updating;
 
@@ -1627,7 +1720,7 @@ public partial class MainWindow : Window
         if (!inPlace) { Updater.OpenPage(r); return; }
         SaveProgress();
         SingleInstance.Release();
-        Close(); // the updater applies the new version and starts it
+        Quit(); // the updater applies the new version and starts it
     }
 
     /// <summary>Once, after installing (or updating to) this version: offer to make Pylon the default player, icons shown.</summary>
@@ -1695,6 +1788,7 @@ public partial class MainWindow : Window
             case "perf.realtime" or "perf.priority": ApplyPriority(); break;
             case "rec.cast": StartCastDiscovery(); break;
             case "ui.tray": ApplyTray(); break;
+            case "general.background": ShellRegistration.Autostart(Settings.Bool(key)); break;
             case "ui.hideafter": _hideTimer.Interval = TimeSpan.FromSeconds(Math.Max(0.5, Settings.Num(key))); break;
         }
         if (key.StartsWith("fx.eq.")) ApplyEqualizer(edited: true);
@@ -2499,11 +2593,22 @@ public partial class MainWindow : Window
 
     MediaSession? _session;
 
+    Action<MediaSession>? _sessionTrack;
+
+    /// <summary>The track for Windows' media session; remembered, because the session starts after the first frame.</summary>
+    void SessionTrack(bool audio, string title, string? artist, string? album, string? art)
+    {
+        _sessionTrack = s => s.SetTrack(audio, title, artist, album, art);
+        if (_session != null) _sessionTrack(_session);
+    }
+
     void StartMediaSession()
     {
         if (SnapMode) return;
+        // the WinRT projection (Microsoft.Windows.SDK.NET.dll, 53 MB) is the slowest thing to load on a cold disk: not before the first frame
         try { _session = new MediaSession(new WindowInteropHelper(this).Handle); }
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or TypeLoadException or PlatformNotSupportedException) { return; }
+        if (_sessionTrack != null) _sessionTrack(_session);
         _session.Command += c => Dispatcher.BeginInvoke(() =>
         {
             switch (c)

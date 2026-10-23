@@ -3,6 +3,20 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.0.4
+
+<!-- ru -->
+**Быстрое открытие**
+- **Файлы открываются почти мгновенно.** Pylon теперь держится наготове в фоне: крестик прячет окно, а не закрывает плеер, и Pylon запускается вместе с Windows без окна. Двойной клик по видео — окно через 0,2 секунды, картинка через полсекунды (было 1,5–3 секунды). В фоне плеер занимает около 50 МБ памяти.
+- **Выйти совсем** — через иконку в трее (она видна, пока окно спрятано). Выключить: Настройки → Общие → «Держать Pylon наготове в фоне».
+- **Быстрее и без фона.** Движок воспроизведения загружается одновременно с окном, а связь с Windows (медиаклавиши, громкость) — после первого кадра. Второй файл передаётся уже открытому Pylon втрое быстрее.
+
+<!-- en -->
+**Instant opening**
+- **Files open almost at once.** Pylon now stays ready in the background: the close button hides the window instead of quitting, and Pylon starts with Windows without a window. Double-click a video and the window is there in 0.2 seconds, the picture in half a second (it used to take 1.5-3 seconds). In the background it takes about 50 MB of memory.
+- **To quit for real**, use the tray icon (it shows while the window is hidden). To turn this off: Settings → General → "Keep Pylon ready in the background".
+- **Faster without it too.** The playback engine loads while the window is built, and the Windows media controls connect after the first frame. A second file reaches an open Pylon three times faster.
+
 ## 2.0.3
 
 <!-- ru -->

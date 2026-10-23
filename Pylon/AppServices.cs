@@ -7,16 +7,31 @@ namespace Pylon;
 /// <summary>"Only allow one Pylon window": a second launch hands its files to the running player over a named pipe.</summary>
 public static class SingleInstance
 {
-    static readonly string PipeName = "Pylon-" + Environment.UserName;
+    // a copy on its own profile (PYLON_DATA: tests, a second profile) is a separate player with its own pipe: it never
+    // hands its files to, or takes them from, the main one
+    static readonly string PipeName = "Pylon-" + Environment.UserName
+        + (Environment.GetEnvironmentVariable("PYLON_DATA") is { } data ? "-" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(data.ToLowerInvariant())))[..8] : "");
     static Mutex? _mutex;
+
+    /// <summary>Another Pylon of this user is running (the autostart copy then has nothing to do).</summary>
+    public static bool IsRunning()
+    {
+        _mutex = new Mutex(true, PipeName, out var first);
+        return !first;
+    }
 
     /// <summary>True when another instance took the files and this process should exit.</summary>
     public static bool ForwardToRunning(string[] args)
     {
         _mutex = new Mutex(true, PipeName, out var first);
         if (first) return false;
-        var wanted = args.Length > 0 ? Settings.Bool("library.singlefm") : Settings.Bool("library.single");
-        if (!wanted) return false;
+        // both are on by default, so only a saved "false" matters; a text search instead of Settings.Load (~90 ms of
+        // JSON and the whole settings schema in a process that lives 0.1 s)
+        var dir = Environment.GetEnvironmentVariable("PYLON_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pylon");
+        string json;
+        try { json = File.ReadAllText(Path.Combine(dir, "settings.json")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { json = ""; }
+        if (json.Contains($"\"{(args.Length > 0 ? "library.singlefm" : "library.single")}\": \"false\"")) return false;
         try
         {
             using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
@@ -51,9 +66,9 @@ public static class SingleInstance
                     while (r.ReadLine() is { Length: > 0 } line) files.Add(line);
                     window.Dispatcher.BeginInvoke(() =>
                     {
-                        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
-                        window.Activate();
+                        // the file first: libVLC opens it on its own threads while WPF lays out and shows the window
                         if (files.Count > 0) window.Open(files, append: Settings.Bool("library.enqueue"));
+                        window.Reveal();
                     });
                 }
                 catch (IOException) { Thread.Sleep(200); }
