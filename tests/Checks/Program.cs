@@ -342,6 +342,9 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
 {
     Check("letterbox", VideoEngine.Letterbox(1920, 1080, 1, 1, 1000, 1000) == (0, 219, 1000, 562) && VideoEngine.Letterbox(1080, 1920, 0, 0, 1000, 500) == (359, 0, 281, 500)
         && VideoEngine.Letterbox(720, 576, 16, 11, 1048, 576) == (0, 0, 1048, 576), $"{VideoEngine.Letterbox(720, 576, 16, 11, 1048, 576)}");
+    Check("sound gaps: rounding ignored, holes filled, jumps move the timeline", VideoEngine.PlaceGap(5_000, false, 48000) == (0, 0) && VideoEngine.PlaceGap(-50_000, false, 48000) == (0, 0)
+        && VideoEngine.PlaceGap(100_000, false, 48000) == (0, 4800) && VideoEngine.PlaceGap(100_000, true, 48000) == (100_000, 0)
+        && VideoEngine.PlaceGap(20_000_000, false, 48000) == (20_000_000, 0) && VideoEngine.PlaceGap(-300_000, false, 48000) == (-300_000, 0));
     const FFmpeg.AutoGen.AVColorSpace none = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_UNSPECIFIED, bt709 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT709, bt601 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_SMPTE170M, bt2020 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT2020_NCL;
     const FFmpeg.AutoGen.AVColorRange tv = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_MPEG, pc = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_JPEG;
     const FFmpeg.AutoGen.AVColorTransferCharacteristic sdr = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_BT709, pq = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084;

@@ -18,10 +18,10 @@ namespace Pylon;
 
 /// <summary>
 /// Pylon's own video path for local files: FFmpeg demux and decode (D3D11VA, software as the fallback), shown with the
-/// D3D11 video processor in a flip swap chain. Opens in tens of ms where libVLC takes ~300. Three threads: demux → packets
-/// → decode → frames → present. Picture only for now: sound, seeking and the place next to libVLC are the next stages.
+/// D3D11 video processor in a flip swap chain. Opens in tens of ms where libVLC takes ~300. Threads: demux → packets
+/// → decode → frames → present, and demux → sound (VideoEngine.Audio.cs). Seeking and the place next to libVLC are the next stages.
 /// </summary>
-public sealed unsafe class VideoEngine : IDisposable
+public sealed unsafe partial class VideoEngine : IDisposable
 {
     /// <summary>PYLON_FFMPEG_DLLS points at another set of FFmpeg 8 DLLs.</summary>
     static string DllDir => Environment.GetEnvironmentVariable("PYLON_FFMPEG_DLLS")
@@ -49,7 +49,7 @@ public sealed unsafe class VideoEngine : IDisposable
 
     readonly IntPtr _hwnd;
     readonly CancellationTokenSource _stop = new();
-    readonly BlockingCollection<IntPtr> _packets = new(64);
+    readonly BlockingCollection<IntPtr> _packets = [];
     readonly BlockingCollection<IntPtr> _frames = new(FrameQueue);
     readonly List<Thread> _threads = [];
     readonly AVCodecContext_get_format _getFormat; // kept: FFmpeg calls it from native code
@@ -79,8 +79,8 @@ public sealed unsafe class VideoEngine : IDisposable
     ColorSpaceType _space = (ColorSpaceType)(-1);
     AVFrame* _shown;
 
-    readonly Stopwatch _clock = new();
-    long _clockBaseUs;
+    readonly object _clockGate = new();
+    long _clockBaseUs, _clockBaseTicks;
     IntPtr _timer;
 
     /// <summary>The last frame has been on screen for its time.</summary>
@@ -104,9 +104,11 @@ public sealed unsafe class VideoEngine : IDisposable
         : _stream->duration > 0 ? ffmpeg.av_rescale_q(_stream->duration, _stream->time_base, new AVRational { num = 1, den = 1000 }) : 0;
     long _lateSumUs, _lateMaxUs;
 
-    public VideoEngine(IntPtr hwnd)
+    /// <param name="audioDevice">Start of the output device's name; null for the Windows default.</param>
+    public VideoEngine(IntPtr hwnd, string? audioDevice = null)
     {
         _hwnd = hwnd;
+        _audioDevice = audioDevice;
         _getFormat = (codec, formats) =>
         {
             for (var f = formats; *f != AVPixelFormat.AV_PIX_FMT_NONE; f++)
@@ -135,9 +137,10 @@ public sealed unsafe class VideoEngine : IDisposable
         if (_stream->start_time != ffmpeg.AV_NOPTS_VALUE) _startUs = ffmpeg.av_rescale_q(_stream->start_time, _stream->time_base, new AVRational { num = 1, den = 1_000_000 });
         Perf.Mark("engine: format");
         OpenDecoder(hardware: true);
+        OpenAudio();
         Perf.Mark("engine: decoder");
         _timer = CreateWaitableTimerExW(IntPtr.Zero, null, 2, 0x1F0003); // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS
-        foreach (var loop in new ThreadStart[] { DemuxLoop, DecodeLoop, PresentLoop })
+        foreach (var loop in _audioStream != null ? new ThreadStart[] { DemuxLoop, DecodeLoop, PresentLoop, AudioLoop } : [DemuxLoop, DecodeLoop, PresentLoop])
         {
             var thread = new Thread(loop) { IsBackground = true, Name = "Pylon engine " + loop.Method.Name };
             _threads.Add(thread);
@@ -202,18 +205,24 @@ public sealed unsafe class VideoEngine : IDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
+            // waits only when both streams have plenty: stopping at one full queue would starve the other in a badly interleaved file
+            if (_packets.Count >= 64 && (_audioStream == null || _audioPackets.Count >= 128))
+            {
+                Thread.Sleep(2);
+                continue;
+            }
             var packet = ffmpeg.av_packet_alloc();
             var read = ffmpeg.av_read_frame(_format, packet);
-            if (read < 0 || packet->stream_index != _stream->index)
+            if (read >= 0 && packet->stream_index == _stream->index) _packets.Add((IntPtr)packet);
+            else if (read >= 0 && _audioStream != null && packet->stream_index == _audioStream->index) _audioPackets.Add((IntPtr)packet);
+            else
             {
                 ffmpeg.av_packet_free(&packet);
                 if (read < 0) break;
-                continue;
             }
-            try { _packets.Add((IntPtr)packet, _stop.Token); }
-            catch (OperationCanceledException) { ffmpeg.av_packet_free(&packet); throw; }
         }
         _packets.CompleteAdding();
+        _audioPackets.CompleteAdding();
     });
 
     void DecodeLoop() => Guard(() =>
@@ -322,7 +331,11 @@ public sealed unsafe class VideoEngine : IDisposable
                 : ffmpeg.av_rescale_q(frame->best_effort_timestamp, _stream->time_base, new AVRational { num = 1, den = 1_000_000 });
             if (previous != long.MinValue && pts > previous) frameUs = pts - previous;
             previous = pts;
-            if (!_clock.IsRunning) Rebase(pts);
+            if (_clockBaseTicks == 0)
+            {
+                Rebase(pts);
+                Volatile.Write(ref _firstPts, pts);
+            }
             var wait = pts - NowUs;
             // the timestamps jump (joined recordings) or a long stall; forward allows for a screen recording's still seconds
             if (wait > 10_000_000 || wait < -2_000_000) { Rebase(pts); wait = 0; }
@@ -342,26 +355,44 @@ public sealed unsafe class VideoEngine : IDisposable
             _lateMaxUs = Math.Max(_lateMaxUs, late);
             if (first)
             {
-                Rebase(pts); // the first picture took its time to set up: the timeline starts when it's shown
+                if (!_audioStarted.IsSet) Rebase(pts); // the first picture took its time to set up: the timeline starts when it's shown, or with sound
                 FirstFrameMs = (Stopwatch.GetTimestamp() - _openTicks) * 1000.0 / Stopwatch.Frequency;
                 Perf.Mark("engine: first picture");
                 FirstFrame?.Invoke();
+                // the picture stands until sound starts, which then sets the clock; a file whose sound comes late doesn't wait for it
+                if (_audioStream != null && !_audioStarted.Wait(500, _stop.Token))
+                {
+                    _clockFree = true;
+                    Rebase(pts);
+                }
             }
             var old = _shown; // kept for 5.3: a resized window redraws it while paused
             _shown = frame;
             ffmpeg.av_frame_free(&old);
         }
         WaitUntil(previous + frameUs);
+        if (_audioStream != null) _audioDone.Wait(_stop.Token); // sound often runs a little longer than the picture
         if (!_stop.IsCancellationRequested) Ended?.Invoke();
     });
 
-    long NowUs => _clockBaseUs + _clock.ElapsedTicks * 1_000_000 / Stopwatch.Frequency;
-
-    // ponytail: a Stopwatch as the clock; the sound's position takes its place in 5.2
-    void Rebase(long pts)
+    long NowUs
     {
-        _clockBaseUs = pts;
-        _clock.Restart();
+        get
+        {
+            lock (_clockGate) return _clockBaseUs + (Stopwatch.GetTimestamp() - _clockBaseTicks) * 1_000_000 / Stopwatch.Frequency;
+        }
+    }
+
+    void Rebase(long pts) => Stamp(pts, Stopwatch.GetTimestamp());
+
+    /// <summary>At the moment <paramref name="ticks"/> the timeline was at <paramref name="us"/>.</summary>
+    void Stamp(long us, long ticks)
+    {
+        lock (_clockGate)
+        {
+            _clockBaseUs = us;
+            _clockBaseTicks = ticks;
+        }
     }
 
     /// <summary>In slices, so that stopping doesn't wait for a long frame.</summary>
@@ -565,6 +596,7 @@ public sealed unsafe class VideoEngine : IDisposable
         }
         _packets.Dispose();
         _frames.Dispose();
+        CloseAudio();
         var shown = _shown;
         ffmpeg.av_frame_free(&shown);
         foreach (var view in _views.Values) view.Dispose();
@@ -653,13 +685,13 @@ public static class EngineTest
             current = null;
             var clock = engine.TimeMs;
             engine.Dispose();
-            Write($"{Path.GetFileName(file)}: hw {engine.Hardware}, first picture {engine.FirstFrameMs:0} ms, decoded {engine.Decoded}, shown {engine.Presented}, dropped {engine.Dropped}, late avg {engine.LateAvgMs:0.0} max {engine.LateMaxMs:0.0} ms, clock {clock} ms");
+            Write($"{Path.GetFileName(file)}: hw {engine.Hardware}, first picture {engine.FirstFrameMs:0} ms, decoded {engine.Decoded}, shown {engine.Presented}, dropped {engine.Dropped}, late avg {engine.LateAvgMs:0.0} max {engine.LateMaxMs:0.0} ms, clock {clock} ms, sound {engine.AudioInfo}, underruns {engine.Underruns}");
         }
         void Next()
         {
             try
             {
-                var engine = current = new VideoEngine(host.Handle);
+                var engine = current = new VideoEngine(host.Handle, Environment.GetEnvironmentVariable("PYLON_ENGINE_AUDIO"));
                 engine.Ended += () => app.Dispatcher.BeginInvoke(() =>
                 {
                     Write($"length {engine.DurationMs} ms");
