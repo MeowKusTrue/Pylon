@@ -22,6 +22,11 @@ public static class Program
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { System.Windows.MessageBox.Show(e.Message, "Pylon"); }
             return;
         }
+        if (args is ["--engine", var engineFile, .. var engineRest]) // the own video engine alone, until it joins the player
+        {
+            EngineTest.Run(engineFile, engineRest.FirstOrDefault(), engineRest.Length > 1 ? int.Parse(engineRest[1]) : 1);
+            return;
+        }
         Perf.Mark("main");
         // a Pylon is already running (in the background, usually): hand it the files before Velopack and WPF even load
         // (~0.1 s instead of ~0.4 s); the autostart copy just leaves. Velopack's own hooks (--veloapp-…) go on below.

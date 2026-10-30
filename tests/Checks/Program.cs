@@ -338,6 +338,20 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     }
 }
 
+// ── own video engine: the picture fits the window with its pixel aspect; the color matrix follows tags, else the size
+{
+    Check("letterbox", VideoEngine.Letterbox(1920, 1080, 1, 1, 1000, 1000) == (0, 219, 1000, 562) && VideoEngine.Letterbox(1080, 1920, 0, 0, 1000, 500) == (359, 0, 281, 500)
+        && VideoEngine.Letterbox(720, 576, 16, 11, 1048, 576) == (0, 0, 1048, 576), $"{VideoEngine.Letterbox(720, 576, 16, 11, 1048, 576)}");
+    const FFmpeg.AutoGen.AVColorSpace none = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_UNSPECIFIED, bt709 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT709, bt601 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_SMPTE170M, bt2020 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT2020_NCL;
+    const FFmpeg.AutoGen.AVColorRange tv = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_MPEG, pc = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_JPEG;
+    const FFmpeg.AutoGen.AVColorTransferCharacteristic sdr = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_BT709, pq = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084;
+    Check("color space from tags and size", VideoEngine.PickColorSpace(none, tv, sdr, 1920, 1080) == Vortice.DXGI.ColorSpaceType.YcbcrStudioG22LeftP709
+        && VideoEngine.PickColorSpace(none, tv, sdr, 720, 480) == Vortice.DXGI.ColorSpaceType.YcbcrStudioG22LeftP601
+        && VideoEngine.PickColorSpace(bt709, tv, sdr, 720, 480) == Vortice.DXGI.ColorSpaceType.YcbcrStudioG22LeftP709
+        && VideoEngine.PickColorSpace(bt601, pc, sdr, 1920, 1080) == Vortice.DXGI.ColorSpaceType.YcbcrFullG22LeftP601
+        && VideoEngine.PickColorSpace(bt2020, tv, pq, 3840, 2160) == Vortice.DXGI.ColorSpaceType.YcbcrStudioG2084LeftP2020);
+}
+
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 

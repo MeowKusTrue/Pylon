@@ -6,6 +6,8 @@ Pylon is licensed under the GNU GPL v3 (see `LICENSE`). It ships or uses:
 |---|---|---|
 | libVLC (VideoLAN.LibVLC.Windows) — the playback engine | LGPL-2.1-or-later (plugins: LGPL/GPL) | https://code.videolan.org/videolan/vlc |
 | LibVLCSharp / LibVLCSharp.WPF | LGPL-2.1-or-later | https://code.videolan.org/videolan/LibVLCSharp |
+| FFmpeg.AutoGen — bindings for the own video engine | LGPL-3.0 | https://github.com/Ruslan-B/FFmpeg.AutoGen |
+| Vortice.Windows (Direct3D 11, DXGI) — the own video engine's output | MIT | https://github.com/amerkoleci/Vortice.Windows |
 | SharpVectors | BSD-3-Clause | https://github.com/ElinamLLC/SharpVectors |
 | Phosphor Icons | MIT | https://phosphoricons.com |
 | QRCoder | MIT | https://github.com/Shane32/QRCoder |

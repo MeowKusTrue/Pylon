@@ -8,6 +8,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Pylon</AssemblyName>
     <RootNamespace>Pylon</RootNamespace>
     <ApplicationIcon>Assets\pylon.ico</ApplicationIcon>
@@ -26,12 +27,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0" />
     <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
     <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="SharpVectors.Wpf" Version="1.8.6" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="Velopack" Version="1.2.161" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
   </ItemGroup>
 
   <ItemGroup>
