@@ -87,6 +87,7 @@ public partial class MainWindow : Window
             ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
         }
         Settings.Load();
+        if (Settings.Bool("playback.ownengine")) Task.Run(VideoEngine.Warm); // alongside the window, so the first file doesn't wait
         Library.Load();
         Dispatcher.BeginInvoke(ShellRegistration.MusicMenu, DispatcherPriority.ApplicationIdle);
         Perf.Mark("settings + library loaded");

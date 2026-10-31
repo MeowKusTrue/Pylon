@@ -32,6 +32,11 @@ public sealed unsafe partial class VideoEngine : IDisposable
     /// <summary>Loads FFmpeg's DLLs; false when they aren't there or don't match the bindings.</summary>
     public static bool Load()
     {
+        lock (DeviceGate) return LoadOnce();
+    }
+
+    static bool LoadOnce()
+    {
         if (_loaded) return true;
         try
         {
@@ -91,6 +96,10 @@ public sealed unsafe partial class VideoEngine : IDisposable
     double _speed = 1;
     volatile bool _paused, _wantPaused; // asked; with sound the clock stands only when the sound's fade is out
     volatile bool _behind;
+    int _stepAsked;
+    bool _stepped;
+    TaskCompletionSource<(byte[] Pixels, int Width, int Height)?>? _snapshotAsked;
+    int _snapshotW, _snapshotH;
     IntPtr _timer;
 
     volatile int _serial; // raised by a seek; written under _clockGate
@@ -198,19 +207,49 @@ public sealed unsafe partial class VideoEngine : IDisposable
         return index >= 0 && (_format->streams[index]->disposition & ffmpeg.AV_DISPOSITION_ATTACHED_PIC) != 0 ? -1 : index; // a cover isn't a video
     }
 
-    void CreateDevice()
+    // one device for the whole process: making one takes ~30 ms each time, and the first ~250 ms (Warm)
+    static readonly object DeviceGate = new();
+    static ID3D11Device? _sharedDevice;
+    static ID3D11DeviceContext? _sharedContext;
+    static ID3D11VideoDevice? _sharedVideoDevice;
+    static ID3D11VideoContext1? _sharedVideo;
+
+    /// <summary>Loads the DLLs and starts the graphics driver ahead of the first file, on any thread.</summary>
+    public static void Warm()
     {
-        D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, DeviceCreationFlags.VideoSupport | DeviceCreationFlags.BgraSupport,
-            [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0], out ID3D11Device device, out ID3D11DeviceContext context).CheckError();
-        _device = device;
-        _context = context;
-        using (var protect = _device.QueryInterface<ID3D11Multithread>()) protect.SetMultithreadProtected(true); // the decoder shares it
-        using (var dxgi = _device.QueryInterface<IDXGIDevice1>()) dxgi.MaximumFrameLatency = 1;
-        _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
-        _video = _context.QueryInterface<ID3D11VideoContext1>();
-        _p010 = _device.CheckFormatSupport(Vortice.DXGI.Format.P010).HasFlag(FormatSupport.VideoProcessorInput);
+        try
+        {
+            lock (DeviceGate)
+                if (Load()) SharedDevice();
+        }
+        catch (SharpGen.Runtime.SharpGenException) { } // no such device: the first file will say so
     }
 
+    static void SharedDevice()
+    {
+        if (_sharedDevice != null && _sharedDevice.DeviceRemovedReason.Success) return;
+        D3D11.D3D11CreateDevice(IntPtr.Zero, DriverType.Hardware, DeviceCreationFlags.VideoSupport | DeviceCreationFlags.BgraSupport,
+            [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0], out ID3D11Device device, out ID3D11DeviceContext context).CheckError();
+        using (var protect = device.QueryInterface<ID3D11Multithread>()) protect.SetMultithreadProtected(true); // the decoder shares it
+        using (var dxgi = device.QueryInterface<IDXGIDevice1>()) dxgi.MaximumFrameLatency = 1;
+        _sharedDevice = device;
+        _sharedContext = context;
+        _sharedVideoDevice = device.QueryInterface<ID3D11VideoDevice>();
+        _sharedVideo = context.QueryInterface<ID3D11VideoContext1>();
+    }
+
+    void CreateDevice()
+    {
+        lock (DeviceGate)
+        {
+            SharedDevice();
+            _device = _sharedDevice!;
+            _context = _sharedContext!;
+            _videoDevice = _sharedVideoDevice!;
+            _video = _sharedVideo!;
+        }
+        _p010 = _device.CheckFormatSupport(Vortice.DXGI.Format.P010).HasFlag(FormatSupport.VideoProcessorInput);
+    }
     void OpenDecoder(bool hardware)
     {
         var decoder = ffmpeg.avcodec_find_decoder(_stream->codecpar->codec_id);
@@ -298,9 +337,23 @@ public sealed unsafe partial class VideoEngine : IDisposable
                     _clockBaseTicks = Stopwatch.GetTimestamp();
                     _paused = value;
                 }
+                if (!value && _stepped) // sound stands where the steps began: everything goes on from the frame shown
+                {
+                    _stepped = false;
+                    _backoffUs = 0;
+                    _seekTargetUs = _clockBaseUs;
+                    RequestSeek(_clockBaseUs, _clockBaseUs);
+                }
             }
         }
     }
+    /// <summary>Pauses if needed and shows the next frame.</summary>
+    public void Step()
+    {
+        Paused = true;
+        Volatile.Write(ref _stepAsked, 1);
+    }
+
     /// <summary>Playback speed; sound keeps its pitch.</summary>
     public double Speed
     {
@@ -528,7 +581,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
         var shownSerial = -1;
         while (true)
         {
-            var item = _frames.Take(_stop.Token);
+            IntPtr item;
+            while (!_frames.TryTake(out item, 20, _stop.Token)) ServeSnapshot(); // nothing comes after the end of a file
             if (IsMark(item)) // the end of the file
             {
                 var ending = (int)(item >> 2);
@@ -658,8 +712,15 @@ public sealed unsafe partial class VideoEngine : IDisposable
         {
             if (_stop.IsCancellationRequested || serial != _serial) return false;
             long slice;
+            ServeSnapshot();
             if (_paused)
             {
+                if (Interlocked.Exchange(ref _stepAsked, 0) != 0)
+                {
+                    _stepped = true;
+                    Stamp(pts, Stopwatch.GetTimestamp());
+                    return true;
+                }
                 slice = 10_000;
                 RedrawIfResized();
             }
@@ -770,19 +831,87 @@ public sealed unsafe partial class VideoEngine : IDisposable
 
     ID3D11VideoProcessorInputView InputView(AVFrame* frame)
     {
-        var hardware = frame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11;
-        var texture = hardware ? (IntPtr)frame->data[0] : Upload(frame);
-        var slice = hardware ? (int)(IntPtr)frame->data[1] : 0;
+        var (texture, slice) = Surface(frame);
         if (_views.TryGetValue((texture, slice), out var view)) return view;
+        view = NewInputView(texture, slice, _enumerator!);
+        _views[(texture, slice)] = view;
+        return view;
+    }
+
+    (IntPtr Texture, int Slice) Surface(AVFrame* frame)
+    {
+        var hardware = frame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11;
+        return (hardware ? (IntPtr)frame->data[0] : Upload(frame), hardware ? (int)(IntPtr)frame->data[1] : 0);
+    }
+
+    ID3D11VideoProcessorInputView NewInputView(IntPtr texture, int slice, ID3D11VideoProcessorEnumerator enumerator)
+    {
         Marshal.AddRef(texture); // the wrapper's Dispose releases it
         using var wrapped = new ID3D11Texture2D(texture);
-        view = _videoDevice.CreateVideoProcessorInputView(wrapped, _enumerator!, new VideoProcessorInputViewDescription
+        return _videoDevice.CreateVideoProcessorInputView(wrapped, enumerator, new VideoProcessorInputViewDescription
         {
             ViewDimension = VideoProcessorInputViewDimension.Texture2D,
             Texture2D = new Texture2DVideoProcessorInputView { ArraySlice = (uint)slice },
         });
-        _views[(texture, slice)] = view;
-        return view;
+    }
+
+    /// <summary>The picture on screen as 32-bit BGR; null when there's none or the engine doesn't get to it within a second.</summary>
+    public (byte[] Pixels, int Width, int Height)? Snapshot(int width, int height)
+    {
+        var asked = new TaskCompletionSource<(byte[], int, int)?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _snapshotW = width;
+        _snapshotH = height;
+        Volatile.Write(ref _snapshotAsked, asked);
+        return asked.Task.Wait(1000) ? asked.Task.Result : null;
+    }
+
+    /// <summary>On the present thread, the only one that may touch the frame on screen.</summary>
+    void ServeSnapshot()
+    {
+        if (Interlocked.Exchange(ref _snapshotAsked, null) is not { } asked) return;
+        if (_shown == null)
+        {
+            asked.SetResult(null);
+            return;
+        }
+        try { asked.SetResult(GrabShown()); }
+        catch (SharpGen.Runtime.SharpGenException) { asked.SetResult(null); }
+    }
+
+    (byte[], int, int) GrabShown()
+    {
+        var frame = _shown;
+        var sar = frame->sample_aspect_ratio is { num: > 0, den: > 0 } r ? (double)r.num / r.den : 1;
+        var w = _snapshotW > 0 ? _snapshotW : (int)Math.Round(frame->width * sar);
+        var h = _snapshotH > 0 ? _snapshotH : (int)Math.Round(w * frame->height / (frame->width * sar));
+        using var enumerator = _videoDevice.CreateVideoProcessorEnumerator(new VideoProcessorContentDescription
+        {
+            InputFrameFormat = VideoFrameFormat.Progressive,
+            InputWidth = (uint)frame->width,
+            InputHeight = (uint)frame->height,
+            OutputWidth = (uint)w,
+            OutputHeight = (uint)h,
+            Usage = VideoUsage.PlaybackNormal,
+        });
+        using var processor = _videoDevice.CreateVideoProcessor(enumerator, 0);
+        _video.VideoProcessorSetStreamAutoProcessingMode(processor, 0, false);
+        _video.VideoProcessorSetOutputColorSpace1(processor, ColorSpaceType.RgbFullG22NoneP709);
+        _video.VideoProcessorSetStreamColorSpace1(processor, 0, PickColorSpace(frame->colorspace, frame->color_range, frame->color_trc, frame->width, frame->height));
+        var left = (int)frame->crop_left;
+        var top = (int)frame->crop_top;
+        _video.VideoProcessorSetStreamSourceRect(processor, 0, true, new Vortice.RawRect(left, top, left + frame->width, top + frame->height));
+        var (texture, slice) = Surface(frame);
+        using var input = NewInputView(texture, slice, enumerator);
+        using var target = _device.CreateTexture2D(new Texture2DDescription(Vortice.DXGI.Format.B8G8R8A8_UNorm, (uint)w, (uint)h, 1, 1, BindFlags.RenderTarget, ResourceUsage.Default, CpuAccessFlags.None));
+        using var output = _videoDevice.CreateVideoProcessorOutputView(target, enumerator, new VideoProcessorOutputViewDescription { ViewDimension = VideoProcessorOutputViewDimension.Texture2D });
+        using var staging = _device.CreateTexture2D(new Texture2DDescription(Vortice.DXGI.Format.B8G8R8A8_UNorm, (uint)w, (uint)h, 1, 1, BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read));
+        _video.VideoProcessorBlt(processor, output, 0, 1, [new VideoProcessorStream { Enable = true, InputSurface = input }]).CheckError();
+        _context.CopyResource(staging, target);
+        var map = _context.Map(staging, 0, MapMode.Read);
+        var pixels = new byte[w * h * 4];
+        for (var row = 0; row < h; row++) Marshal.Copy((IntPtr)((byte*)map.DataPointer + row * map.RowPitch), pixels, row * w * 4, w * 4);
+        _context.Unmap(staging, 0);
+        return (pixels, w, h);
     }
 
     /// <summary>A software frame into a texture the video processor can read.</summary>
@@ -887,10 +1016,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
         fixed (AVBufferRef** device = &_hwDevice) ffmpeg.av_buffer_unref(device);
         fixed (AVFormatContext** format = &_format) ffmpeg.avformat_close_input(format);
         ffmpeg.sws_freeContext(_sws);
-        _video?.Dispose();
-        _videoDevice?.Dispose();
-        _context?.Dispose();
-        _device?.Dispose();
+
         if (_timer != IntPtr.Zero) CloseHandle(_timer);
     }
 

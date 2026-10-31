@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Media.Imaging;
 using LibVLCSharp.Shared;
 
 namespace Pylon;
@@ -17,6 +18,7 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     float _rate = 1;
     bool _mute;
     double _level = 1, _gain = 1;
+    readonly List<(MediaSlaveType Type, string Uri, bool Select)> _slaves = [];
 
     /// <summary>The first picture of a file on the engine, on its thread.</summary>
     public event Action? OwnPlaying;
@@ -93,7 +95,37 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     public new bool Play(Media media)
     {
         StopOwn();
-        return base.Play(media);
+        var ok = base.Play(media);
+        foreach (var (type, uri, select) in _slaves) base.AddSlave(type, uri, select);
+        _slaves.Clear();
+        return ok;
+    }
+
+    /// <summary>A subtitle added while on the engine: libVLC's job, so it takes over and gets it.</summary>
+    public new bool AddSlave(MediaSlaveType type, string uri, bool select)
+    {
+        if (_engine is not { } engine) return base.AddSlave(type, uri, select);
+        _slaves.Add((type, uri, select));
+        Refuse(engine, "a subtitle was added");
+        return true;
+    }
+
+    public new void NextFrame()
+    {
+        if (_engine is { } engine) engine.Step();
+        else base.NextFrame();
+    }
+
+    public new bool TakeSnapshot(uint number, string path, uint width, uint height)
+    {
+        if (_engine is not { } engine) return base.TakeSnapshot(number, path, width, height);
+        if (!_started || engine.Snapshot((int)width, (int)height) is not { } shot) return false;
+        var bitmap = BitmapSource.Create(shot.Width, shot.Height, 96, 96, System.Windows.Media.PixelFormats.Bgr32, null, shot.Pixels, shot.Width * 4);
+        BitmapEncoder encoder = Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) ? new JpegBitmapEncoder() : new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var file = File.Create(path);
+        encoder.Save(file);
+        return true;
     }
 
     public new void Stop()

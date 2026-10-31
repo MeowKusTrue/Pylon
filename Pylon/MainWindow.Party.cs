@@ -180,7 +180,7 @@ public partial class MainWindow
             return;
         }
         if (!_mp.IsSeekable) return;
-        if (CurrentPath is { } path && !path.Contains("://") && Keyframes.Handles(path)) { SeekToKeyframe(path, ms); return; }
+        if (!_mp.OnOwnEngine && CurrentPath is { } path && !path.Contains("://") && Keyframes.Handles(path)) { SeekToKeyframe(path, ms); return; } // the engine finds its own way
         _mp.Time = ms;
         if (_hosting) Note(PartyName, L.F("{0} jumped to {1}", PartyName, Fmt(ms)));
     }
