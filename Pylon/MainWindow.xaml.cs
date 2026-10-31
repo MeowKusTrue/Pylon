@@ -334,7 +334,7 @@ public partial class MainWindow : Window
         mp.TimeChanged += (_, e) => { if (mp == _mp) (_heardMs, _heardAt) = (e.Time, Stopwatch.GetTimestamp()); };
         mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
-        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
+        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); OpenSeekPreview(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
         mp.Vout += (_, e) => { if (e.Count > 0) VideoShown(); };
         mp.OwnEnded += () => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
         mp.OwnPlaying += () =>
@@ -346,6 +346,7 @@ public partial class MainWindow : Window
         {
             if (mp != _mp || !mp.OnOwnEngine) return;
             Perf.Mark("own engine refused: " + why);
+            if (ShowEngine) Osd("Движок: libVLC (" + why + ")", 6);
             _ownRefused = CurrentPath;
             PlayAt(_index, startAt: Math.Max(0, mp.Time), autoplay: !mp.OwnPaused);
         });
@@ -1100,7 +1101,7 @@ public partial class MainWindow : Window
         Library.CountPlay(src);
         LookAhead();
         LyricsAhead();
-        _preview.Open(!_isAudio && !isUrl && Settings.Bool("playback.thumbs") ? src : null);
+        _preview.Open(null); // it opens when the picture's shape is known: OpenSeekPreview
         if (Settings.Bool("osd.filename") && !_isAudio) Osd(title, Settings.Num("osd.filetime"));
         ApplyLayout();
         UpdateControlButtons();
@@ -1113,6 +1114,8 @@ public partial class MainWindow : Window
     public string SwitchTiming = "";
 
     string? _ownRefused;
+    bool _afterOwnEngine;
+    static readonly bool ShowEngine = Environment.GetEnvironmentVariable("PYLON_SHOW_ENGINE") != null; // while trying the engine: which one plays
 
     /// <summary>Whether this file can go on Pylon's own engine: nothing asked for that only libVLC has.</summary>
     bool OwnEngineFits(string src)
@@ -1181,6 +1184,9 @@ public partial class MainWindow : Window
         }
         KeepAwake(!_isAudio && Settings.Bool("video.screensaver"));
         if (_mp.OnOwnEngine) StartOwnSubtitles();
+        else if (_afterOwnEngine) ApplyVolume(); // the engine left the session's volume at 100 %
+        _afterOwnEngine = _mp.OnOwnEngine;
+        if (ShowEngine && !_isAudio) Osd(_mp.OnOwnEngine ? "Движок: Pylon" : "Движок: libVLC", 4);
     }
 
     void OnEnded()
@@ -1859,7 +1865,7 @@ public partial class MainWindow : Window
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
             case "playback.repeat" or "controls.skipbtn": UpdateControlButtons(); break;
-            case "playback.thumbs": _preview.Open(Settings.Bool(key) && !_isAudio && CurrentPath is { } p && !p.Contains("://") ? p : null); break;
+            case "playback.thumbs": OpenSeekPreview(); break;
             case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(edited: true); break;
             case "audio.eq": ApplyEqualizer(edited: true); break;
             case "audio.maxvol": ApplyVolume(); break;
@@ -2588,6 +2594,22 @@ public partial class MainWindow : Window
     const double PreviewOverhang = 150; // the card may stick out past either end of the bar
 
     void Seek_MouseMove(object sender, MouseEventArgs e) => ShowSeekPreview(e.GetPosition(Seek).X);
+
+    /// <summary>The seek bar's preview for a local video, in the picture's shape.</summary>
+    void OpenSeekPreview()
+    {
+        uint w = 0, h = 0;
+        if (_isAudio || CurrentPath is not { } path || path.Contains("://") || !Settings.Bool("playback.thumbs") || !_mp.Size(0, ref w, ref h) || w == 0 || h == 0)
+        {
+            _preview.Open(null);
+            return;
+        }
+        var sar = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video).Data.Video is { SarNum: > 0, SarDen: > 0 } v ? (double)v.SarNum / v.SarDen : 1;
+        _preview.Open(path, w * sar, h);
+        PreviewImage.Source = _preview.Bitmap;
+        PreviewFrame.Width = _preview.Bitmap.PixelWidth;
+        PreviewFrame.Height = _preview.Bitmap.PixelHeight;
+    }
 
     void ShowSeekPreview(double x)
     {

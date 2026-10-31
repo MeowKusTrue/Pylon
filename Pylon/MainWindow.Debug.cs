@@ -158,10 +158,21 @@ public partial class MainWindow
                     {
                         var dst = Path.Combine(Environment.GetEnvironmentVariable("PYLON_ENC_OUT")!, "out" + Array.IndexOf(Converter.Presets, preset) + (preset.Extension.Length > 0 ? preset.Extension : Path.GetExtension(CurrentPath!)));
                         var sw = Stopwatch.StartNew();
-                        var ok = await Converter.RunAsync(CurrentPath!, dst, preset, 1000, 5000);
-                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"{preset.Name}: ok={ok} {(File.Exists(dst) ? new FileInfo(dst).Length : -1)} bytes {sw.ElapsedMilliseconds} ms{Environment.NewLine}");
+                        var (ok, error) = await Converter.RunAsync(CurrentPath!, dst, preset, 1000, 5000);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"{preset.Name}: ok={ok} {(File.Exists(dst) ? new FileInfo(dst).Length : -1)} bytes {sw.ElapsedMilliseconds} ms {error}{Environment.NewLine}");
                     }
                     break;
+                case "enccancel": // a whole file, then one cancelled on the way: its ffmpeg must go and leave no file
+                    {
+                        var dir = Environment.GetEnvironmentVariable("PYLON_ENC_OUT")!;
+                        var whole = await Converter.RunAsync(CurrentPath!, Path.Combine(dir, "whole.mp3"), Converter.Presets[0]);
+                        using var stop = new CancellationTokenSource(300);
+                        var dst = Path.Combine(dir, "cancelled.mp4");
+                        var cancelled = await Converter.RunAsync(CurrentPath!, dst, Converter.Presets[5], cancel: stop.Token);
+                        await Task.Delay(300);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"whole ok={whole.Ok}; cancelled ok={cancelled.Ok} file left={File.Exists(dst)} ffmpeg running={Process.GetProcessesByName("ffmpeg").Length}{Environment.NewLine}");
+                        break;
+                    }
                 case "cast": // start streaming, then fetch the page and the first bytes of the stream like a phone would
                     {
                         _cast = new CastServer { Title = _title };

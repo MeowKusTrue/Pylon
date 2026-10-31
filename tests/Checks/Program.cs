@@ -350,6 +350,12 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
         && VideoEngine.PickTrack(langs, 0, "de", false) == 2 && VideoEngine.PickTrack(langs, 0, "ja", true) == 3 && VideoEngine.PickTrack(langs, 0, "ja", false) == -1 && VideoEngine.PickTrack(langs[..2], 0, "ja", true) == 2 && VideoEngine.PickTrack(langs, 99, "en", false) == 1
         && VideoEngine.TwoLetters("deu") == "de" && VideoEngine.TwoLetters("und") == null);
     Check("subtitle text out of an ASS event", VideoEngine.AssText(@"3,0,Default,,0,0,0,,{\i1}Hello, there{\i0}\Nsecond\hline") == "Hello, there\nsecond line", VideoEngine.AssText(@"3,0,Default,,0,0,0,,{\i1}Hello, there{\i0}\Nsecond\hline"));
+    Check("seek preview keeps the picture's shape", SeekPreviewer.Fit(1920, 1080) == (256, 144) && SeekPreviewer.Fit(1080, 1920) == (144, 256) && SeekPreviewer.Fit(1000, 1000) == (256, 256) && SeekPreviewer.Fit(0, 0) == (256, 144), $"{SeekPreviewer.Fit(1080, 1920)}");
+    var mp3 = Converter.Presets[0];
+    var cut = string.Join(" ", Converter.Args("a.mkv", "b.mp3", mp3, 1500, 5000));
+    Check("conversion: a cut's times come before the input, none without a cut", cut.StartsWith("-hide_banner -nostdin -y -ss 1.5 -to 5 -i a.mkv ") && cut.EndsWith(" b.mp3") && !string.Join(" ", Converter.Args("a.mkv", "b.mp3", mp3, -1, -1)).Contains("-ss"), cut);
+    Check("trim times read and written", Converter.ParseTime("1:23") == 83000 && Converter.ParseTime("1:02:03") == 3723000 && Converter.ParseTime("83") == 83000 && Converter.ParseTime("1:23.5") == 83500 && Converter.ParseTime("1,5") == 1500 && Converter.ParseTime("abc") == -1 && Converter.ParseTime("1:2:3:4") == -1
+        && Converter.FormatTime(83000) == "1:23" && Converter.FormatTime(83500) == "1:23.5" && Converter.FormatTime(3723000) == "1:02:03", Converter.FormatTime(83500));
     const FFmpeg.AutoGen.AVColorSpace none = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_UNSPECIFIED, bt709 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT709, bt601 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_SMPTE170M, bt2020 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT2020_NCL;
     const FFmpeg.AutoGen.AVColorRange tv = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_MPEG, pc = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_JPEG;
     const FFmpeg.AutoGen.AVColorTransferCharacteristic sdr = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_BT709, pq = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084;

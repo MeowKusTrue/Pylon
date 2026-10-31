@@ -514,6 +514,14 @@ sealed unsafe class WasapiOutput : IDisposable
         _client.GetService(ref iid, out var clock);
         _clock = (IAudioClock)clock;
         _clock.GetFrequency(out _frequency);
+        // libVLC's waveOut keeps its volume in the session this stream joins, and Windows remembers it for the exe: left at
+        // 12.5 % for a slider at 50 %, on top of the engine's own 12.5 % it came out 18 dB too quiet (measured)
+        iid = typeof(ISimpleAudioVolume).GUID;
+        _client.GetService(ref iid, out var session);
+        var context = Guid.Empty;
+        ((ISimpleAudioVolume)session).SetMasterVolume(1, ref context);
+        ((ISimpleAudioVolume)session).SetMute(false, ref context);
+        Marshal.ReleaseComObject(session);
         _client.GetDevicePeriod(out var period, out _); // in 100 ns
         Lead = Math.Min((int)_buffer, Math.Max(Rate * 80 / 1000, (int)(period * 3 * Rate / 10_000_000)));
     }
@@ -663,6 +671,14 @@ sealed unsafe class WasapiOutput : IDisposable
     {
         void GetBuffer(uint frames, out IntPtr data);
         void ReleaseBuffer(uint frames, uint flags);
+    }
+
+    [ComImport, Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ISimpleAudioVolume
+    {
+        void SetMasterVolume(float level, ref Guid context);
+        void GetMasterVolume(out float level);
+        void SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid context);
     }
 
     [ComImport, Guid("CD63314F-3FBA-4A1B-812C-EF96358728E7"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

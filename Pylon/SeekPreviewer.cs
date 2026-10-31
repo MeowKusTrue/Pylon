@@ -15,9 +15,11 @@ namespace Pylon;
 /// </summary>
 public sealed class SeekPreviewer : IDisposable
 {
-    const int W = 256, H = 144;
+    const int LongSide = 256;
+    int W = LongSide, H = 144;
+    string? _path;
     readonly Dispatcher _ui;
-    readonly IntPtr _buffer = Marshal.AllocHGlobal(W * H * 4);
+    readonly IntPtr _buffer = Marshal.AllocHGlobal(LongSide * LongSide * 4);
     readonly MediaPlayer.LibVLCVideoLockCb _lock;
     readonly MediaPlayer.LibVLCVideoDisplayCb _display;
     readonly DispatcherTimer _throttle;
@@ -28,9 +30,10 @@ public sealed class SeekPreviewer : IDisposable
     volatile int _key = -1; // cache slot of the position being decoded
     long _targetMs = -1;     // its time
     long _nowMs = -1;
+    long _seekFromMs = -1;   // where the seek started from
     readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte[]> _cache = new();
 
-    public WriteableBitmap Bitmap { get; } = new(W, H, 96, 96, PixelFormats.Bgr32, null);
+    public WriteableBitmap Bitmap { get; private set; } = new(LongSide, 144, 96, 96, PixelFormats.Bgr32, null);
     public bool HasMedia => _mp != null;
 
     public SeekPreviewer(Dispatcher ui)
@@ -40,9 +43,11 @@ public sealed class SeekPreviewer : IDisposable
         // libVLC 3 doesn't redraw after a seek while paused: run until the next frame lands, then pause again
         _display = (_, _) =>
         {
-            // resuming first shows the old picture again: wait for one from near the requested time
+            // resuming first shows the old picture again: skip what is still at the old place. Not "far from the target":
+            // the seek lands on a keyframe, which in a long GOP is many seconds before it, and the preview stood still
             // (_nowMs comes from TimeChanged: calling libVLC from here deadlocks against Stop())
-            if (_awaitingFrame && _targetMs >= 0 && Math.Abs(Interlocked.Read(ref _nowMs) - _targetMs) > 3000) return;
+            var now = Interlocked.Read(ref _nowMs);
+            if (_awaitingFrame && _targetMs >= 0 && Math.Abs(now - _targetMs) > 3000 && Math.Abs(now - Interlocked.Read(ref _seekFromMs)) < 1000) return;
             _ui.BeginInvoke(() => Bitmap.WritePixels(new Int32Rect(0, 0, W, H), _buffer, W * H * 4, W * 4));
             if (_awaitingFrame && _key >= 0 && _cache.Count < 200) // ~30 MB at most
             {
@@ -60,11 +65,19 @@ public sealed class SeekPreviewer : IDisposable
         _throttle = new DispatcherTimer(TimeSpan.FromMilliseconds(120), DispatcherPriority.Background, (_, _) => Flush(), ui);
     }
 
-    /// <summary>Local video files only; null closes the preview player.</summary>
-    public void Open(string? path)
+    /// <summary>Local video files only; null closes the preview player. The size is the picture's as shown: the preview keeps its shape.</summary>
+    public void Open(string? path, double width = 16, double height = 9)
     {
+        var (w, h) = Fit(width, height);
+        if (path != null && path == _path && _mp != null && w == W && h == H) return; // the same again (the picture's size is reported more than once)
         Close();
+        _path = path;
         if (path == null) return;
+        if (w != W || h != H)
+        {
+            (W, H) = (w, h);
+            Bitmap = new WriteableBitmap(W, H, 96, 96, PixelFormats.Bgr32, null);
+        }
         // the GPU decodes (heavy 1440p HEVC took the CPU ~0.3 s a frame); a late decoder otherwise shows half-decoded grey frames
         // and it jumps to the nearest keyframe: a preview needn't be frame-exact, and decoding up to it took a second
         _vlc ??= new LibVLC(["--no-audio", "--no-spu", "--no-osd", "--quiet", "--no-video-title-show", "--no-avcodec-hurry-up", "--no-avcodec-corrupted", "--input-fast-seek",
@@ -73,7 +86,7 @@ public sealed class SeekPreviewer : IDisposable
         _key = -1;
         _targetMs = -1;
         _mp = new MediaPlayer(_vlc);
-        _mp.SetVideoFormat("RV32", W, H, W * 4);
+        _mp.SetVideoFormat("RV32", (uint)W, (uint)H, (uint)W * 4);
         _mp.SetVideoCallbacks(_lock, null, _display);
         _mp.TimeChanged += (_, e) => Interlocked.Exchange(ref _nowMs, e.Time);
         var player = _mp;
@@ -99,12 +112,21 @@ public sealed class SeekPreviewer : IDisposable
         var player = _mp;
         if (_cache.ContainsKey(Key(p))) return; // already on screen
         _key = Key(p);
+        Interlocked.Exchange(ref _seekFromMs, Interlocked.Read(ref _nowMs));
         Interlocked.Exchange(ref _targetMs, (long)(p * player.Length));
         _awaitingFrame = true;
         Task.Run(() => { player.Position = p; player.SetPause(false); });
     }
 
     static int Key(float position) => (int)Math.Round(position * 200);
+
+    /// <summary>The longer side 256, the shorter one by the picture's shape; even, as video formats like it.</summary>
+    public static (int W, int H) Fit(double width, double height)
+    {
+        if (width <= 0 || height <= 0) return (LongSide, 144);
+        var scale = LongSide / Math.Max(width, height);
+        return (Math.Max(2, (int)Math.Round(width * scale / 2) * 2), Math.Max(2, (int)Math.Round(height * scale / 2) * 2));
+    }
 
     public string DebugState() => $"key={_key} target={_targetMs} awaiting={_awaitingFrame} time={_mp?.Time} state={_mp?.State} pending={_pending} cached={_cache.Count}";
 

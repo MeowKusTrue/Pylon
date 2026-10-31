@@ -53,6 +53,7 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
         _subFiles.Clear();
         engine.SubtitleCue += AddCue;
         engine.Volume = EngineVolume;
+        if (_rate != 1) engine.Speed = _rate;
         engine.FirstFrame += () =>
         {
             _started = true;
@@ -183,6 +184,9 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     public new bool Play(Media media)
     {
         StopOwn();
+        // what changed while the engine played
+        base.SetRate(_rate);
+        base.Mute = _mute;
         var ok = base.Play(media);
         foreach (var (type, uri, select) in _slaves) base.AddSlave(type, uri, select);
         _slaves.Clear();
@@ -286,12 +290,12 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
 
     public new bool Mute
     {
-        get => _engine != null ? _mute : base.Mute;
+        get => _mute;
         set
         {
             _mute = value;
+            base.Mute = value;
             if (_engine is { } engine) engine.Volume = EngineVolume;
-            else base.Mute = value;
         }
     }
 

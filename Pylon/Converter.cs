@@ -1,72 +1,76 @@
 using System.Globalization;
 using System.IO;
-using LibVLCSharp.Shared;
 
 namespace Pylon;
 
-/// <summary>A conversion target: a libVLC stream-output chain and the file extension it writes.</summary>
-/// <param name="Chain">sout chain without the destination; "{dst}" is replaced by the output path.</param>
-public record ConvertPreset(string Name, string Extension, bool Video, string Chain);
+/// <summary>A conversion target: ffmpeg's output options and the file extension (empty: the source's).</summary>
+public record ConvertPreset(string Name, string Extension, bool Video, string[] Args);
 
-/// <summary>
-/// Converts files with libVLC's stream output on a separate engine (like the waveform): transcode → file, faster than
-/// real time. Also cuts clips (start / stop time) and copies streams without re-encoding.
-/// </summary>
+/// <summary>Converts files with ffmpeg (fetched on consent) and cuts clips. libVLC's stream output lost the picture of MP4s and ignored start times.</summary>
 public static class Converter
 {
-    // encoders in the bundled libVLC (checked): MP3 (lame), AAC, FLAC, Opus, PCM, MPEG-4 part 2, GIF; no VP8 encoder and
-    // H.264 only as 10-bit x264, which phones and TVs often can't play
     public static readonly ConvertPreset[] Presets =
     [
-        new("MP3 (320 kbps)", ".mp3", false, "#transcode{vcodec=none,acodec=mp3,ab=320,channels=2,samplerate=44100}:std{access=file,mux=raw,dst='{dst}'}"), // "mpga" would be MP2
-        new("M4A (AAC 256 kbps)", ".m4a", false, "#transcode{vcodec=none,acodec=mp4a,ab=256,channels=2}:std{access=file,mux=mp4,dst='{dst}'}"),
-        new("FLAC (lossless)", ".flac", false, "#transcode{vcodec=none,acodec=flac}:std{access=file,mux=raw,dst='{dst}'}"),
-        new("Opus (160 kbps)", ".opus", false, "#transcode{vcodec=none,acodec=opus,ab=160,channels=2,samplerate=48000}:std{access=file,mux=ogg,dst='{dst}'}"),
-        new("WAV", ".wav", false, "#transcode{vcodec=none,acodec=s16l,channels=2}:std{access=file,mux=wav,dst='{dst}'}"),
-        new("MP4 (MPEG-4 + AAC)", ".mp4", true, "#transcode{vcodec=mp4v,vb=6000,acodec=mp4a,ab=192,channels=2}:std{access=file,mux=mp4,dst='{dst}'}"),
-        // the GIF encoder always writes 50 ms frame delays, so anything but 20 fps plays at the wrong speed
-        new("GIF (400 px)", ".gif", true, "#transcode{vcodec=gif,width=400,fps=20,acodec=none}:std{access=file,mux=raw,dst='{dst}'}"),
-        new("Copy streams (fast)", "", true, "#std{access=file,mux={mux},dst='{dst}'}"),
+        new("MP3 (320 kbps)", ".mp3", false, ["-vn", "-c:a", "libmp3lame", "-b:a", "320k", "-ac", "2"]),
+        new("M4A (AAC 256 kbps)", ".m4a", false, ["-vn", "-c:a", "aac", "-b:a", "256k", "-ac", "2", "-movflags", "+faststart"]),
+        new("FLAC (lossless)", ".flac", false, ["-vn", "-c:a", "flac"]),
+        new("Opus (160 kbps)", ".opus", false, ["-vn", "-c:a", "libopus", "-b:a", "160k", "-ac", "2"]),
+        new("WAV", ".wav", false, ["-vn", "-c:a", "pcm_s16le", "-ac", "2"]),
+        // 8-bit 4:2:0 and even sizes: what phones and TVs play
+        new("MP4 (H.264 + AAC)", ".mp4", true, ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
+        new("GIF (400 px)", ".gif", true, ["-an", "-vf", "fps=20,scale=400:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse", "-loop", "0"]),
+        // every stream as it is; a cut starts at the keyframe before the start
+        new("Copy streams (fast)", "", true, ["-map", "0", "-dn", "-ignore_unknown", "-c", "copy", "-avoid_negative_ts", "make_zero"]),
     ];
 
-    static LibVLC? _vlc;
-
-    /// <summary>Runs one conversion. <paramref name="startMs"/> / <paramref name="stopMs"/> cut a clip (-1 = whole file).</summary>
-    /// <returns>True when the output file was written.</returns>
-    public static Task<bool> RunAsync(string src, string dst, ConvertPreset preset, long startMs = -1, long stopMs = -1,
-        IProgress<double>? progress = null, CancellationToken cancel = default) => Task.Run(() =>
+    /// <summary>The whole ffmpeg command line. A start or stop below 0 means none; seeking before -i is both fast and exact when encoding.</summary>
+    public static List<string> Args(string src, string dst, ConvertPreset preset, long startMs, long stopMs)
     {
-        _vlc ??= new LibVLC("--quiet", "--no-video-title-show", "--no-sout-display", "--sout-keep");
-        var ext = Path.GetExtension(dst).ToLowerInvariant();
-        var mux = ext switch { ".mp4" or ".m4v" or ".mov" => "mp4", ".mkv" or ".webm" => "mkv", ".ogg" or ".ogv" => "ogg", _ => "ts" };
-        var chain = preset.Chain.Replace("{dst}", dst.Replace("'", "")).Replace("{mux}", mux);
-        using var media = src.Contains("://") ? new Media(_vlc, new Uri(src)) : new Media(_vlc, src, FromType.FromPath);
-        media.AddOption(":sout=" + chain);
-        if (startMs >= 0) media.AddOption(":start-time=" + (startMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture));
-        if (stopMs > 0) media.AddOption(":stop-time=" + (stopMs / 1000.0).ToString("0.###", CultureInfo.InvariantCulture));
-        using var player = new MediaPlayer(media);
-        var done = new ManualResetEventSlim();
-        var ok = true;
-        player.EndReached += (_, _) => done.Set();
-        player.EncounteredError += (_, _) => { ok = false; done.Set(); };
-        if (progress != null)
-            player.PositionChanged += (_, e) =>
-            {
-                // positions are of the whole file; a clip reports its share
-                var len = player.Length;
-                if (len <= 0) return;
-                var from = startMs >= 0 ? startMs : 0;
-                var to = stopMs > 0 ? Math.Min(stopMs, len) : len;
-                progress.Report(Math.Clamp((e.Position * len - from) / Math.Max(1, to - from), 0, 1));
-            };
+        List<string> args = ["-hide_banner", "-nostdin", "-y"];
+        if (startMs > 0) args.AddRange(["-ss", Seconds(startMs)]);
+        if (stopMs > 0) args.AddRange(["-to", Seconds(stopMs)]);
+        args.AddRange(["-i", src]);
+        args.AddRange(preset.Args);
+        args.AddRange(["-progress", "pipe:1", "-nostats", dst]);
+        return args;
+    }
+
+    static string Seconds(long ms) => (ms / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
+
+    /// <summary>Runs one conversion. <paramref name="startMs"/> / <paramref name="stopMs"/> cut a clip (-1 = whole file). Returns ffmpeg's last line on failure.</summary>
+    public static async Task<(bool Ok, string? Error)> RunAsync(string src, string dst, ConvertPreset preset, long startMs = -1, long stopMs = -1,
+        IProgress<double>? progress = null, CancellationToken cancel = default)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-        if (!player.Play()) return false;
-        while (!done.Wait(200))
-            if (cancel.IsCancellationRequested) { ok = false; break; }
-        player.Stop(); // never from a libVLC event thread: we're on a worker
-        if (!ok) { try { File.Delete(dst); } catch (IOException) { } return false; }
-        return File.Exists(dst) && new FileInfo(dst).Length > 0;
-    }, cancel);
+        var length = await Task.Run(() => Ffmpeg.Duration(src));
+        // MPEG-TS has no index and ffmpeg's seek lands past the keyframe: copying then started seconds late, or at the next one
+        if (startMs > 0 && preset.Extension.Length == 0 && !src.Contains("://") && Keyframes.IsTs(src)
+            && await Task.Run(() => Keyframes.Near(src, startMs, forward: false, length)) is { } key) startMs = Math.Max(0, key.Ms - 30);
+        var end = stopMs > 0 ? stopMs : length;
+        return await Ffmpeg.RunAsync(Args(src, dst, preset, startMs, stopMs), dst, end - Math.Max(0, startMs), progress, cancel);
+    }
+
+    /// <summary>"1:23", "1:02:03", "83" or "1:23.5" in ms; -1 when it isn't a time.</summary>
+    public static long ParseTime(string text)
+    {
+        var parts = text.Trim().Split(':');
+        if (parts.Length > 3) return -1;
+        double seconds = 0;
+        foreach (var part in parts)
+        {
+            if (!double.TryParse(part.Replace(',', '.'), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)) return -1;
+            seconds = seconds * 60 + value;
+        }
+        return (long)Math.Round(seconds * 1000);
+    }
+
+    /// <summary>"1:23.5": what ParseTime reads, tenths only when there are any.</summary>
+    public static string FormatTime(long ms)
+    {
+        var t = TimeSpan.FromMilliseconds(Math.Round(ms / 100.0) * 100);
+        var whole = t.ToString(t.TotalHours >= 1 ? @"h\:mm\:ss" : @"m\:ss", CultureInfo.InvariantCulture);
+        return t.Milliseconds == 0 ? whole : whole + "." + t.Milliseconds / 100;
+    }
 
     /// <summary>Output path next to the source (or in <paramref name="folder"/>), never overwriting an existing file.</summary>
     public static string OutputPath(string src, ConvertPreset preset, string? folder = null, string suffix = "")

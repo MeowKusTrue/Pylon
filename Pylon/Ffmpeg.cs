@@ -9,7 +9,7 @@ using LibVLCSharp.Shared;
 namespace Pylon;
 
 /// <summary>
-/// ffmpeg for what libVLC 3 can't do cleanly: joining files (its "gather" output restarts the timestamps). Not shipped:
+/// ffmpeg for what libVLC 3 can't do cleanly: converting and joining files. Not shipped:
 /// downloaded from the BtbN builds on GitHub (GPL, with x264) when the user agrees, into %LocalAppData%\Pylon\tools.
 /// </summary>
 public static class Ffmpeg
@@ -119,38 +119,53 @@ public static class Ffmpeg
         var total = await Task.Run(() => files.Sum(Duration));
         var list = Path.Combine(Path.GetTempPath(), $"pylon-join-{Guid.NewGuid():N}.txt");
         await File.WriteAllLinesAsync(list, files.Select(f => $"file '{f.Replace("'", "'\\''")}'"), cancel);
-        var psi = new ProcessStartInfo(Exe) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-        foreach (var a in new[] { "-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", list, "-progress", "pipe:1", "-nostats" }) psi.ArgumentList.Add(a);
-        foreach (var a in copy ? ["-c", "copy"] : new[] { "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart" })
-            psi.ArgumentList.Add(a);
-        psi.ArgumentList.Add(dst);
-        try
-        {
-            using var p = Process.Start(psi)!;
-            var errors = p.StandardError.ReadToEndAsync(cancel);
-            // "-progress pipe:1" prints key=value lines; out_time_us is how far it got
-            string? line;
-            while ((line = await p.StandardOutput.ReadLineAsync(cancel)) != null)
-                if (line.StartsWith("out_time_us=") && long.TryParse(line[12..], out var us) && total > 0)
-                    progress?.Report(Math.Clamp(us / 1000.0 / total, 0, 1));
-            await p.WaitForExitAsync(cancel);
-            if (p.ExitCode == 0 && File.Exists(dst)) return (true, null);
-            var last = (await errors).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
-            try { File.Delete(dst); } catch (IOException) { }
-            return (false, last);
-        }
-        catch (OperationCanceledException)
-        {
-            try { File.Delete(dst); } catch (IOException) { }
-            return (false, null);
-        }
+        List<string> args = ["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list, "-progress", "pipe:1", "-nostats"];
+        args.AddRange(copy ? ["-c", "copy"] : ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]);
+        args.Add(dst);
+        try { return await RunAsync(args, dst, total, progress, cancel); }
         finally { try { File.Delete(list); } catch (IOException) { } }
     }
 
+    /// <summary>Runs ffmpeg with "-progress pipe:1" among its options. On failure or cancel the output is deleted; the error is ffmpeg's last line.</summary>
+    public static async Task<(bool Ok, string? Error)> RunAsync(IEnumerable<string> args, string dst, long totalMs, IProgress<double>? progress, CancellationToken cancel)
+    {
+        var psi = new ProcessStartInfo(Exe) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        void Discard() { try { File.Delete(dst); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { } }
+        Process? process = null;
+        try
+        {
+            var p = process = Process.Start(psi)!;
+            var errors = p.StandardError.ReadToEndAsync(cancel);
+            // out_time_us is how far it got
+            string? line;
+            while ((line = await p.StandardOutput.ReadLineAsync(cancel)) != null)
+                if (line.StartsWith("out_time_us=") && long.TryParse(line[12..], out var us) && totalMs > 0)
+                    progress?.Report(Math.Clamp(us / 1000.0 / totalMs, 0, 1));
+            await p.WaitForExitAsync(cancel);
+            if (p.ExitCode == 0 && File.Exists(dst) && new FileInfo(dst).Length > 0) return (true, null);
+            var lines = (await errors).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Discard();
+            return (false, lines.FirstOrDefault(l => l.Contains("does not contain any stream")) ?? lines.LastOrDefault()); // the last line only says "Invalid argument"
+        }
+        catch (OperationCanceledException)
+        {
+            try { process?.Kill(entireProcessTree: true); process?.WaitForExit(2000); } // or it goes on and keeps the file
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            Discard();
+            return (false, null);
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or IOException)
+        {
+            Discard();
+            return (false, e.Message);
+        }
+        finally { process?.Dispose(); } // after the catches: a "using" inside the try would leave Kill nothing to kill
+    }
     static LibVLC? _vlc;
 
     /// <summary>Length in ms, read by libVLC (no ffprobe needed).</summary>
-    static long Duration(string path)
+    public static long Duration(string path)
     {
         _vlc ??= new LibVLC("--quiet", "--no-video", "--no-audio");
         using var media = new Media(_vlc, path, FromType.FromPath);
