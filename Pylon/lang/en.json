@@ -661,7 +661,7 @@
   "Time-shift buffer size": "Time-shift buffer size",
   "Output": "Output",
   "Pylon's own video engine (experimental)": "Pylon's own video engine (experimental)",
-  "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.": "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.",
+  "Local videos open several times faster. Anything it can't do yet (network, music, effects, chapters, ASS subtitles, 360°) still plays through libVLC.": "Local videos open several times faster. Anything it can't do yet (network, music, effects, chapters, ASS subtitles, 360°) still plays through libVLC.",
   "Pylon's own video engine": "Pylon's own video engine",
   "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine.": "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine.",
   "Downloading FFmpeg…": "Downloading FFmpeg…",

@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.0
+
+<!-- ru -->
+**Собственный видеодвижок (экспериментально)**
+- **Видео открывается в несколько раз быстрее.** Новый движок на FFmpeg и Direct3D 11: от команды до картинки около 0,07 секунды вместо 0,35. Включается в Настройки → Воспроизведение → «Собственный видеодвижок Pylon». По умолчанию выключен.
+- **Что умеет:** локальные видео, аппаратное декодирование, пауза, перемотка, скорость, громкость, снимок и шаг по кадрам, выбор звуковой дорожки, субтитры SRT и VTT.
+- **Всё остальное играет как раньше.** Сеть, музыка, эффекты, главы, субтитры ASS и PGS, 360°, запись и «Смотреть вместе» идут через libVLC, Pylon переключается сам с той же позиции.
+- **Нужны библиотеки FFmpeg.** При включении Pylon предложит их скачать: около 80 МБ, на диске около 150 МБ.
+
+**Конвертация**
+- **Конвертация переписана на ffmpeg.** Раньше MP4 мог потерять картинку, а время начала клипа не учитывалось. Теперь видео сохраняется в H.264 + AAC, которые играют телефоны и телевизоры, у GIF лучше цвета. Нужен ffmpeg: Pylon предложит скачать его при первой конвертации (около 200 МБ).
+- **Обрезка.** В окне конвертации можно обрезать файл: время начала и конца или ползунки на полосе. «Копировать потоки» работает мгновенно, но начинает с ближайшего ключевого кадра; остальные форматы режут точно.
+- **Понятные ошибки.** Если в файле нет звука, Pylon так и скажет, а подробности покажет в подсказке. Отмена останавливает ffmpeg и удаляет незаконченный файл.
+
+**Исправления**
+- **Превью на полосе перемотки** больше не замирает на файлах с редкими ключевыми кадрами и показывает кадр в пропорциях видео, а не 16:9.
+
+<!-- en -->
+**Own video engine (experimental)**
+- **Videos open several times faster.** A new engine built on FFmpeg and Direct3D 11 takes about 0.07 seconds from the command to the picture instead of 0.35. Turn it on in Settings → Playback → "Pylon's own video engine". It's off by default.
+- **What it does:** local videos, hardware decoding, pause, seeking, speed, volume, snapshots and frame steps, choosing the audio track, SRT and VTT subtitles.
+- **Everything else plays as before.** Network, music, effects, chapters, ASS and PGS subtitles, 360°, recording and Watch Together go through libVLC, and Pylon switches by itself from the same position.
+- **It needs FFmpeg's libraries.** When you turn it on, Pylon offers to download them: about 80 MB, about 150 MB on disk.
+
+**Conversion**
+- **Conversion now runs on ffmpeg.** MP4s could lose their picture before, and a clip's start time was ignored. Video is now saved as H.264 + AAC, which phones and TVs play, and GIFs have better colors. It needs ffmpeg: Pylon offers to download it on the first conversion (about 200 MB).
+- **Trimming.** The Convert window can trim a file: type the start and end times or drag the handles on the bar. "Copy streams" is instant but starts at the nearest keyframe; the other formats cut exactly.
+- **Clearer errors.** If a file has no sound, Pylon says so, with the details in a tooltip. Cancelling stops ffmpeg and removes the unfinished file.
+
+**Fixes**
+- **The seek bar preview** no longer freezes on files with few keyframes and shows the frame in the video's shape instead of 16:9.
+
 ## 2.0.4
 
 <!-- ru -->

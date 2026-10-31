@@ -661,7 +661,7 @@
   "Time-shift buffer size": "Размер буфера тайм-шифта",
   "Output": "Вывод",
   "Pylon's own video engine (experimental)": "Собственный видеодвижок Pylon (экспериментально)",
-  "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.": "Обычные локальные видео открываются примерно вдвое быстрее. То, что он пока не умеет (субтитры, несколько звуковых дорожек, эффекты, главы, 360°), по-прежнему играет через libVLC.",
+  "Local videos open several times faster. Anything it can't do yet (network, music, effects, chapters, ASS subtitles, 360°) still plays through libVLC.": "Локальные видео открываются в несколько раз быстрее. То, что он пока не умеет (сеть, музыка, эффекты, главы, субтитры ASS, 360°), по-прежнему играет через libVLC.",
   "Pylon's own video engine": "Собственный видеодвижок Pylon",
   "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine.": "Движку нужны библиотеки FFmpeg, бесплатные и с открытым кодом. Pylon может скачать их сейчас (около 80 МБ с github.com/BtbN/FFmpeg-Builds); они используются только для этого движка.",
   "Downloading FFmpeg…": "Скачиваю FFmpeg…",
