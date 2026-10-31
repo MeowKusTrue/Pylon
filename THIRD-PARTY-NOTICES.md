@@ -14,6 +14,7 @@ Pylon is licensed under the GNU GPL v3 (see `LICENSE`). It ships or uses:
 | TagLibSharp — the tag editor | LGPL-2.1 | https://github.com/mono/taglib-sharp |
 | yt-dlp — not shipped; downloaded from its GitHub releases on first use, into %LocalAppData%\Pylon\tools | Unlicense | https://github.com/yt-dlp/yt-dlp |
 | FFmpeg — not shipped; downloaded on consent (BtbN builds) for tools that need it, into %LocalAppData%\Pylon\tools | GPL-3.0 (these builds) | https://github.com/BtbN/FFmpeg-Builds |
+| FFmpeg libraries for the own video engine — not shipped; downloaded on consent (BtbN LGPL shared builds) when the setting is turned on, into %LocalAppData%\Pylon\tools\ffmpeg, with their licence | LGPL-2.1-or-later (these builds) | https://github.com/BtbN/FFmpeg-Builds |
 | whisper.cpp and its speech models — not shipped; downloaded on consent for "Subtitles from speech", into %LocalAppData%\Pylon\tools\whisper | MIT | https://github.com/ggml-org/whisper.cpp |
 | mpegts.js — loaded by the Watch Together invite page (relay) from jsDelivr | Apache-2.0 | https://github.com/xqq/mpegts.js |
 

@@ -24,8 +24,13 @@ namespace Pylon;
 public sealed unsafe partial class VideoEngine : IDisposable
 {
     /// <summary>PYLON_FFMPEG_DLLS points at another set of FFmpeg 8 DLLs.</summary>
-    static string DllDir => Environment.GetEnvironmentVariable("PYLON_FFMPEG_DLLS")
+    public static string DllDir => Environment.GetEnvironmentVariable("PYLON_FFMPEG_DLLS")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "ffmpeg");
+
+    /// <summary>Not shipped: Ffmpeg.InstallEngineLibsAsync brings them when the setting is turned on.</summary>
+    public static IEnumerable<string> DllNames => new[] { "avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter" }.Select(lib => $"{lib}-{ffmpeg.LibraryVersionMap[lib]}.dll");
+
+    public static bool LibsInstalled => DllNames.All(dll => File.Exists(Path.Combine(DllDir, dll)));
 
     static bool _loaded;
 
@@ -41,8 +46,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
         try
         {
             // an absolute path also makes Windows look for each DLL's dependencies next to it
-            foreach (var lib in new[] { "avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter" })
-                NativeLibrary.Load(Path.Combine(DllDir, $"{lib}-{ffmpeg.LibraryVersionMap[lib]}.dll"));
+            foreach (var dll in DllNames) NativeLibrary.Load(Path.Combine(DllDir, dll));
             ffmpeg.RootPath = DllDir;
             ffmpeg.LibraryVersionMap.TryAdd("postproc", 0); // the bindings look for it with avfilter; FFmpeg 8 has none, and a missing one is no error
             DynamicallyLoadedBindings.Initialize();

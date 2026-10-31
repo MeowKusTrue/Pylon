@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Security.Cryptography;
 using LibVLCSharp.Shared;
 
 namespace Pylon;
@@ -26,23 +27,8 @@ public static class Ffmpeg
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Exe)!);
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(20), DefaultRequestHeaders = { { "User-Agent", "Pylon" } } };
-            using (var res = await http.GetAsync("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip", HttpCompletionOption.ResponseHeadersRead))
-            {
-                res.EnsureSuccessStatusCode();
-                var total = res.Content.Headers.ContentLength ?? 0;
-                await using var src = await res.Content.ReadAsStreamAsync();
-                await using var dst = File.Create(zip);
-                var buf = new byte[1 << 16];
-                long done = 0;
-                int n;
-                while ((n = await src.ReadAsync(buf)) > 0)
-                {
-                    await dst.WriteAsync(buf.AsMemory(0, n));
-                    done += n;
-                    if (total > 0) progress?.Report((double)done / total);
-                }
-            }
+            using var http = NewHttp();
+            await DownloadAsync(http, Builds + "ffmpeg-master-latest-win64-gpl.zip", zip, progress);
             using (var archive = ZipFile.OpenRead(zip))
             {
                 var entry = archive.Entries.First(e => e.FullName.EndsWith("/bin/ffmpeg.exe", StringComparison.OrdinalIgnoreCase));
@@ -55,6 +41,73 @@ public static class Ffmpeg
             return false;
         }
         finally { try { File.Delete(zip); } catch (IOException) { } }
+    }
+
+    const string Builds = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/";
+    // 8.1 is the release the bindings' DLL names fit (avcodec-62...); master and 9.0 have moved on
+    const string EngineLibs = "ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip";
+
+    static HttpClient NewHttp() => new() { Timeout = TimeSpan.FromMinutes(20), DefaultRequestHeaders = { { "User-Agent", "Pylon" } } };
+
+    static async Task DownloadAsync(HttpClient http, string url, string file, IProgress<double>? progress)
+    {
+        using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        res.EnsureSuccessStatusCode();
+        var total = res.Content.Headers.ContentLength ?? 0;
+        await using var src = await res.Content.ReadAsStreamAsync();
+        await using var dst = File.Create(file);
+        var buf = new byte[1 << 16];
+        long done = 0;
+        int n;
+        while ((n = await src.ReadAsync(buf)) > 0)
+        {
+            await dst.WriteAsync(buf.AsMemory(0, n));
+            done += n;
+            if (total > 0) progress?.Report((double)done / total);
+        }
+    }
+
+    /// <summary>
+    /// The video engine's libraries (about 80 MB, LGPL): only its DLLs and the licence from the archive, checked against the
+    /// release's checksums (they load into this process), put in place whole or not at all. False on any failure.
+    /// </summary>
+    public static async Task<bool> InstallEngineLibsAsync(IProgress<double>? progress)
+    {
+        var dir = VideoEngine.DllDir;
+        var (zip, fresh) = (dir + ".zip", dir + ".new");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
+            using var http = NewHttp();
+            await DownloadAsync(http, Builds + EngineLibs, zip, progress);
+            var sums = await http.GetStringAsync(Builds + "checksums.sha256");
+            await using (var file = File.OpenRead(zip))
+                if (!sums.Contains($"{Convert.ToHexStringLower(await SHA256.HashDataAsync(file))}  {EngineLibs}", StringComparison.Ordinal)) return false;
+            if (Directory.Exists(fresh)) Directory.Delete(fresh, recursive: true);
+            Directory.CreateDirectory(fresh);
+            using (var archive = ZipFile.OpenRead(zip))
+            {
+                foreach (var dll in VideoEngine.DllNames)
+                    archive.Entries.First(e => e.FullName.EndsWith("/bin/" + dll, StringComparison.OrdinalIgnoreCase)).ExtractToFile(Path.Combine(fresh, dll));
+                archive.Entries.First(e => e.FullName.EndsWith("/LICENSE.txt", StringComparison.OrdinalIgnoreCase)).ExtractToFile(Path.Combine(fresh, "LICENSE.txt"));
+            }
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            Directory.Move(fresh, dir);
+            return true;
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException or InvalidDataException or InvalidOperationException)
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(zip);
+                if (Directory.Exists(fresh)) Directory.Delete(fresh, recursive: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>

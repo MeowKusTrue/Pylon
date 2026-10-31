@@ -1124,6 +1124,30 @@ public partial class MainWindow : Window
         return VideoEngine.Load();
     }
 
+    /// <summary>The setting was turned on: its libraries come now, with the user's consent, or the setting goes back off.</summary>
+    async void EnsureOwnEngine()
+    {
+        if (!Settings.Bool("playback.ownengine")) return;
+        if (!VideoEngine.LibsInstalled)
+        {
+            if (!SnapMode && !DialogWindow.OfferTool(this, "FFmpeg", "Pylon's own video engine",
+                    "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine."))
+            {
+                Settings.Set("playback.ownengine", "false");
+                return;
+            }
+            Osd(L.T("Downloading FFmpeg…"), 120);
+            if (!await Ffmpeg.InstallEngineLibsAsync(new Progress<double>(p => Osd(L.F("FFmpeg {0}%", (int)(p * 100)), 120))))
+            {
+                Osd(L.T("Couldn't download FFmpeg"), 3);
+                Settings.Set("playback.ownengine", "false");
+                return;
+            }
+            Osd(L.T("The engine is ready: it starts with the next video"), 3);
+        }
+        _ = Task.Run(VideoEngine.Warm);
+    }
+
     static bool SubtitleBeside(string src)
     {
         var dir = Path.GetDirectoryName(src);
@@ -1822,6 +1846,7 @@ public partial class MainWindow : Window
                 break;
             case "ui.scene" or "ui.scenefps": Scene.Restyle(); break;
             case "ui.decorations" or "library.enabled" or "ui.cover" or "ui.spectrum" or "ui.spectrumstyle" or "ui.videobg" or "ui.musicbg" or "remote.auto" or "ui.livebg" or "ui.lyrics" or "ui.fscontrols" or "ui.fsopacity": ApplyLayout(); break;
+            case "playback.ownengine": EnsureOwnEngine(); break;
             case "ui.titlefile": if (_index >= 0) TitleText.Text = Settings.Bool(key) ? _title : "Pylon"; break;
             case "playback.speed": SetRate((float)Settings.Num(key)); break;
             case "playback.shuffle": BuildShuffle(); UpdateControlButtons(); break;
