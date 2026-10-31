@@ -210,6 +210,9 @@ public static class AudioChain
     /// </summary>
     static readonly System.Runtime.CompilerServices.ConditionalWeakTable<MediaPlayer, string> Built = [];
 
+    /// <summary>Whether any effect is on: those are libVLC's filters.</summary>
+    public static bool HasEffects => Settings.Bool("audio.eq") || Filters().Any();
+
     /// <summary>Whether the last ApplyLive had to rebuild the chain (checks).</summary>
     public static bool LastRebuilt { get; private set; }
 

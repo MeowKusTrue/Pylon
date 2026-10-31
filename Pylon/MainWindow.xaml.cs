@@ -30,7 +30,7 @@ public partial class MainWindow : Window
     /// <summary>Started with Windows (--background): built and drawn once off-screen, then hidden until a file comes.</summary>
     static readonly bool Background = Environment.GetCommandLineArgs().Skip(1).SequenceEqual(["--background"]);
 
-    MediaPlayer _mp = null!;
+    Player _mp = null!;
     readonly List<string> _queue = [];
     List<int> _shuffle = [];
     int _index = -1;
@@ -315,9 +315,9 @@ public partial class MainWindow : Window
 
     void ReloadEngine() => CreateEngine(resume: true);
 
-    MediaPlayer NewPlayer()
+    Player NewPlayer()
     {
-        var mp = new MediaPlayer(Vlc);
+        var mp = new Player(Vlc);
         AudioChain.Apply(mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
         // the output device is chosen before anything plays: switching it on a playing stream left libVLC's clock off by a
         // quarter second for good, so it dropped and resampled audio every 200 ms (crackling sound, a busy core)
@@ -333,7 +333,21 @@ public partial class MainWindow : Window
         mp.TimeChanged += (_, e) => { if (mp == _mp) (_heardMs, _heardAt) = (e.Time, Stopwatch.GetTimestamp()); };
         mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
-        mp.Vout += (_, e) => { if (e.Count > 0) Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); }); };
+        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
+        mp.Vout += (_, e) => { if (e.Count > 0) VideoShown(); };
+        mp.OwnEnded += () => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
+        mp.OwnPlaying += () =>
+        {
+            Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
+            VideoShown();
+        };
+        mp.OwnRefused += why => Dispatcher.BeginInvoke(() =>
+        {
+            if (mp != _mp || !mp.OnOwnEngine) return;
+            Perf.Mark("own engine refused: " + why);
+            _ownRefused = CurrentPath;
+            PlayAt(_index, startAt: Math.Max(0, mp.Time), autoplay: !mp.OwnPaused);
+        });
         return mp;
     }
 
@@ -1050,7 +1064,14 @@ public partial class MainWindow : Window
         if (!_isAudio && _mp.Hwnd == IntPtr.Zero) { Video.ApplyTemplate(); Video.MediaPlayer = null; Video.MediaPlayer = _mp; } // never let libVLC open its own window
         Perf.Mark($"play, video hwnd {_mp.Hwnd}");
         var playAt = Stopwatch.StartNew();
-        _mp.Play(media);
+        if (!isUrl && OwnEngineFits(src))
+        {
+            _mp.Media = media; // its tags and tracks still come from libVLC's parsing
+            _mp.SetOwnVolume(VolumeLevel, _trackGain);
+            var device = Settings.Str("audio.device");
+            _mp.PlayOwn(src, Math.Max(0, startAt), !autoplay, device == "System default" ? null : device.Split(" ($")[0]);
+        }
+        else _mp.Play(media);
         _switchStartMedia = playAt.ElapsedMilliseconds;
         if (prebuffer)
         {
@@ -1063,7 +1084,7 @@ public partial class MainWindow : Window
                 mp.SetPause(false);
             }));
         }
-        if (Perf.Enabled && !_isAudio)
+        if (Perf.Enabled && !_isAudio && !_mp.OnOwnEngine) // libVLC crashes on the statistics of a media it doesn't play
             new DispatcherTimer(TimeSpan.FromMilliseconds(5), DispatcherPriority.Send, (t, _) =>
             {
                 if (media.Statistics.DisplayedPictures == 0) return;
@@ -1086,6 +1107,31 @@ public partial class MainWindow : Window
     Stopwatch? _switch;
     long _switchParsed, _switchStartMedia;
     public string SwitchTiming = "";
+
+    string? _ownRefused;
+
+    /// <summary>Whether this file can go on Pylon's own engine: nothing asked for that only libVLC has.</summary>
+    bool OwnEngineFits(string src)
+    {
+        if (!Settings.Bool("playback.ownengine") || _cast != null || _recording || _party != null || _hosting || _tail != null || _second != null || src == _ownRefused) return false;
+        if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) return false; // tests stay silent unless they ask
+        if (AudioChain.HasEffects || !Settings.Bool("video.enable") || !Settings.Bool("audio.enable")) return false;
+        string[] plain = ["video.aspect", "video.crop", "video.zoom", "video.scale", "audio.speakers", "audio.delay", "fxv.hue", "fxv.brightness", "fxv.contrast", "fxv.saturation", "fxv.gamma", "fxv.crop.t", "fxv.crop.b", "fxv.crop.l", "fxv.crop.r"];
+        if (plain.Any(key => Settings.Str(key) != Settings.Find(key)?.Default) || Settings.Str("video.deint") == "On") return false;
+        if (Library.Data.Subtitles.GetValueOrDefault(src) is { Count: > 0 }) return false;
+        if (Settings.Bool("subs.autoload") && SubtitleBeside(src)) return false;
+        return VideoEngine.Load();
+    }
+
+    static bool SubtitleBeside(string src)
+    {
+        var dir = Path.GetDirectoryName(src);
+        if (dir == null) return false;
+        var stem = Path.GetFileNameWithoutExtension(src);
+        string[] kinds = [".srt", ".ass", ".ssa", ".sub", ".vtt"];
+        try { return Directory.EnumerateFiles(dir, stem + "*").Any(f => kinds.Contains(Path.GetExtension(f).ToLowerInvariant())); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
 
     void OnPlaying()
     {
@@ -1459,6 +1505,7 @@ public partial class MainWindow : Window
     void ApplyVolume()
     {
         AudioChain.SetVolume(_mp, VolumeLevel);
+        _mp.SetOwnVolume(VolumeLevel, _trackGain);
         UpdateVolumeIcon();
     }
 
@@ -1752,6 +1799,8 @@ public partial class MainWindow : Window
 
     void OnSettingChanged(string key)
     {
+        // something only libVLC has was just asked for: over to it, in place
+        if (_mp?.OnOwnEngine == true && CurrentPath is { } own && !OwnEngineFits(own)) PlayAt(_index, startAt: Math.Max(0, _mp.Time), autoplay: _mp.IsPlaying);
         switch (key)
         {
             case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;

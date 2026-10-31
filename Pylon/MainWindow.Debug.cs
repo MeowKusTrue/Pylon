@@ -52,7 +52,7 @@ public partial class MainWindow
                     await Task.Delay(1500);
                     break;
                 case "state":
-                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} own={_mp.OnOwnEngine} state={_mp.State} length={_mp.Length} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
                     break;
                 case "settings":
                     OpenSettings(arg.Length > 0 ? arg : null);

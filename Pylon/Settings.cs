@@ -554,6 +554,7 @@ public static class Settings
                 C("playback.repeat", "Repeat", "Off", ["Off", "One", "All"]),
                 T("playback.shuffle", "Shuffle", false),
                 T("playback.stopeach", "Stop after each item", false),
+                T("playback.ownengine", "Pylon's own video engine (experimental)", false, "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC."),
                 new Opt { Kind = OptKind.Number, Key = "playback.crossfade", Label = "Crossfade between songs", Default = "0", Min = 0, Max = 12, Unit = " s", Step = 1,
                           Info = "Music only: the next song fades in while this one fades out. 0 turns it off." },
                 T("playback.smartfade", "Smart crossfade", true, "Starts the crossfade where the song goes quiet instead of at the very end of the file, and starts the next song past its silence."),

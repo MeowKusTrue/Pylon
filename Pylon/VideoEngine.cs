@@ -67,7 +67,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
     AVBufferRef* _hwDevice;
     SwsContext* _sws;
     AVStream* _stream;
-    bool _hw;
+    bool _hw, _strict;
     long _openTicks;
 
     ID3D11Device _device = null!;
@@ -107,6 +107,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
     public event Action? FirstFrame;
 
     public bool Hardware => _hw;
+    public int VideoWidth => _stream->codecpar->width;
+    public int VideoHeight => _stream->codecpar->height;
     public long Decoded { get; private set; }
     public long Presented { get; private set; }
     public long Dropped { get; private set; }
@@ -135,9 +137,13 @@ public sealed unsafe partial class VideoEngine : IDisposable
         };
     }
 
-    /// <summary>Opens the file and starts playing; throws when it can't be opened or has no video.</summary>
-    public void Open(string path)
+    /// <summary>
+    /// Opens the file and starts playing; throws when it can't be opened or has no video. <paramref name="strict"/>: also
+    /// when it needs what only libVLC has so far (see Unsupported).
+    /// </summary>
+    public void Open(string path, long startMs = 0, bool paused = false, bool strict = false)
     {
+        _strict = strict;
         _openTicks = Stopwatch.GetTimestamp();
         CreateDevice();
         Perf.Mark("engine: device");
@@ -156,7 +162,10 @@ public sealed unsafe partial class VideoEngine : IDisposable
         Perf.Mark("engine: format");
         OpenDecoder(hardware: true);
         OpenAudio();
+        if (strict && Unsupported() is { } why) throw new NotSupportedException(why);
         Perf.Mark("engine: decoder");
+        if (paused) Paused = true;
+        if (startMs > 0) Seek(startMs);
         _timer = CreateWaitableTimerExW(IntPtr.Zero, null, 2, 0x1F0003); // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS
         foreach (var loop in _audioStream != null ? new ThreadStart[] { DemuxLoop, DecodeLoop, PresentLoop, AudioLoop } : [DemuxLoop, DecodeLoop, PresentLoop])
         {
@@ -164,6 +173,23 @@ public sealed unsafe partial class VideoEngine : IDisposable
             _threads.Add(thread);
             thread.Start();
         }
+    }
+
+    /// <summary>What the player needs libVLC for in this file: picking tracks and subtitles (5.5), chapters, 360°.</summary>
+    string? Unsupported()
+    {
+        var audio = 0;
+        for (var i = 0; i < _format->nb_streams; i++)
+        {
+            var kind = _format->streams[i]->codecpar->codec_type;
+            if (kind == AVMediaType.AVMEDIA_TYPE_SUBTITLE) return "subtitles";
+            if (kind == AVMediaType.AVMEDIA_TYPE_AUDIO && ++audio > 1) return "several audio tracks";
+        }
+        if (_format->nb_chapters > 0) return "chapters";
+        var video = _stream->codecpar;
+        if (video->field_order is not (AVFieldOrder.AV_FIELD_UNKNOWN or AVFieldOrder.AV_FIELD_PROGRESSIVE)) return "interlaced";
+        if (ffmpeg.av_packet_side_data_get(video->coded_side_data, video->nb_coded_side_data, AVPacketSideDataType.AV_PKT_DATA_SPHERICAL) != null) return "360°";
+        return null;
     }
 
     int BestVideo()
@@ -463,6 +489,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
     /// <summary>Into the queue, tagged with the seek it belongs to; <paramref name="frame"/> ends up empty.</summary>
     void Deliver(AVFrame* frame)
     {
+        if (_strict && (frame->flags & ffmpeg.AV_FRAME_FLAG_INTERLACED) != 0) throw new NotSupportedException("interlaced"); // containers often don't tell
         var item = ffmpeg.av_frame_alloc();
         if (frame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11)
             ffmpeg.av_frame_move_ref(item, frame);

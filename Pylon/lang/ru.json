@@ -660,6 +660,8 @@
   "Time-shift buffer folder": "Папка буфера тайм-шифта",
   "Time-shift buffer size": "Размер буфера тайм-шифта",
   "Output": "Вывод",
+  "Pylon's own video engine (experimental)": "Собственный видеодвижок Pylon (экспериментально)",
+  "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.": "Обычные локальные видео открываются примерно вдвое быстрее. То, что он пока не умеет (субтитры, несколько звуковых дорожек, эффекты, главы, 360°), по-прежнему играет через libVLC.",
   "Enable video": "Включить видео",
   "Start videos in fullscreen": "Открывать видео во весь экран",
   "Stop the screensaver during playback": "Отключать заставку во время воспроизведения",

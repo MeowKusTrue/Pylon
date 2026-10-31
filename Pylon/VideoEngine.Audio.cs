@@ -39,6 +39,9 @@ public sealed unsafe partial class VideoEngine
     /// <summary>"48000 Hz 2 ch", or why there is no sound.</summary>
     public string AudioInfo { get; private set; } = "no audio stream";
     public long Underruns { get; private set; }
+    /// <summary>No such device, or it went away; the picture goes on (on the sound's thread).</summary>
+    public event Action<Exception>? SoundFailed;
+    Exception? _audioError;
 
     /// <summary>Linear, 1 = as in the file, up to 2 (which may clip). This stream only: the Windows mixer's slider stays.</summary>
     public float Volume
@@ -179,12 +182,14 @@ public sealed unsafe partial class VideoEngine
         catch (COMException e) // no such device, unplugged: the picture goes on without sound
         {
             AudioInfo = $"no sound: {e.Message}";
+            _audioError = e;
         }
         finally
         {
             _audioDead = true;
             _audioStarted.Set();
             _audioDone.Set();
+            if (_audioError != null) SoundFailed?.Invoke(_audioError);
         }
     }
 

@@ -660,6 +660,8 @@
   "Time-shift buffer folder": "Time-shift buffer folder",
   "Time-shift buffer size": "Time-shift buffer size",
   "Output": "Output",
+  "Pylon's own video engine (experimental)": "Pylon's own video engine (experimental)",
+  "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.": "Plain local videos open about twice as fast. Anything it can't do yet (subtitles, several audio tracks, effects, chapters, 360°) still plays through libVLC.",
   "Enable video": "Enable video",
   "Start videos in fullscreen": "Start videos in fullscreen",
   "Stop the screensaver during playback": "Stop the screensaver during playback",
