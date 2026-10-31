@@ -345,6 +345,11 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     Check("sound gaps: rounding ignored, holes filled, jumps move the timeline", VideoEngine.PlaceGap(5_000, false, 48000) == (0, 0) && VideoEngine.PlaceGap(-50_000, false, 48000) == (0, 0)
         && VideoEngine.PlaceGap(100_000, false, 48000) == (0, 4800) && VideoEngine.PlaceGap(100_000, true, 48000) == (100_000, 0)
         && VideoEngine.PlaceGap(20_000_000, false, 48000) == (20_000_000, 0) && VideoEngine.PlaceGap(-300_000, false, 48000) == (-300_000, 0));
+    EngineTrack[] langs = [new(1, "a", "eng", false, false), new(2, "b", "ger", true, false), new(3, "c", "rus", false, true), new(4, "d", "und", false, false)];
+    Check("tracks: number, then language (ISO codes of any kind), then forced or default; none otherwise", VideoEngine.PickTrack(langs, 2, "ru", true) == 2 && VideoEngine.PickTrack(langs, 0, "ru", true) == 3
+        && VideoEngine.PickTrack(langs, 0, "de", false) == 2 && VideoEngine.PickTrack(langs, 0, "ja", true) == 3 && VideoEngine.PickTrack(langs, 0, "ja", false) == -1 && VideoEngine.PickTrack(langs[..2], 0, "ja", true) == 2 && VideoEngine.PickTrack(langs, 99, "en", false) == 1
+        && VideoEngine.TwoLetters("deu") == "de" && VideoEngine.TwoLetters("und") == null);
+    Check("subtitle text out of an ASS event", VideoEngine.AssText(@"3,0,Default,,0,0,0,,{\i1}Hello, there{\i0}\Nsecond\hline") == "Hello, there\nsecond line", VideoEngine.AssText(@"3,0,Default,,0,0,0,,{\i1}Hello, there{\i0}\Nsecond\hline"));
     const FFmpeg.AutoGen.AVColorSpace none = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_UNSPECIFIED, bt709 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT709, bt601 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_SMPTE170M, bt2020 = FFmpeg.AutoGen.AVColorSpace.AVCOL_SPC_BT2020_NCL;
     const FFmpeg.AutoGen.AVColorRange tv = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_MPEG, pc = FFmpeg.AutoGen.AVColorRange.AVCOL_RANGE_JPEG;
     const FFmpeg.AutoGen.AVColorTransferCharacteristic sdr = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_BT709, pq = FFmpeg.AutoGen.AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084;

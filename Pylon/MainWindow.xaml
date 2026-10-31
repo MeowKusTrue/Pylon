@@ -155,6 +155,7 @@
                         <local:Spectrum x:Name="VideoSpectrum" Height="90" VerticalAlignment="Bottom" Margin="24,0" Opacity="0.45"/>
                         <Path x:Name="CornerMask" Fill="{DynamicResource BgA3}" IsHitTestVisible="False"/>
                         <!-- the second subtitle (a translation, the original): drawn by Pylon at the top, libVLC's own stays at the bottom -->
+                        <local:SubtitleText x:Name="MainSub" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" IsHitTestVisible="False" Visibility="Collapsed"/>
                         <Border x:Name="SecondSub" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="40,28,40,0" Padding="14,6"
                                 CornerRadius="8" Background="#99000000" IsHitTestVisible="False" Visibility="Collapsed">
                             <TextBlock x:Name="SecondSubText" Foreground="White" FontSize="22" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/>

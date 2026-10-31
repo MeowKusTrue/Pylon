@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
 
@@ -52,11 +53,18 @@ public sealed unsafe partial class VideoEngine
 
     bool HasSound => _audioStream != null && !_audioDead;
 
-    void OpenAudio()
+    void OpenAudio(int wanted)
     {
-        var index = ffmpeg.av_find_best_stream(_format, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, _stream->index, null, 0);
+        var index = wanted >= 0 ? wanted : ffmpeg.av_find_best_stream(_format, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, _stream->index, null, 0);
         if (index < 0) return;
-        var stream = _format->streams[index];
+        OpenAudioDecoder(_format->streams[index]);
+        _audioFrame = ffmpeg.av_frame_alloc();
+        _tempoFrame = ffmpeg.av_frame_alloc();
+    }
+
+    void OpenAudioDecoder(AVStream* stream)
+    {
+        fixed (AVCodecContext** codec = &_audioCodec) ffmpeg.avcodec_free_context(codec);
         var decoder = ffmpeg.avcodec_find_decoder(stream->codecpar->codec_id);
         if (decoder == null)
         {
@@ -67,9 +75,7 @@ public sealed unsafe partial class VideoEngine
         Check(ffmpeg.avcodec_parameters_to_context(_audioCodec, stream->codecpar), "audio parameters");
         _audioCodec->pkt_timebase = stream->time_base;
         Check(ffmpeg.avcodec_open2(_audioCodec, decoder, null), "audio decoder");
-        _audioStream = stream;
-        _audioFrame = ffmpeg.av_frame_alloc();
-        _tempoFrame = ffmpeg.av_frame_alloc();
+        _audioStream = _audioOpenFor = stream;
     }
 
     void AudioLoop()
@@ -179,7 +185,7 @@ public sealed unsafe partial class VideoEngine
                 }
             }
         }
-        catch (COMException e) // no such device, unplugged: the picture goes on without sound
+        catch (Exception e) when (e is COMException or InvalidDataException) // no such device, unplugged, a broken track: the picture goes on without sound
         {
             AudioInfo = $"no sound: {e.Message}";
             _audioError = e;
@@ -332,7 +338,8 @@ public sealed unsafe partial class VideoEngine
                 if ((int)(item >> 2) != _serial) continue; // an older seek's
                 if ((item & 3) == FlushMark)
                 {
-                    ffmpeg.avcodec_flush_buffers(_audioCodec);
+                    if (_audioOpenFor != _audioStream) OpenAudioDecoder(_audioStream); // another track was chosen
+                    else ffmpeg.avcodec_flush_buffers(_audioCodec);
                     _awaitFlush = false;
                     _flushed = _serial;
                 }

@@ -82,10 +82,14 @@ public static class Settings
     public static double Num(string key) => double.TryParse(Str(key), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : 0;
     public static int Int(string key) => (int)Math.Round(Num(key));
 
+    /// <summary>Moves with every change: for what draws from the settings and asks whether to draw again.</summary>
+    public static long Version { get; private set; }
+
     public static void Set(string key, string value)
     {
         if (Str(key) == value) return;
         _values[key] = value;
+        Version++;
         SaveTimer.Stop();
         SaveTimer.Start();
         Changed?.Invoke(key);
@@ -97,6 +101,7 @@ public static class Settings
     public static void ResetAll()
     {
         _values.Clear();
+        Version++;
         Save();
         Changed?.Invoke("*");
     }
@@ -129,7 +134,7 @@ public static class Settings
     };
     static readonly string[] LanguageNames = ["System language", .. Languages.Keys];
 
-    static string Lang(string key) => Str(key) is var v && Languages.TryGetValue(v, out var code) ? code : CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+    public static string Lang(string key) => Str(key) is var v && Languages.TryGetValue(v, out var code) ? code : CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
 
     static string ColorInt(string key)
     {

@@ -154,7 +154,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
     /// Opens the file and starts playing; throws when it can't be opened or has no video. <paramref name="strict"/>: also
     /// when it needs what only libVLC has so far (see Unsupported).
     /// </summary>
-    public void Open(string path, long startMs = 0, bool paused = false, bool strict = false)
+    public void Open(string path, long startMs = 0, bool paused = false, bool strict = false, Func<IReadOnlyList<EngineTrack>, IReadOnlyList<EngineTrack>, int>? chooseAudio = null)
     {
         _strict = strict;
         _openTicks = Stopwatch.GetTimestamp();
@@ -174,7 +174,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
         if (_stream->start_time != ffmpeg.AV_NOPTS_VALUE) _startUs = ffmpeg.av_rescale_q(_stream->start_time, _stream->time_base, new AVRational { num = 1, den = 1_000_000 });
         Perf.Mark("engine: format");
         OpenDecoder(hardware: true);
-        OpenAudio();
+        ListTracks();
+        OpenAudio(chooseAudio?.Invoke(AudioTracks, SubtitleTracks) ?? -1);
         if (strict && Unsupported() is { } why) throw new NotSupportedException(why);
         Perf.Mark("engine: decoder");
         if (paused) Paused = true;
@@ -188,15 +189,15 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
     }
 
-    /// <summary>What the player needs libVLC for in this file: picking tracks and subtitles (5.5), chapters, 360°.</summary>
+    /// <summary>What the player needs libVLC for in this file: styled or picture subtitles, chapters, 360°.</summary>
     string? Unsupported()
     {
-        var audio = 0;
         for (var i = 0; i < _format->nb_streams; i++)
         {
-            var kind = _format->streams[i]->codecpar->codec_type;
-            if (kind == AVMediaType.AVMEDIA_TYPE_SUBTITLE) return "subtitles";
-            if (kind == AVMediaType.AVMEDIA_TYPE_AUDIO && ++audio > 1) return "several audio tracks";
+            var par = _format->streams[i]->codecpar;
+            if (par->codec_type == AVMediaType.AVMEDIA_TYPE_SUBTITLE
+                && par->codec_id is not (AVCodecID.AV_CODEC_ID_SUBRIP or AVCodecID.AV_CODEC_ID_SRT or AVCodecID.AV_CODEC_ID_TEXT or AVCodecID.AV_CODEC_ID_WEBVTT or AVCodecID.AV_CODEC_ID_MOV_TEXT))
+                return "styled or picture subtitles";
         }
         if (_format->nb_chapters > 0) return "chapters";
         var video = _stream->codecpar;
@@ -387,6 +388,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
                     demuxSerial = _serial;
                     aim = _seekAimUs;
                 }
+                if (_audioStream != null && _audioWanted >= 0) _audioStream = _format->streams[_audioWanted]; // the mark below tells the sound thread
                 ffmpeg.avformat_seek_file(_format, -1, long.MinValue, aim, aim, 0); // on failure it just plays on from here
                 ClearPackets(_packets);
                 ClearPackets(_audioPackets);
@@ -395,6 +397,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
                 ended = false;
                 continue;
             }
+
             // waits only when both streams have plenty: stopping at one full queue would starve the other in a badly interleaved file
             if (ended || (_packets.Count >= 64 && (_audioStream == null || _audioPackets.Count >= 128)))
             {
@@ -407,6 +410,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
             else if (read >= 0 && _audioStream != null && packet->stream_index == _audioStream->index) _audioPackets.Add((IntPtr)packet);
             else
             {
+                if (read >= 0) DecodeSubtitle(packet);
                 ffmpeg.av_packet_free(&packet);
                 if (read < 0)
                 {
@@ -1017,6 +1021,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
         _context?.ClearState();
         _context?.Flush(); // destruction is deferred, and the window takes a new swap chain only after the old one is gone
         fixed (AVCodecContext** codec = &_codec) ffmpeg.avcodec_free_context(codec);
+        CloseSubtitles();
         fixed (AVBufferRef** device = &_hwDevice) ffmpeg.av_buffer_unref(device);
         fixed (AVFormatContext** format = &_format) ffmpeg.avformat_close_input(format);
         ffmpeg.sws_freeContext(_sws);

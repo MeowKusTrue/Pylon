@@ -52,7 +52,7 @@ public partial class MainWindow
                     await Task.Delay(1500);
                     break;
                 case "state":
-                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} own={_mp.OnOwnEngine} state={_mp.State} length={_mp.Length} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} own={_mp.OnOwnEngine} audiotrack={_mp.AudioTrack} spu={_mp.Spu} subtext=[{(_mp.OnOwnEngine ? _mp.SubtitleAt(_mp.Time / 1000.0)?.Replace("\n", "/") : "")}] state={_mp.State} length={_mp.Length} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
                     break;
                 case "settings":
                     OpenSettings(arg.Length > 0 ? arg : null);
@@ -205,7 +205,7 @@ public partial class MainWindow
                 case "seek": _mp.Time = long.Parse(arg); await Task.Delay(600); Refresh(); break;
                 case "skipstate": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"skip={SkipBtn.Visibility} '{SkipBtn.Content}' chapters={_chapters.Length} next={NextInFolder()}{Environment.NewLine}"); break;
                 case "sheet": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"sheet={await Frames.ContactSheetAsync(CurrentPath!, Path.GetDirectoryName(outFile)!)}{Environment.NewLine}"); break;
-                case "tracks": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", _mp.AudioTrackDescription.Select(AudioTrackName)) + Environment.NewLine); break;
+                case "tracks": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), string.Join(" | ", _mp.AudioTrackDescription.Select(AudioTrackName)) + " || " + string.Join(" | ", _mp.SpuDescription.Select(t => $"{t.Id}:{t.Name}")) + Environment.NewLine); break;
                 case "remote": // the remote page and one command, fetched like a phone would
                     {
                         _remote ??= new RemoteServer(RemoteCommand);

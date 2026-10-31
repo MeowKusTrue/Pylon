@@ -4,6 +4,12 @@ using LibVLCSharp.Shared;
 
 namespace Pylon;
 
+/// <summary>A track as the window's menus list it, from libVLC or the engine.</summary>
+public sealed record PlayerTrack(int Id, string? Name);
+
+/// <summary>What the settings ask of the tracks a file starts with.</summary>
+public sealed record TrackChoice(int AudioNumber, string AudioLanguage, int SubNumber, string SubLanguage, bool SubsOn);
+
 /// <summary>
 /// The main window's player: libVLC, or for a plain local video Pylon's own engine, which opens several times faster.
 /// The members below hide libVLC's of the same name, so the window's calls stay as they are and what's not here
@@ -19,6 +25,10 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     bool _mute;
     double _level = 1, _gain = 1;
     readonly List<(MediaSlaveType Type, string Uri, bool Select)> _slaves = [];
+    readonly Dictionary<int, List<SubText.Cue>> _cues = [];
+    readonly List<(string Name, List<SubText.Cue> Cues)> _subFiles = [];
+    volatile int _spu = -1;
+    bool _soundOff;
 
     /// <summary>The first picture of a file on the engine, on its thread.</summary>
     public event Action? OwnPlaying;
@@ -31,13 +41,17 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     public bool OwnPaused => _engine?.Paused == true;
 
     /// <param name="device">Start of the output device's name; null for the Windows default.</param>
-    public void PlayOwn(string path, long startMs, bool paused, string? device)
+    public void PlayOwn(string path, long startMs, bool paused, string? device, TrackChoice choice, IReadOnlyList<string> subtitleFiles, int addedFiles)
     {
         StopOwn();
         base.Stop(); // it may have played the last file
         var engine = _engine = new VideoEngine(Hwnd, device);
-        _started = _ended = false;
+        _started = _ended = _soundOff = false;
         _startMs = startMs;
+        _spu = -1;
+        lock (_cues) _cues.Clear();
+        _subFiles.Clear();
+        engine.SubtitleCue += AddCue;
         engine.Volume = EngineVolume;
         engine.FirstFrame += () =>
         {
@@ -55,7 +69,17 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
         _opening = Task.Run(async () =>
         {
             await closing; // a window takes a new swap chain only when the old one is gone
-            try { engine.Open(path, startMs, paused, strict: true); }
+            try
+            {
+                foreach (var file in subtitleFiles) _subFiles.Add((Path.GetFileName(file), SubText.Load(file)));
+                engine.Open(path, startMs, paused, strict: true, chooseAudio: (audio, subs) =>
+                {
+                    var inside = VideoEngine.PickTrack(subs, choice.SubNumber, choice.SubLanguage, flagged: true);
+                    // added by hand in Pylon: that's what the user wants to see
+                    _spu = !choice.SubsOn ? -1 : addedFiles > 0 || (inside < 0 && subtitleFiles.Count > 0) ? SubFileIds : inside;
+                    return VideoEngine.PickTrack(audio, choice.AudioNumber, choice.AudioLanguage, flagged: false);
+                });
+            }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException or SharpGen.Runtime.SharpGenException or DllNotFoundException)
             {
                 Refuse(engine, e.Message);
@@ -83,7 +107,71 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     }
 
     /// <summary>Volume as libVLC's output has it: the slider's level cubed, 1 = as in the file.</summary>
-    float EngineVolume => _mute ? 0 : (float)(_level * _level * _level * _gain);
+    float EngineVolume => _mute || _soundOff ? 0 : (float)(_level * _level * _level * _gain);
+
+    /// <summary>Track ids from here up are subtitle files, not streams of the video.</summary>
+    public const int SubFileIds = 100_000;
+
+    void AddCue(int track, double start, double end, string text)
+    {
+        lock (_cues)
+        {
+            if (!_cues.TryGetValue(track, out var list)) _cues[track] = list = [];
+            var at = list.FindLastIndex(c => c.Start <= start); // they come in order, and again after a seek
+            if (at >= 0 && list[at].Start == start && list[at].Text == text) return;
+            list.Insert(at + 1, new SubText.Cue(start, end, text));
+        }
+    }
+
+    /// <summary>What the chosen subtitle shows at this moment (seconds); null for nothing. For the window, on the engine only.</summary>
+    public string? SubtitleAt(double seconds)
+    {
+        if (_engine == null || _spu < 0) return null;
+        lock (_cues)
+        {
+            var list = _spu >= SubFileIds ? _spu - SubFileIds < _subFiles.Count ? _subFiles[_spu - SubFileIds].Cues : null : _cues.GetValueOrDefault(_spu);
+            if (list == null) return null;
+            int low = 0, high = list.Count - 1, last = -1;
+            while (low <= high)
+            {
+                var mid = (low + high) / 2;
+                if (list[mid].Start <= seconds) (last, low) = (mid, mid + 1);
+                else high = mid - 1;
+            }
+            var shown = new List<string>();
+            for (var i = last; i >= 0 && i > last - 8; i--) // overlapping cues: the few before it may still be on
+                if (seconds < list[i].End) shown.Insert(0, list[i].Text);
+            return shown.Count == 0 ? null : string.Join("\n", shown);
+        }
+    }
+
+    public new PlayerTrack[] AudioTrackDescription => _engine is { } engine
+        ? [new PlayerTrack(-1, L.T("Disable")), .. engine.AudioTracks.Select(t => new PlayerTrack(t.Id, t.Name))]
+        : [.. base.AudioTrackDescription.Select(t => new PlayerTrack(t.Id, t.Name))];
+
+    public new int AudioTrack => _engine is { } engine ? _soundOff ? -1 : engine.AudioTrack : base.AudioTrack;
+
+    public new bool SetAudioTrack(int id)
+    {
+        if (_engine is not { } engine) return base.SetAudioTrack(id);
+        _soundOff = id < 0;
+        engine.Volume = EngineVolume;
+        if (id >= 0) engine.SelectAudio(id);
+        return true;
+    }
+
+    public new PlayerTrack[] SpuDescription => _engine is { } engine
+        ? [new PlayerTrack(-1, L.T("Disable")), .. engine.SubtitleTracks.Select(t => new PlayerTrack(t.Id, t.Name)), .. _subFiles.Select((f, i) => new PlayerTrack(SubFileIds + i, f.Name))]
+        : [.. base.SpuDescription.Select(t => new PlayerTrack(t.Id, t.Name))];
+
+    public new int Spu => _engine != null ? _spu : base.Spu;
+
+    public new bool SetSpu(int id)
+    {
+        if (_engine == null) return base.SetSpu(id);
+        _spu = id;
+        return true;
+    }
 
     /// <summary>The slider's level (1 = 100 %) and the track's measured gain, for the engine; libVLC gets its own through AudioChain.</summary>
     public void SetOwnVolume(double level, double gain)
@@ -101,10 +189,17 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
         return ok;
     }
 
-    /// <summary>A subtitle added while on the engine: libVLC's job, so it takes over and gets it.</summary>
+    /// <summary>A text subtitle goes on with the engine; anything else added is libVLC's job, so it takes over and gets it.</summary>
     public new bool AddSlave(MediaSlaveType type, string uri, bool select)
     {
         if (_engine is not { } engine) return base.AddSlave(type, uri, select);
+        var file = new Uri(uri).LocalPath;
+        if (type == MediaSlaveType.Subtitle && Path.GetExtension(file).ToLowerInvariant() is ".srt" or ".vtt")
+        {
+            _subFiles.Add((Path.GetFileName(file), SubText.Load(file)));
+            if (select) SetSpu(SubFileIds + _subFiles.Count - 1);
+            return true;
+        }
         _slaves.Add((type, uri, select));
         Refuse(engine, "a subtitle was added");
         return true;

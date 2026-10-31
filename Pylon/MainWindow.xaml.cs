@@ -1070,7 +1070,10 @@ public partial class MainWindow : Window
             _mp.Media = media; // its tags and tracks still come from libVLC's parsing
             _mp.SetOwnVolume(VolumeLevel, _trackGain);
             var device = Settings.Str("audio.device");
-            _mp.PlayOwn(src, Math.Max(0, startAt), !autoplay, device == "System default" ? null : device.Split(" ($")[0]);
+            var added = Library.Data.Subtitles.GetValueOrDefault(src)?.Where(File.Exists).ToList() ?? [];
+            var files = Settings.Bool("subs.autoload") ? SubText.Beside(src) : added; // Beside puts the ones added in Pylon first
+            _mp.PlayOwn(src, Math.Max(0, startAt), !autoplay, device == "System default" ? null : device.Split(" ($")[0],
+                new TrackChoice(Settings.Int("playback.audiotrack"), Settings.Lang("audio.lang"), Settings.Int("playback.subtrack"), Settings.Lang("subs.lang"), Settings.Bool("subs.enable")), files, added.Count);
         }
         else _mp.Play(media);
         _switchStartMedia = playAt.ElapsedMilliseconds;
@@ -1117,10 +1120,11 @@ public partial class MainWindow : Window
         if (!Settings.Bool("playback.ownengine") || _cast != null || _recording || _party != null || _hosting || _tail != null || _second != null || src == _ownRefused) return false;
         if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) return false; // tests stay silent unless they ask
         if (AudioChain.HasEffects || !Settings.Bool("video.enable") || !Settings.Bool("audio.enable")) return false;
-        string[] plain = ["video.aspect", "video.crop", "video.zoom", "video.scale", "audio.speakers", "audio.delay", "fxv.hue", "fxv.brightness", "fxv.contrast", "fxv.saturation", "fxv.gamma", "fxv.crop.t", "fxv.crop.b", "fxv.crop.l", "fxv.crop.r"];
+        string[] plain = ["video.aspect", "video.crop", "video.zoom", "video.scale", "audio.speakers", "audio.delay", "fxv.hue", "fxv.brightness", "fxv.contrast", "fxv.saturation", "fxv.gamma", "fxv.crop.t", "fxv.crop.b", "fxv.crop.l", "fxv.crop.r",
+            "subs.encoding", "subs.matching", "subs.folders", "subs.direction"];
         if (plain.Any(key => Settings.Str(key) != Settings.Find(key)?.Default) || Settings.Str("video.deint") == "On") return false;
-        if (Library.Data.Subtitles.GetValueOrDefault(src) is { Count: > 0 }) return false;
-        if (Settings.Bool("subs.autoload") && SubtitleBeside(src)) return false;
+        if (Library.Data.Subtitles.GetValueOrDefault(src)?.Any(f => !TextSubtitle(f)) == true) return false;
+        if (Settings.Bool("subs.autoload") && StyledSubtitleBeside(src)) return false;
         return VideoEngine.Load();
     }
 
@@ -1148,12 +1152,15 @@ public partial class MainWindow : Window
         _ = Task.Run(VideoEngine.Warm);
     }
 
-    static bool SubtitleBeside(string src)
+    static bool TextSubtitle(string file) => Path.GetExtension(file).ToLowerInvariant() is ".srt" or ".vtt";
+
+    /// <summary>A subtitle file libVLC would load that the engine draws poorly or not at all: styled ones, pictures.</summary>
+    static bool StyledSubtitleBeside(string src)
     {
         var dir = Path.GetDirectoryName(src);
         if (dir == null) return false;
         var stem = Path.GetFileNameWithoutExtension(src);
-        string[] kinds = [".srt", ".ass", ".ssa", ".sub", ".vtt"];
+        string[] kinds = [".ass", ".ssa", ".sub", ".idx", ".sup"];
         try { return Directory.EnumerateFiles(dir, stem + "*").Any(f => kinds.Contains(Path.GetExtension(f).ToLowerInvariant())); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
@@ -1173,6 +1180,7 @@ public partial class MainWindow : Window
             if (!_isAudio && Settings.Bool("video.fullscreen") && !_fullscreen && !_mini) ToggleFullscreen();
         }
         KeepAwake(!_isAudio && Settings.Bool("video.screensaver"));
+        if (_mp.OnOwnEngine) StartOwnSubtitles();
     }
 
     void OnEnded()
@@ -3142,7 +3150,7 @@ public partial class MainWindow : Window
     /// "Track 2 · AAC · stereo · 48 kHz · English": recordings (OBS, ShadowPlay) carry several unnamed tracks that libVLC
     /// only numbers; a real name from the file is kept.
     /// </summary>
-    string AudioTrackName(LibVLCSharp.Shared.Structures.TrackDescription t)
+    string AudioTrackName(PlayerTrack t)
     {
         if (t.Id < 0) return t.Name ?? L.T("Disable");
         var tracks = _mp.Media?.Tracks.Where(m => m.TrackType == TrackType.Audio).ToList() ?? [];
