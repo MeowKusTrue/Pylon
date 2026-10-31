@@ -19,7 +19,7 @@ namespace Pylon;
 /// <summary>
 /// Pylon's own video path for local files: FFmpeg demux and decode (D3D11VA, software as the fallback), shown with the
 /// D3D11 video processor in a flip swap chain. Opens in tens of ms where libVLC takes ~300. Threads: demux → packets
-/// → decode → frames → present, and demux → sound (VideoEngine.Audio.cs). Seeking and the place next to libVLC are the next stages.
+/// → decode → frames → present, and demux → sound (VideoEngine.Audio.cs). A seek raises _serial: every thread drops what is older.
 /// </summary>
 public sealed unsafe partial class VideoEngine : IDisposable
 {
@@ -36,9 +36,10 @@ public sealed unsafe partial class VideoEngine : IDisposable
         try
         {
             // an absolute path also makes Windows look for each DLL's dependencies next to it
-            foreach (var lib in new[] { "avutil", "swresample", "swscale", "avcodec", "avformat" })
+            foreach (var lib in new[] { "avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter" })
                 NativeLibrary.Load(Path.Combine(DllDir, $"{lib}-{ffmpeg.LibraryVersionMap[lib]}.dll"));
             ffmpeg.RootPath = DllDir;
+            ffmpeg.LibraryVersionMap.TryAdd("postproc", 0); // the bindings look for it with avfilter; FFmpeg 8 has none, and a missing one is no error
             DynamicallyLoadedBindings.Initialize();
             return _loaded = true;
         }
@@ -46,6 +47,12 @@ public sealed unsafe partial class VideoEngine : IDisposable
     }
 
     const int FrameQueue = 6;
+    // queue items that aren't pointers (those are even): (serial << 2) | kind
+    const int FlushMark = 1, EndMark = 3;
+    const long OvershootUs = 100_000;
+
+    static bool IsMark(IntPtr item) => (item & 1) != 0;
+    static IntPtr Mark(int serial, int kind) => (serial << 2) | kind;
 
     readonly IntPtr _hwnd;
     readonly CancellationTokenSource _stop = new();
@@ -81,7 +88,16 @@ public sealed unsafe partial class VideoEngine : IDisposable
 
     readonly object _clockGate = new();
     long _clockBaseUs, _clockBaseTicks;
+    double _speed = 1;
+    volatile bool _paused, _wantPaused; // asked; with sound the clock stands only when the sound's fade is out
+    volatile bool _behind;
     IntPtr _timer;
+
+    volatile int _serial; // raised by a seek; written under _clockGate
+    int _decodeSerial;
+    long _seekAimUs, _seekTargetUs, _seekShowFromUs = long.MinValue, _seekTicks, _skipBeforeUs = long.MinValue, _backoffUs;
+    bool _seekHasFrame; // the decoder gave something since the last seek
+    AVFrame* _lastSkipped;
 
     /// <summary>The last frame has been on screen for its time.</summary>
     public event Action? Ended;
@@ -97,7 +113,9 @@ public sealed unsafe partial class VideoEngine : IDisposable
     public double LateAvgMs => Presented == 0 ? 0 : _lateSumUs / 1000.0 / Presented;
     public double LateMaxMs => _lateMaxUs / 1000.0;
     public double FirstFrameMs { get; private set; }
-    public long TimeMs => (NowUs - _startUs) / 1000; // MPEG-TS timestamps don't start at 0
+    /// <summary>From asking for the last seek to its picture.</summary>
+    public double SeekMs { get; private set; }
+    public long TimeMs => DurationMs > 0 ? Math.Min(DurationMs, (NowUs - _startUs) / 1000) : (NowUs - _startUs) / 1000; // MPEG-TS timestamps don't start at 0; the clock runs on after the end
     long _startUs;
     public long DurationMs => _format == null ? 0 // without find_stream_info only the stream may know
         : _format->duration > 0 ? _format->duration / 1000
@@ -187,7 +205,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
             }
             _codec->hw_device_ctx = ffmpeg.av_buffer_ref(_hwDevice);
             _codec->get_format = _getFormat;
-            _codec->extra_hw_frames = FrameQueue + 2; // queued, shown and being presented frames all hold a surface
+            _codec->extra_hw_frames = FrameQueue + 3; // queued, shown, being presented and the last skipped frames all hold a surface
             _codec->thread_count = 1; // more threads only delay the first frame here
         }
         else _codec->thread_count = 0;
@@ -201,12 +219,101 @@ public sealed unsafe partial class VideoEngine : IDisposable
         return false;
     }
 
+    /// <summary>Goes to <paramref name="ms"/>: exactly, or to the keyframe before it (quicker, for dragging).</summary>
+    public void Seek(long ms, bool precise = true)
+    {
+        var target = Math.Max(0, ms) * 1000 + _startUs;
+        _backoffUs = 0;
+        _seekTargetUs = target;
+        RequestSeek(target, precise ? target : long.MinValue);
+    }
+
+    /// <summary>The demuxer landed past the target (MPEG-TS has no index): again from further back, the target stays. False when that's been tried enough.</summary>
+    bool SeekFurtherBack()
+    {
+        if (_seekTargetUs <= _startUs || _backoffUs >= 16_000_000 || _decodeSerial != _serial) return false;
+        _backoffUs = _backoffUs == 0 ? 1_000_000 : _backoffUs * 2;
+        long showFrom;
+        lock (_clockGate) showFrom = _seekShowFromUs;
+        RequestSeek(_seekTargetUs - _backoffUs, showFrom);
+        return true;
+    }
+
+    void RequestSeek(long aimUs, long showFromUs)
+    {
+        lock (_clockGate)
+        {
+            _seekAimUs = aimUs;
+            _seekShowFromUs = showFromUs;
+            _seekTicks = Stopwatch.GetTimestamp();
+            _firstPts = long.MinValue;
+            _clockFree = false;
+            _serial++;
+            if (HasSound)
+            {
+                _audioStarted.Reset();
+                _audioDone.Reset();
+            }
+        }
+    }
+
+    public bool Paused
+    {
+        get => _wantPaused;
+        set
+        {
+            lock (_clockGate)
+            {
+                if (_wantPaused == value) return;
+                _wantPaused = value;
+                if (!value || !HasSound)
+                {
+                    _clockBaseUs = ClockNow();
+                    _clockBaseTicks = Stopwatch.GetTimestamp();
+                    _paused = value;
+                }
+            }
+        }
+    }
+    /// <summary>Playback speed; sound keeps its pitch.</summary>
+    public double Speed
+    {
+        get { lock (_clockGate) return _speed; }
+        set
+        {
+            lock (_clockGate)
+            {
+                _clockBaseUs = ClockNow();
+                _clockBaseTicks = Stopwatch.GetTimestamp();
+                _speed = value;
+            }
+        }
+    }
+
     void DemuxLoop() => Guard(() =>
     {
+        var demuxSerial = 0;
+        var ended = false;
         while (!_stop.IsCancellationRequested)
         {
+            if (_serial != demuxSerial)
+            {
+                long aim;
+                lock (_clockGate)
+                {
+                    demuxSerial = _serial;
+                    aim = _seekAimUs;
+                }
+                ffmpeg.avformat_seek_file(_format, -1, long.MinValue, aim, aim, 0); // on failure it just plays on from here
+                ClearPackets(_packets);
+                ClearPackets(_audioPackets);
+                _packets.Add(Mark(demuxSerial, FlushMark));
+                _audioPackets.Add(Mark(demuxSerial, FlushMark));
+                ended = false;
+                continue;
+            }
             // waits only when both streams have plenty: stopping at one full queue would starve the other in a badly interleaved file
-            if (_packets.Count >= 64 && (_audioStream == null || _audioPackets.Count >= 128))
+            if (ended || (_packets.Count >= 64 && (_audioStream == null || _audioPackets.Count >= 128)))
             {
                 Thread.Sleep(2);
                 continue;
@@ -218,35 +325,60 @@ public sealed unsafe partial class VideoEngine : IDisposable
             else
             {
                 ffmpeg.av_packet_free(&packet);
-                if (read < 0) break;
+                if (read < 0)
+                {
+                    _packets.Add(Mark(demuxSerial, EndMark));
+                    _audioPackets.Add(Mark(demuxSerial, EndMark));
+                    ended = true;
+                }
             }
         }
-        _packets.CompleteAdding();
-        _audioPackets.CompleteAdding();
     });
+
+    static void ClearPackets(BlockingCollection<IntPtr> queue)
+    {
+        while (queue.TryTake(out var item))
+        {
+            if (IsMark(item)) continue;
+            var packet = (AVPacket*)item;
+            ffmpeg.av_packet_free(&packet);
+        }
+    }
 
     void DecodeLoop() => Guard(() =>
     {
         var frame = ffmpeg.av_frame_alloc();
+        _lastSkipped = ffmpeg.av_frame_alloc();
         var errors = 0;
         try
         {
-            foreach (var item in _packets.GetConsumingEnumerable(_stop.Token))
+            while (true)
             {
+                var item = _packets.Take(_stop.Token);
+                if (IsMark(item))
+                {
+                    var serial = (int)(item >> 2);
+                    if ((item & 3) == EndMark) DrainDecoder(frame);
+                    else if (serial == _serial) // an older seek's mark: the newer one is on its way
+                    {
+                        ffmpeg.avcodec_flush_buffers(_codec);
+                        FreePackets();
+                        ffmpeg.av_frame_unref(_lastSkipped);
+                        _decodeSerial = serial;
+                        _seekHasFrame = false;
+                        lock (_clockGate) _skipBeforeUs = _seekShowFromUs;
+                    }
+                    continue;
+                }
                 var packet = (AVPacket*)item;
                 if (Decoded == 0) _kept.Add((IntPtr)ffmpeg.av_packet_clone(packet));
+                _codec->skip_frame = _behind ? AVDiscard.AVDISCARD_NONREF : AVDiscard.AVDISCARD_DEFAULT; // can't keep up (4x of 60 fps): frames nothing refers to go undecoded
                 var sent = ffmpeg.avcodec_send_packet(_codec, packet);
                 ffmpeg.av_packet_free(&packet);
                 if (sent < 0) errors++;
-                if (!Receive(frame) && _hw && errors >= 3) Fallback(frame);
+                if (!Receive(frame) && Decoded == 0 && _hw && errors >= 3) Fallback(frame);
                 if (Decoded > 0) FreePackets();
             }
-            for (var i = 0; i < 2; i++) // the end: what the decoder still holds; twice, as the first round may have changed decoders
-            {
-                ffmpeg.avcodec_send_packet(_codec, null);
-                Receive(frame);
-            }
-            _frames.CompleteAdding();
         }
         finally
         {
@@ -255,6 +387,21 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
     });
 
+    void DrainDecoder(AVFrame* frame)
+    {
+        for (var i = 0; i < 2; i++) // what the decoder still holds; twice, as the first round may have changed decoders
+        {
+            ffmpeg.avcodec_send_packet(_codec, null);
+            Receive(frame);
+        }
+        if (_skipBeforeUs != long.MinValue && _lastSkipped->data[0] != null) // a seek past the last frame shows the last frame
+        {
+            _skipBeforeUs = long.MinValue;
+            Deliver(_lastSkipped);
+        }
+        if (!_seekHasFrame && SeekFurtherBack()) return; // no keyframe between the landing and the end
+        _frames.Add(Mark(_decodeSerial, EndMark), _stop.Token);
+    }
     /// <summary>The same packets again in software, on all the cores (the hardware setup runs one thread).</summary>
     void Fallback(AVFrame* frame)
     {
@@ -290,21 +437,48 @@ public sealed unsafe partial class VideoEngine : IDisposable
                 Fallback(frame);
                 return true;
             }
-            var item = ffmpeg.av_frame_alloc();
-            if (frame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11)
-                ffmpeg.av_frame_move_ref(item, frame);
-            else
+            if (_skipBeforeUs != long.MinValue && frame->best_effort_timestamp != ffmpeg.AV_NOPTS_VALUE)
             {
-                Convert(frame, item);
-                ffmpeg.av_frame_unref(frame);
+                var pts = PtsUs(frame);
+                if (pts < _skipBeforeUs) // a precise seek decodes from the keyframe before its target
+                {
+                    _seekHasFrame = true;
+                    ffmpeg.av_frame_unref(_lastSkipped);
+                    ffmpeg.av_frame_move_ref(_lastSkipped, frame);
+                    continue;
+                }
+                if (_lastSkipped->data[0] == null && pts - _skipBeforeUs > OvershootUs && SeekFurtherBack())
+                {
+                    _skipBeforeUs = long.MinValue;
+                    ffmpeg.av_frame_unref(frame);
+                    return true;
+                }
+                _skipBeforeUs = long.MinValue;
             }
-            Decoded++;
-            try { _frames.Add((IntPtr)item, _stop.Token); }
-            catch (OperationCanceledException) { ffmpeg.av_frame_free(&item); throw; }
+            Deliver(frame);
         }
         return any;
     }
 
+    /// <summary>Into the queue, tagged with the seek it belongs to; <paramref name="frame"/> ends up empty.</summary>
+    void Deliver(AVFrame* frame)
+    {
+        var item = ffmpeg.av_frame_alloc();
+        if (frame->format == (int)AVPixelFormat.AV_PIX_FMT_D3D11)
+            ffmpeg.av_frame_move_ref(item, frame);
+        else
+        {
+            Convert(frame, item);
+            ffmpeg.av_frame_unref(frame);
+        }
+        item->opaque = (void*)(nint)_decodeSerial;
+        _seekHasFrame = true;
+        Decoded++;
+        try { _frames.Add((IntPtr)item, _stop.Token); }
+        catch (OperationCanceledException) { ffmpeg.av_frame_free(&item); throw; }
+    }
+
+    long PtsUs(AVFrame* frame) => ffmpeg.av_rescale_q(frame->best_effort_timestamp, _stream->time_base, new AVRational { num = 1, den = 1_000_000 });
     /// <summary>Software frame → NV12 / P010, what the video processor reads. The color matrix stays for it to apply.</summary>
     void Convert(AVFrame* src, AVFrame* dst)
     {
@@ -324,63 +498,118 @@ public sealed unsafe partial class VideoEngine : IDisposable
     void PresentLoop() => Guard(() =>
     {
         long previous = long.MinValue, frameUs = 33_333;
-        foreach (var item in _frames.GetConsumingEnumerable(_stop.Token))
+        var shownSerial = -1;
+        while (true)
         {
-            var frame = (AVFrame*)item;
-            var pts = frame->best_effort_timestamp == ffmpeg.AV_NOPTS_VALUE ? previous + frameUs
-                : ffmpeg.av_rescale_q(frame->best_effort_timestamp, _stream->time_base, new AVRational { num = 1, den = 1_000_000 });
-            if (previous != long.MinValue && pts > previous) frameUs = pts - previous;
-            previous = pts;
-            if (_clockBaseTicks == 0)
+            var item = _frames.Take(_stop.Token);
+            if (IsMark(item)) // the end of the file
             {
-                Rebase(pts);
-                Volatile.Write(ref _firstPts, pts);
-            }
-            var wait = pts - NowUs;
-            // the timestamps jump (joined recordings) or a long stall; forward allows for a screen recording's still seconds
-            if (wait > 10_000_000 || wait < -2_000_000) { Rebase(pts); wait = 0; }
-            if (wait > 0) WaitUntil(pts);
-            else if (-wait > Math.Max(frameUs, 20_000) && _frames.Count > 0)
-            {
-                ffmpeg.av_frame_free(&frame);
-                Dropped++;
+                var ending = (int)(item >> 2);
+                lock (_clockGate)
+                    if (ending == _serial && _firstSerial != ending) // a seek that found no frame at all: sound isn't to wait for one
+                    {
+                        _firstPts = previous;
+                        _firstSerial = ending;
+                    }
+                if (ending == _serial && WaitUntil(previous + frameUs, ending) && WaitForSound(ending)) Ended?.Invoke(); // sound often runs a little longer
                 continue;
             }
+            var frame = (AVFrame*)item;
+            var serial = (int)(nint)frame->opaque;
+            if (serial != _serial)
+            {
+                ffmpeg.av_frame_free(&frame);
+                continue;
+            }
+            var pts = frame->best_effort_timestamp == ffmpeg.AV_NOPTS_VALUE ? previous + frameUs : PtsUs(frame);
+            var fresh = serial != shownSerial; // the first picture after opening or a seek shows at once
+            if (fresh)
+            {
+                shownSerial = serial;
+                Rebase(pts);
+                lock (_clockGate)
+                    if (serial == _serial)
+                    {
+                        _firstPts = pts;
+                        _firstSerial = serial;
+                    }
+            }
+            else
+            {
+                if (pts > previous) frameUs = pts - previous;
+                var wait = pts - NowUs;
+                _behind = wait < (_behind ? -20_000 : -100_000);
+                // the timestamps jump (joined recordings) or a long stall; forward allows for a screen recording's still seconds
+                if (!_paused && (wait > 10_000_000 || wait < -2_000_000)) { Rebase(pts); wait = 0; }
+                if (wait > 0 || _paused)
+                {
+                    if (!WaitUntil(pts, serial))
+                    {
+                        ffmpeg.av_frame_free(&frame);
+                        continue;
+                    }
+                }
+                else if (-wait > Math.Max(frameUs, 20_000) && _frames.Count > 0)
+                {
+                    ffmpeg.av_frame_free(&frame);
+                    Dropped++;
+                    previous = pts;
+                    continue;
+                }
+            }
+            previous = pts;
             var late = Math.Max(0, NowUs - pts);
             Draw(frame);
             var first = Presented == 0;
             _swap?.Present(1, PresentFlags.None).CheckError();
             Presented++;
-            _lateSumUs += late;
-            _lateMaxUs = Math.Max(_lateMaxUs, late);
+            var old = _shown; // kept: a resized window redraws it while paused
+            _shown = frame;
+            ffmpeg.av_frame_free(&old);
+            if (!fresh)
+            {
+                _lateSumUs += late;
+                _lateMaxUs = Math.Max(_lateMaxUs, late);
+                continue;
+            }
+            if (!_audioStarted.IsSet) Rebase(pts); // the picture took its time to set up: the timeline starts when it's shown, or with sound
             if (first)
             {
-                if (!_audioStarted.IsSet) Rebase(pts); // the first picture took its time to set up: the timeline starts when it's shown, or with sound
                 FirstFrameMs = (Stopwatch.GetTimestamp() - _openTicks) * 1000.0 / Stopwatch.Frequency;
                 Perf.Mark("engine: first picture");
                 FirstFrame?.Invoke();
-                // the picture stands until sound starts, which then sets the clock; a file whose sound comes late doesn't wait for it
-                if (_audioStream != null && !_audioStarted.Wait(500, _stop.Token))
-                {
-                    _clockFree = true;
-                    Rebase(pts);
-                }
             }
-            var old = _shown; // kept for 5.3: a resized window redraws it while paused
-            _shown = frame;
-            ffmpeg.av_frame_free(&old);
+            else SeekMs = (Stopwatch.GetTimestamp() - Volatile.Read(ref _seekTicks)) * 1000.0 / Stopwatch.Frequency;
+            if (HasSound && !_wantPaused) HoldForSound(pts, serial);
         }
-        WaitUntil(previous + frameUs);
-        if (_audioStream != null) _audioDone.Wait(_stop.Token); // sound often runs a little longer than the picture
-        if (!_stop.IsCancellationRequested) Ended?.Invoke();
     });
+
+    /// <summary>The picture stands until sound starts, which then sets the clock; a file whose sound comes late doesn't wait for it.</summary>
+    void HoldForSound(long pts, int serial)
+    {
+        var since = Stopwatch.GetTimestamp();
+        while (!_audioStarted.Wait(10, _stop.Token))
+            if (serial != _serial) return;
+            else if (Stopwatch.GetTimestamp() - since > Stopwatch.Frequency / 2)
+            {
+                _clockFree = true;
+                Rebase(pts);
+                return;
+            }
+    }
+
+    bool WaitForSound(int serial)
+    {
+        while (HasSound && !_audioDone.Wait(10, _stop.Token))
+            if (serial != _serial) return false;
+        return serial == _serial;
+    }
+
+    long ClockNow() => _paused ? _clockBaseUs : _clockBaseUs + (long)((Stopwatch.GetTimestamp() - _clockBaseTicks) * 1_000_000.0 / Stopwatch.Frequency * _speed);
 
     long NowUs
     {
-        get
-        {
-            lock (_clockGate) return _clockBaseUs + (Stopwatch.GetTimestamp() - _clockBaseTicks) * 1_000_000 / Stopwatch.Frequency;
-        }
+        get { lock (_clockGate) return ClockNow(); }
     }
 
     void Rebase(long pts) => Stamp(pts, Stopwatch.GetTimestamp());
@@ -395,18 +624,39 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
     }
 
-    /// <summary>In slices, so that stopping doesn't wait for a long frame.</summary>
-    void WaitUntil(long pts)
+    /// <summary>In slices, so that stopping or seeking doesn't wait for a long frame; false when that's what happened.</summary>
+    bool WaitUntil(long pts, int serial)
     {
-        for (long left; (left = pts - NowUs) > 0 && !_stop.IsCancellationRequested;)
+        while (true)
         {
-            var slice = Math.Min(left, 50_000);
+            if (_stop.IsCancellationRequested || serial != _serial) return false;
+            long slice;
+            if (_paused)
+            {
+                slice = 10_000;
+                RedrawIfResized();
+            }
+            else
+            {
+                var left = pts - NowUs;
+                if (left <= 0) return true;
+                slice = Math.Min((long)(left / Speed), 50_000);
+                if (slice <= 0) return true;
+            }
             var due = -slice * 10;
             if (_timer != IntPtr.Zero && SetWaitableTimer(_timer, ref due, 0, IntPtr.Zero, IntPtr.Zero, false)) WaitForSingleObject(_timer, 100);
-            else Thread.Sleep((int)(slice / 1000));
+            else Thread.Sleep(Math.Max(1, (int)(slice / 1000)));
         }
     }
 
+    void RedrawIfResized()
+    {
+        if (_shown == null) return;
+        GetClientRect(_hwnd, out var client);
+        if (client.Right == _swapW && client.Bottom == _swapH) return;
+        Draw(_shown);
+        _swap?.Present(1, PresentFlags.None).CheckError();
+    }
     void Draw(AVFrame* frame)
     {
         GetClientRect(_hwnd, out var client);
@@ -584,13 +834,10 @@ public sealed unsafe partial class VideoEngine : IDisposable
     {
         _stop.Cancel();
         foreach (var thread in _threads) thread.Join();
-        while (_packets.TryTake(out var item))
-        {
-            var packet = (AVPacket*)item;
-            ffmpeg.av_packet_free(&packet);
-        }
+        ClearPackets(_packets);
         while (_frames.TryTake(out var item))
         {
+            if (IsMark(item)) continue;
             var frame = (AVFrame*)item;
             ffmpeg.av_frame_free(&frame);
         }
@@ -599,6 +846,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
         CloseAudio();
         var shown = _shown;
         ffmpeg.av_frame_free(&shown);
+        fixed (AVFrame** skipped = &_lastSkipped) ffmpeg.av_frame_free(skipped);
         foreach (var view in _views.Values) view.Dispose();
         _output?.Dispose();
         _processor?.Dispose();
@@ -679,6 +927,36 @@ public static class EngineTest
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
         };
         VideoEngine? current = null;
+        // PYLON_ENGINE_SCRIPT="1000 pause; 2000 resume; 3000 seek 5000; 4000 fast 1000; 5000 speed 1.5; 6000 volume 0.5; 7000 log; 8000 quit": ms since opening
+        var script = Environment.GetEnvironmentVariable("PYLON_ENGINE_SCRIPT");
+        async Task RunScript(VideoEngine engine)
+        {
+            var clock = Stopwatch.StartNew();
+            foreach (var step in script!.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var parts = step.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                await Task.Delay(Math.Max(0, int.Parse(parts[0]) - (int)clock.ElapsedMilliseconds));
+                var arg = parts.Length > 2 ? double.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture) : 0;
+                var before = engine.TimeMs;
+                switch (parts[1])
+                {
+                    case "pause": engine.Paused = true; break;
+                    case "resume": engine.Paused = false; break;
+                    case "seek": engine.Seek((long)arg); break;
+                    case "fast": engine.Seek((long)arg, precise: false); break;
+                    case "speed": engine.Speed = arg; break;
+                    case "volume": engine.Volume = (float)arg; break;
+                    case "quit":
+                        await app.Dispatcher.BeginInvoke(() =>
+                        {
+                            Finish();
+                            app.Shutdown();
+                        });
+                        return;
+                }
+                Write($"{clock.ElapsedMilliseconds} ms: {step}; clock {before} ms, last seek took {engine.SeekMs:0} ms, shown {engine.Presented}, dropped {engine.Dropped}");
+            }
+        }
         void Finish()
         {
             if (current is not { } engine) return;
@@ -694,7 +972,8 @@ public static class EngineTest
                 var engine = current = new VideoEngine(host.Handle, Environment.GetEnvironmentVariable("PYLON_ENGINE_AUDIO"));
                 engine.Ended += () => app.Dispatcher.BeginInvoke(() =>
                 {
-                    Write($"length {engine.DurationMs} ms");
+                    Write($"ended at clock {engine.TimeMs} ms, length {engine.DurationMs} ms");
+                    if (script != null) return; // the script says when to leave: it may seek back
                     Finish();
                     if (--runs > 0) Next();
                     else app.Shutdown();
@@ -705,6 +984,7 @@ public static class EngineTest
                     app.Dispatcher.BeginInvoke(() => app.Shutdown());
                 };
                 engine.Open(file);
+                if (script != null) _ = RunScript(engine);
             }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException or SharpGen.Runtime.SharpGenException)
             {

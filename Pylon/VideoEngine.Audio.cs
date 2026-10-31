@@ -19,19 +19,35 @@ public sealed unsafe partial class VideoEngine
     AVStream* _audioStream;
     AVCodecContext* _audioCodec;
     SwrContext* _swr;
-    AVFrame* _audioFrame;
+    AVFrame* _audioFrame, _tempoFrame;
+    AVFilterGraph* _tempo;
+    AVFilterContext* _tempoIn, _tempoOut;
     int _inRate, _inChannels, _inFormat = -1, _rate, _channels;
     ulong _outMask;
     byte[] _pcm = new byte[1 << 16];
     int _pcmPos, _pcmEnd; // in frames
     long _silence, _skip, _written, _originUs;
     long _firstPts = long.MinValue;
-    bool _placed, _drained, _starved;
+    int _firstSerial, _flushed;
+    double _audioSpeed = 1;
+    bool _placed, _drained, _starved, _awaitFlush, _afterSeek, _placeAtClock;
     volatile bool _clockFree; // sound was late: the clock runs without it, and sound joins at the clock's position
+    volatile bool _audioDead;
+    float _volume = 1, _gain, _gainTarget = 1;
+    float _gainStep; // per frame: a change of level takes ~20 ms, sample by sample, so that it never clicks
 
     /// <summary>"48000 Hz 2 ch", or why there is no sound.</summary>
     public string AudioInfo { get; private set; } = "no audio stream";
     public long Underruns { get; private set; }
+
+    /// <summary>Linear, 1 = as in the file, up to 2 (which may clip). This stream only: the Windows mixer's slider stays.</summary>
+    public float Volume
+    {
+        get => Volatile.Read(ref _volume);
+        set => Volatile.Write(ref _volume, Math.Clamp(value, 0, 2));
+    }
+
+    bool HasSound => _audioStream != null && !_audioDead;
 
     void OpenAudio()
     {
@@ -50,50 +66,113 @@ public sealed unsafe partial class VideoEngine
         Check(ffmpeg.avcodec_open2(_audioCodec, decoder, null), "audio decoder");
         _audioStream = stream;
         _audioFrame = ffmpeg.av_frame_alloc();
+        _tempoFrame = ffmpeg.av_frame_alloc();
     }
 
     void AudioLoop()
     {
         try
         {
+            AvSetMmThreadCharacteristicsW("Pro Audio", out _); // little is queued: no waiting behind other threads
             using var output = new WasapiOutput(_audioDevice);
             _rate = output.Rate;
             _channels = output.Channels;
             _outMask = output.ChannelMask;
+            _gainStep = 1f / (_rate / 50);
             AudioInfo = $"{_rate} Hz {_channels} ch";
             Perf.Mark("engine: audio device");
-            while (Volatile.Read(ref _firstPts) == long.MinValue) // sound starts with the picture
-            {
-                if (_stop.IsCancellationRequested) return;
-                Thread.Sleep(1);
-            }
-            while (output.Free > 0 && !_stop.IsCancellationRequested && !AudioFinished) // a full buffer first: a start without gaps
-                if (Feed(output) == 0) Thread.Sleep(1);
-            if (_stop.IsCancellationRequested) return;
-            output.Start();
-            Perf.Mark("engine: audio started");
+            var serial = 0;
+            var buffering = true; // filling the device's queue: a start without gaps
+            var running = false;
+            var finished = false;
             ulong heard = 0;
             while (!_stop.IsCancellationRequested)
             {
-                output.Ready.WaitOne(100);
+                var speed = Speed;
+                if (serial != _serial || speed != _audioSpeed)
+                {
+                    if (running) FadeOut(output);
+                    output.Stop();
+                    output.Reset(); // what's queued belongs to the old place
+                    if (serial != _serial)
+                    {
+                        serial = _serial;
+                        _awaitFlush = _flushed != serial; // the fade may have just read past the seek's mark
+                        _afterSeek = true;
+                        _placed = _drained = _placeAtClock = false;
+                    }
+                    else
+                    {
+                        _placed = false; // a new speed: the next block, already decoded ahead, takes its place by its time
+                        _placeAtClock = true;
+                    }
+                    _audioSpeed = speed;
+                    CloseTempo();
+                    _pcmPos = _pcmEnd = 0;
+                    _silence = _skip = _written = 0;
+                    _starved = finished = running = false;
+                    buffering = true;
+                    heard = 0;
+                    _gain = 0;
+                }
+                if (!running && _wantPaused && !_paused) Freeze(NowUs);
+                if (buffering)
+                {
+                    if (!FirstPicture(serial))
+                    {
+                        Thread.Sleep(1);
+                        continue;
+                    }
+                    var fed = Feed(output);
+                    if (output.Padding >= output.Lead || AudioFinished) buffering = false;
+                    else if (fed == 0) Thread.Sleep(1);
+                    continue;
+                }
+                if (running == _wantPaused)
+                {
+                    if (running)
+                    {
+                        FadeOut(output); // sound and picture stop together when the fade is out
+                        output.Stop();
+                        running = false;
+                        var (at, frequency0, _) = output.Position;
+                        Freeze(_originUs + (long)((double)at * 1_000_000 / frequency0 * _audioSpeed));
+                    }
+                    else
+                    {
+                        _gainTarget = 1;
+                        output.Start();
+                        running = true;
+                        Perf.Mark("engine: audio started");
+                    }
+                }
+                if (!running)
+                {
+                    Thread.Sleep(5);
+                    continue;
+                }
+                output.Ready.WaitOne(20);
                 var (position, frequency, ticks) = output.Position;
                 if (position > heard) // it stands still when the stream runs dry; then the clock goes on alone
                 {
                     heard = position;
-                    Stamp(_originUs + (long)(position * 1_000_000 / frequency), ticks);
-                    if (!_audioStarted.IsSet) // not at Start: the device takes a moment before its position moves
-                    {
-                        Perf.Mark("engine: audio moves");
-                        _audioStarted.Set();
-                    }
+                    AudioMoved(serial, _originUs + (long)((double)position * 1_000_000 / frequency * _audioSpeed), ticks);
                 }
-                var fed = output.Free > 0 ? Feed(output) : 0;
-                var padding = output.Padding;
-                if (padding == 0 && fed == 0)
+                if (finished) continue;
+                var more = Feed(output);
+                if (output.Padding == 0 && more == 0)
                 {
-                    if (AudioFinished) break;
-                    if (!_starved) Underruns++;
-                    _starved = true;
+                    if (AudioFinished)
+                    {
+                        finished = true;
+                        lock (_clockGate)
+                            if (serial == _serial) _audioDone.Set();
+                    }
+                    else
+                    {
+                        if (!_starved) Underruns++;
+                        _starved = true;
+                    }
                 }
             }
         }
@@ -103,17 +182,62 @@ public sealed unsafe partial class VideoEngine
         }
         finally
         {
+            _audioDead = true;
             _audioStarted.Set();
             _audioDone.Set();
         }
+    }
+
+    /// <summary>Down to silence on the samples that come next, and until they have played: ~100 ms.</summary>
+    void FadeOut(WasapiOutput output)
+    {
+        _gainTarget = 0;
+        var since = Stopwatch.GetTimestamp();
+        while (_gain > 0 && Stopwatch.GetTimestamp() - since < Stopwatch.Frequency / 10)
+        {
+            if (Feed(output) == 0 && output.Padding < output.Lead) break; // no more sound to fade: the queue just runs out
+            output.Ready.WaitOne(5);
+        }
+        while (output.Padding > 0 && Stopwatch.GetTimestamp() - since < Stopwatch.Frequency / 5) Thread.Sleep(1);
+        _gain = 0;
+    }
+    bool FirstPicture(int serial)
+    {
+        lock (_clockGate) return _firstSerial == serial && _firstPts != long.MinValue;
+    }
+
+    /// <summary>The clock stands from here on (sound has just stopped, or there's none to wait for).</summary>
+    void Freeze(long us)
+    {
+        lock (_clockGate)
+        {
+            if (!_wantPaused) return; // asked to go on in the meantime
+            _clockBaseUs = us;
+            _clockBaseTicks = Stopwatch.GetTimestamp();
+            _paused = true;
+        }
+    }
+
+    [DllImport("avrt.dll", CharSet = CharSet.Unicode)] static extern IntPtr AvSetMmThreadCharacteristicsW(string task, out int index);
+
+    void AudioMoved(int serial, long us, long ticks)
+    {
+        lock (_clockGate)
+        {
+            if (serial != _serial) return;
+            if (!_paused) Stamp(us, ticks);
+            if (_audioStarted.IsSet) return;
+            _audioStarted.Set(); // not at Start: the device takes a moment before its position moves
+        }
+        Perf.Mark("engine: audio moves");
     }
 
     bool AudioFinished => _drained && _pcmPos >= _pcmEnd && _silence == 0;
 
     int Feed(WasapiOutput output)
     {
-        var free = output.Free;
-        if (free == 0) return 0;
+        var free = output.Lead - output.Padding;
+        if (free <= 0) return 0;
         var fed = Fill(output.GetBuffer(free), free);
         output.Release(fed);
         return fed;
@@ -135,7 +259,6 @@ public sealed unsafe partial class VideoEngine
             }
             else if (_pcmPos < _pcmEnd)
             {
-                count = Math.Min(_pcmEnd - _pcmPos, frames - done);
                 if (_skip > 0)
                 {
                     count = (int)Math.Min(_skip, _pcmEnd - _pcmPos);
@@ -143,7 +266,9 @@ public sealed unsafe partial class VideoEngine
                     _pcmPos += count;
                     continue;
                 }
+                count = Math.Min(_pcmEnd - _pcmPos, frames - done);
                 new ReadOnlySpan<byte>(_pcm, _pcmPos * size, count * size).CopyTo(new Span<byte>(dst + done * size, count * size));
+                ApplyGain((float*)(dst + done * size), count);
                 _pcmPos += count;
             }
             else if (!NextAudio()) break;
@@ -153,35 +278,109 @@ public sealed unsafe partial class VideoEngine
         return done;
     }
 
+    void ApplyGain(float* samples, int frames)
+    {
+        var volume = Volume;
+        var target = _gainTarget * volume;
+        if (_gain == 1 && target == 1) return;
+        for (var f = 0; f < frames; f++)
+        {
+            if (_gain != target) _gain = _gain < target ? Math.Min(target, _gain + _gainStep) : Math.Max(target, _gain - _gainStep);
+            for (var c = 0; c < _channels; c++) samples[f * _channels + c] *= _gain;
+        }
+    }
+
     /// <summary>The next decoded block into _pcm; false when none is ready now.</summary>
     bool NextAudio()
     {
         while (true)
         {
-            if (ffmpeg.avcodec_receive_frame(_audioCodec, _audioFrame) >= 0)
+            if (!_awaitFlush)
             {
-                var ok = Resample();
-                ffmpeg.av_frame_unref(_audioFrame);
-                if (ok) return true;
-                continue;
+                if (_tempo != null && ffmpeg.av_buffersink_get_frame(_tempoOut, _tempoFrame) >= 0)
+                {
+                    var ok = Resample(_tempoFrame);
+                    ffmpeg.av_frame_unref(_tempoFrame);
+                    if (ok) return true;
+                    continue;
+                }
+                if (ffmpeg.avcodec_receive_frame(_audioCodec, _audioFrame) >= 0)
+                {
+                    Place(_audioFrame->best_effort_timestamp == ffmpeg.AV_NOPTS_VALUE ? long.MinValue
+                        : ffmpeg.av_rescale_q(_audioFrame->best_effort_timestamp, _audioStream->time_base, new AVRational { num = 1, den = 1_000_000 }));
+                    if (_audioSpeed == 1)
+                    {
+                        var ok = Resample(_audioFrame);
+                        ffmpeg.av_frame_unref(_audioFrame);
+                        if (ok) return true;
+                        continue;
+                    }
+                    if (_tempo == null) OpenTempo(_audioFrame);
+                    Check(ffmpeg.av_buffersrc_add_frame(_tempoIn, _audioFrame), "tempo");
+                    continue;
+                }
+                if (_drained) return false;
             }
-            if (_drained) return false;
-            if (!_audioPackets.TryTake(out var item))
+            if (!_audioPackets.TryTake(out var item)) return false;
+            if (IsMark(item))
             {
-                if (!_audioPackets.IsCompleted) return false;
-                ffmpeg.avcodec_send_packet(_audioCodec, null); // the end: what the decoder still holds
-                _drained = true;
+                if ((int)(item >> 2) != _serial) continue; // an older seek's
+                if ((item & 3) == FlushMark)
+                {
+                    ffmpeg.avcodec_flush_buffers(_audioCodec);
+                    _awaitFlush = false;
+                    _flushed = _serial;
+                }
+                else if (!_awaitFlush)
+                {
+                    ffmpeg.avcodec_send_packet(_audioCodec, null); // the end: what the decoder still holds
+                    if (_tempo != null) ffmpeg.av_buffersrc_add_frame(_tempoIn, null);
+                    _drained = true;
+                }
                 continue;
             }
             var packet = (AVPacket*)item;
-            ffmpeg.avcodec_send_packet(_audioCodec, packet); // a broken packet: its sound is missing, the next gap check covers it
+            if (!_awaitFlush) ffmpeg.avcodec_send_packet(_audioCodec, packet); // a broken packet: its sound is missing, the next gap check covers it
             ffmpeg.av_packet_free(&packet);
         }
     }
 
-    bool Resample()
+    /// <summary>atempo from libavfilter: the speed without the pitch. Under 0.5 it takes several in a row.</summary>
+    void OpenTempo(AVFrame* like)
     {
-        var frame = _audioFrame;
+        _tempo = ffmpeg.avfilter_graph_alloc();
+        var layout = stackalloc byte[128];
+        ffmpeg.av_channel_layout_describe(&like->ch_layout, layout, 128);
+        var timeBase = _audioStream->time_base;
+        var args = $"time_base={timeBase.num}/{timeBase.den}:sample_rate={like->sample_rate}:sample_fmt={ffmpeg.av_get_sample_fmt_name((AVSampleFormat)like->format)}:channel_layout={Marshal.PtrToStringUTF8((IntPtr)layout)}";
+        fixed (AVFilterContext** input = &_tempoIn) Check(ffmpeg.avfilter_graph_create_filter(input, ffmpeg.avfilter_get_by_name("abuffer"), "in", args, null, _tempo), "tempo source");
+        fixed (AVFilterContext** output = &_tempoOut) Check(ffmpeg.avfilter_graph_create_filter(output, ffmpeg.avfilter_get_by_name("abuffersink"), "out", null, null, _tempo), "tempo sink");
+        var chain = new List<string>();
+        var speed = _audioSpeed;
+        for (; speed < 0.5; speed *= 2) chain.Add("atempo=0.5");
+        chain.Add("atempo=" + speed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var open = ffmpeg.avfilter_inout_alloc();
+        var close = ffmpeg.avfilter_inout_alloc();
+        open->name = ffmpeg.av_strdup("in");
+        open->filter_ctx = _tempoIn;
+        close->name = ffmpeg.av_strdup("out");
+        close->filter_ctx = _tempoOut;
+        var parsed = ffmpeg.avfilter_graph_parse_ptr(_tempo, string.Join(",", chain), &close, &open, null);
+        ffmpeg.avfilter_inout_free(&open);
+        ffmpeg.avfilter_inout_free(&close);
+        Check(parsed, "tempo chain");
+        Check(ffmpeg.avfilter_graph_config(_tempo, null), "tempo graph");
+    }
+
+    void CloseTempo()
+    {
+        if (_tempo == null) return;
+        fixed (AVFilterGraph** graph = &_tempo) ffmpeg.avfilter_graph_free(graph);
+        _tempoIn = _tempoOut = null;
+    }
+
+    bool Resample(AVFrame* frame)
+    {
         if (_swr == null || frame->sample_rate != _inRate || frame->ch_layout.nb_channels != _inChannels || frame->format != _inFormat)
         {
             _inRate = frame->sample_rate;
@@ -209,8 +408,6 @@ public sealed unsafe partial class VideoEngine
         if (count <= 0) return false;
         _pcmPos = 0;
         _pcmEnd = count;
-        if (frame->best_effort_timestamp != ffmpeg.AV_NOPTS_VALUE)
-            Place(ffmpeg.av_rescale_q(frame->best_effort_timestamp, _audioStream->time_base, new AVRational { num = 1, den = 1_000_000 }));
         return true;
     }
 
@@ -220,13 +417,20 @@ public sealed unsafe partial class VideoEngine
         if (!_placed)
         {
             _placed = true;
-            var start = _clockFree ? NowUs : Math.Min(pts, Volatile.Read(ref _firstPts)); // sound before the first picture just plays; the picture waits for its time
+            long picture;
+            lock (_clockGate) picture = _firstPts;
+            if (picture == long.MinValue) picture = pts; // a seek just came: this block is on its way out anyway
+            if (pts == long.MinValue) pts = picture;
+            // sound before the first picture of a file just plays and the picture waits for its time; after a seek the picture is where we asked to be
+            var start = _clockFree || _placeAtClock ? NowUs : _afterSeek ? picture : Math.Min(pts, picture);
+            _placeAtClock = false;
             _originUs = start;
-            if (pts > start) _silence = (pts - start) * _rate / 1_000_000;
-            else _skip = (start - pts) * _rate / 1_000_000;
+            if (pts > start) _silence = (long)((pts - start) * _rate / 1_000_000.0 / _audioSpeed);
+            else _skip = (long)((start - pts) * _rate / 1_000_000.0 / _audioSpeed);
             return;
         }
-        var (shift, silence) = PlaceGap(pts - (_originUs + (_written + _silence) * 1_000_000 / _rate), _starved, _rate);
+        if (pts == long.MinValue || _audioSpeed != 1) return; // ponytail: through atempo the blocks' times lag by its window; holes aren't filled at other speeds
+        var (shift, silence) = PlaceGap(pts - (_originUs + (_written + _silence - _skip) * 1_000_000 / _rate), _starved, _rate); // what's still to skip comes before the origin
         _originUs += shift;
         _silence += silence;
         _starved = false;
@@ -243,17 +447,15 @@ public sealed unsafe partial class VideoEngine
 
     void CloseAudio()
     {
-        while (_audioPackets.TryTake(out var item))
-        {
-            var packet = (AVPacket*)item;
-            ffmpeg.av_packet_free(&packet);
-        }
+        ClearPackets(_audioPackets);
         _audioPackets.Dispose();
         _audioStarted.Dispose();
         _audioDone.Dispose();
+        CloseTempo();
         fixed (AVCodecContext** codec = &_audioCodec) ffmpeg.avcodec_free_context(codec);
         fixed (SwrContext** swr = &_swr) ffmpeg.swr_free(swr);
         fixed (AVFrame** frame = &_audioFrame) ffmpeg.av_frame_free(frame);
+        fixed (AVFrame** frame = &_tempoFrame) ffmpeg.av_frame_free(frame);
     }
 }
 
@@ -300,8 +502,9 @@ sealed unsafe class WasapiOutput : IDisposable
         _client.GetService(ref iid, out var clock);
         _clock = (IAudioClock)clock;
         _clock.GetFrequency(out _frequency);
+        _client.GetDevicePeriod(out var period, out _); // in 100 ns
+        Lead = Math.Min((int)_buffer, Math.Max(Rate * 80 / 1000, (int)(period * 3 * Rate / 10_000_000)));
     }
-
     public int Padding
     {
         get
@@ -311,7 +514,8 @@ sealed unsafe class WasapiOutput : IDisposable
         }
     }
 
-    public int Free => (int)_buffer - Padding;
+    /// <summary>How much to keep queued, in frames: 80 ms or three device periods. A reserve for a busy machine; a longer queue would delay every fade.</summary>
+    public int Lead { get; }
 
     /// <summary>What the device has reached: position in units of frequency, and when (Stopwatch ticks).</summary>
     public (ulong Position, ulong Frequency, long Ticks) Position
@@ -333,10 +537,16 @@ sealed unsafe class WasapiOutput : IDisposable
 
     public void Start() => _client.Start();
 
+    public void Stop() => _client.Stop();
+
+    /// <summary>Drops what's queued, the position back at 0. Only when stopped.</summary>
+    public void Reset() => _client.Reset();
+
     public void Dispose()
     {
         try { _client.Stop(); }
         catch (COMException) { } // the device is gone
+
         Marshal.ReleaseComObject(_clock);
         Marshal.ReleaseComObject(_render);
         Marshal.ReleaseComObject(_client);

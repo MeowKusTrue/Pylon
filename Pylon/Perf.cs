@@ -7,6 +7,7 @@ namespace Pylon;
 public static class Perf
 {
     static readonly string? File = Environment.GetEnvironmentVariable("PYLON_PROFILE");
+    static readonly object Gate = new();
 
     public static bool Enabled => File != null;
 
@@ -14,6 +15,6 @@ public static class Perf
     {
         if (File == null) return;
         var ms = (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds;
-        System.IO.File.AppendAllText(File, $"{ms,7:0} ms  {stage}{Environment.NewLine}");
+        lock (Gate) System.IO.File.AppendAllText(File, $"{ms,7:0} ms  {stage}{Environment.NewLine}"); // the video engine marks from several threads
     }
 }
