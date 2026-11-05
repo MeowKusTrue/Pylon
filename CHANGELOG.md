@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.1
+
+<!-- ru -->
+**Новое**
+- **Следующий и предыдущий по папке.** Если открыт один файл, кнопки «Следующий» и «Предыдущий» идут по файлам его папки в порядке Проводника.
+- **Текст в мини-плеере.** Слова приподнимаются и чуть увеличиваются, пока поются.
+- **Плеер по умолчанию в приветствии.** На первом шаге есть кнопка, чтобы сделать Pylon плеером по умолчанию.
+- **Офлайн-плейлисты.** Название, исполнитель, альбом и обложка теперь записываются в сам скачанный файл, их видят и другие плееры.
+
+**Исправления**
+- **Приветствие.** Выбор темы и цвета не срабатывал.
+- **Меню «…»** больше не выходит за окно и листается.
+- **Окно обновления** могло открыться дважды.
+- **Мини-плеер.** Клик по строке текста иногда перетаскивал окно вместо перемотки.
+- **«Текст для Spotify»** открывается одним окном.
+- Для отчётов о бледной картинке в errors.log пишутся сведения о видео и видеокарте.
+
+<!-- en -->
+**New**
+- **Next and previous through the folder.** With one file open, Next and Previous step through the files in its folder, in Explorer's order.
+- **Lyrics in the miniplayer.** Words rise and swell a little as they're sung.
+- **Default player in the welcome screen.** The first step has a button to make Pylon the default player.
+- **Offline playlists.** The title, artist, album and cover are now written into the downloaded file, so other players see them too.
+
+**Fixes**
+- **Welcome screen.** Choosing the theme and color didn't work.
+- **The "…" menu** no longer goes past the window and scrolls.
+- **The update window** could open twice.
+- **Miniplayer.** Clicking a lyrics line could drag the window instead of seeking.
+- **"Lyrics for Spotify"** opens one window.
+- For reports of a pale picture, errors.log now records details about the video and the graphics card.
+
 ## 2.1.0
 
 <!-- ru -->
