@@ -107,6 +107,7 @@ public partial class MainWindow
                 var name = Safe(meta is { Title: { } t } ? meta.Artist is { } a ? $"{a} - {t}" : t : Library.TitleOf(item));
                 if (await YtDlp.DownloadAudioAsync(await YtDlp.PageOf(item), Path.Combine(dir, name)) is not { } file) { missed++; continue; }
                 // the file carries the song's names and cover; its stamp tells the music indexer it's read already
+                await WriteTags(file, meta?.Title ?? name, meta?.Artist, meta?.Album, meta?.Art);
                 Library.Data.Meta[file] = new TrackMeta
                 {
                     Stamp = File.GetLastWriteTimeUtc(file).Ticks, Title = meta?.Title ?? name, Artist = meta?.Artist, Album = meta?.Album,
@@ -122,6 +123,24 @@ public partial class MainWindow
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Osd(e.Message, 5); }
         finally { _downloading.Remove(p); }
         Osd(missed == 0 ? L.F("“{0}” is saved for offline: {1} songs", p.Name, saved) : L.F("“{0}”: {1} saved, {2} not found", p.Name, saved, missed), 5);
+    }
+
+    /// <summary>Names and cover into the file itself, so other players and a copied folder keep them. Failure leaves the file as it is.</summary>
+    public static async Task WriteTags(string file, string title, string? artist, string? album, string? art)
+    {
+        byte[]? cover = null;
+        try { cover = art is null ? null : art.StartsWith("http") ? await Covers.Http.GetByteArrayAsync(art) : File.Exists(art) ? await File.ReadAllBytesAsync(art) : null; }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException) { }
+        try
+        {
+            using var f = TagLib.File.Create(file);
+            if (album != null && f is not TagLib.Matroska.File) f.Tag.Album = album; // Matroska keeps it as the whole file's title
+            f.Tag.Title = title;
+            if (artist != null) f.Tag.Performers = [artist];
+            if (cover != null) f.Tag.Pictures = [new TagLib.Picture(new TagLib.ByteVector(cover)) { Type = TagLib.PictureType.FrontCover }];
+            f.Save();
+        }
+        catch (Exception e) when (e is TagLib.UnsupportedFormatException or TagLib.CorruptFileException or IOException or UnauthorizedAccessException or NotImplementedException) { }
     }
 
     /// <summary>

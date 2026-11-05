@@ -51,6 +51,9 @@ public partial class MainWindow
                     ShowSeekPreview(2 + double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * (Seek.ActualWidth - 4));
                     await Task.Delay(1500);
                     break;
+                case "next": Next(); break;
+                case "prev": Previous(); break;
+                case "path": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"path={Path.GetFileName(CurrentPath)} queue={_queue.Count}{Environment.NewLine}"); break;
                 case "state":
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} own={_mp.OnOwnEngine} audiotrack={_mp.AudioTrack} spu={_mp.Spu} subtext=[{(_mp.OnOwnEngine ? _mp.SubtitleAt(_mp.Time / 1000.0)?.Replace("\n", "/") : "")}] state={_mp.State} length={_mp.Length} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
                     break;

@@ -402,15 +402,19 @@ public partial class MainWindow
         MiniLyrics.Visibility = show && ((object?)now ?? next) != null ? Visibility.Visible : Visibility.Collapsed;
         if (now == _miniLine) return;
         _miniLine = now;
-        // word by word: one run per word, lit as it's sung (lines without word timing light up whole)
+        // word by word: each word its own box in the line (so the line still wraps and centers), lit and lifted as it's
+        // sung; a render transform moves it without moving the others (lines without word timing light up whole)
         MiniLyricNow.Inlines.Clear();
         _miniWords.Clear();
         if (now is { Words.Length: > 0 })
             foreach (var w in now.Words)
             {
                 var brush = new SolidColorBrush(Color.FromArgb(105, 255, 255, 255));
-                _miniWords.Add((w, brush));
-                MiniLyricNow.Inlines.Add(new System.Windows.Documents.Run(w.Joined ? w.Text : w.Text + " ") { Foreground = brush });
+                var (scale, lift) = (new ScaleTransform(), new TranslateTransform());
+                _miniWords.Add((w, brush, scale, lift));
+                var box = new TextBlock { Text = w.Text, Foreground = brush, RenderTransformOrigin = new Point(0.5, 1), RenderTransform = new TransformGroup { Children = { scale, lift } } };
+                MiniLyricNow.Inlines.Add(new System.Windows.Documents.InlineUIContainer(box) { BaselineAlignment = BaselineAlignment.Baseline });
+                if (!w.Joined) MiniLyricNow.Inlines.Add(new System.Windows.Documents.Run(" "));
             }
         else MiniLyricNow.Text = now?.Text ?? "";
         MiniLyricNext.Text = next ?? "";
@@ -419,17 +423,28 @@ public partial class MainWindow
     }
 
     LyricLine? _miniLine;
-    readonly List<(Syllable Word, SolidColorBrush Brush)> _miniWords = [];
+    readonly List<(Syllable Word, SolidColorBrush Brush, ScaleTransform Scale, TranslateTransform Lift)> _miniWords = [];
 
-    /// <summary>The miniplayer's words brighten as they're sung (30 times a second, from the seek bar's smooth clock).</summary>
+    /// <summary>
+    /// The miniplayer's words brighten as they're sung and rise a little, swelling while sung (30 times a second, from the
+    /// seek bar's smooth clock); a sung word stays up a bit, the way the big lyrics view leaves it.
+    /// </summary>
     void PaintMiniWords()
     {
         if (_miniWords.Count == 0 || MiniLyrics.Visibility != Visibility.Visible) return;
         var t = PlaybackClock() + LyricsOffset;
-        foreach (var (w, brush) in _miniWords)
+        var still = !Motion.Enabled;
+        foreach (var (w, brush, scale, lift) in _miniWords)
         {
-            var a = (byte)(105 + 150 * Math.Clamp((t - w.Start) / Math.Max(0.08, w.End - w.Start), 0, 1));
+            var p = Math.Clamp((t - w.Start) / Math.Max(0.08, w.End - w.Start), 0, 1);
+            var a = (byte)(105 + 150 * p);
             if (brush.Color.A != a) brush.Color = Color.FromArgb(a, 255, 255, 255);
+            if (still) continue;
+            var eased = 1 - (1 - p) * (1 - p);
+            var y = -2.5 * eased;
+            var s = 1 + 0.07 * Math.Sin(Math.PI * p);
+            if (Math.Abs(lift.Y - y) > 0.05) lift.Y = y;
+            if (Math.Abs(scale.ScaleX - s) > 0.002) scale.ScaleX = scale.ScaleY = s;
         }
     }
 }

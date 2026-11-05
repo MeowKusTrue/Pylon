@@ -40,7 +40,7 @@ public class OnboardingWindow : Window
         _card.CornerRadius = new CornerRadius(14);
         _card.SetResourceReference(Border.BackgroundProperty, "MenuBg");
         _card.Effect = new DropShadowEffect { BlurRadius = 15, ShadowDepth = 8, Direction = 270, Opacity = 0.46 };
-        _card.MouseLeftButtonDown += (_, e) => { if (e.OriginalSource is not TextBox && e.ButtonState == MouseButtonState.Pressed) DragMove(); };
+        _card.MouseLeftButtonDown += (_, e) => { if (e.ButtonState == MouseButtonState.Pressed && !MainWindow.Clickable(e.OriginalSource as DependencyObject)) DragMove(); };
         Content = _card;
         ThemeManager.Changed += Render;
         Closed += (_, _) => ThemeManager.Changed -= Render;
@@ -123,8 +123,17 @@ public class OnboardingWindow : Window
                 },
                 new TextBlock { Text = L.T("Choose a Media Folder to get started with"), FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, 48, 0, 12) },
                 pick,
+                DefaultPlayer(),
             },
         };
+    }
+
+    /// <summary>The same window as Settings → file types: Windows lets only the user pick the default app.</summary>
+    Button DefaultPlayer()
+    {
+        var b = new Button { Content = L.T("Make Pylon the default player"), Style = St("SecondaryButton"), Background = R("BgRaised"), Height = 40, Margin = new Thickness(0, 20, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        b.Click += (_, _) => { Settings.Set("app.assocasked", true); DialogWindow.FileTypes(this); };
+        return b;
     }
 
     FrameworkElement ThemeStep()

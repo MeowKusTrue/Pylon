@@ -103,7 +103,9 @@
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="15" ShadowDepth="8" Direction="270" Color="Black" Opacity="0.46"/>
                         </Border.Effect>
-                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                        </ScrollViewer>
                     </Border>
                 </ControlTemplate>
             </Setter.Value>

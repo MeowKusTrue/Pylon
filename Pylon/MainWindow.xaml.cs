@@ -194,7 +194,7 @@ public partial class MainWindow : Window
             if (SnapMode) return;
 #endif
             if (Background) return; // asked when the window first shows (Reveal)
-            if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => new OnboardingWindow(this).ShowDialog(), DispatcherPriority.ApplicationIdle);
+            if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => { new OnboardingWindow(this).ShowDialog(); StartupChecks(); }, DispatcherPriority.ApplicationIdle);
             else StartupChecks();
         };
         Overlay.SizeChanged += (_, _) => UpdateCornerMask();
@@ -334,7 +334,7 @@ public partial class MainWindow : Window
         mp.TimeChanged += (_, e) => { if (mp == _mp) (_heardMs, _heardAt) = (e.Time, Stopwatch.GetTimestamp()); };
         mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
-        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); OpenSeekPreview(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
+        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); OpenSeekPreview(); NoteVideoSetup(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
         mp.Vout += (_, e) => { if (e.Count > 0) VideoShown(); };
         mp.OwnEnded += () => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
         mp.OwnPlaying += () =>
@@ -1134,8 +1134,21 @@ public partial class MainWindow : Window
     /// <summary>The setting was turned on: its libraries come now, with the user's consent, or the setting goes back off.</summary>
     async void EnsureOwnEngine()
     {
-        if (!Settings.Bool("playback.ownengine")) return;
+        if (!Settings.Bool("playback.ownengine") || _engineLibsBusy) return; // turned off and on during the download: one download, not two into the same file
         if (!VideoEngine.LibsInstalled)
+        {
+            _engineLibsBusy = true;
+            try { await InstallEngineLibs(); }
+            finally { _engineLibsBusy = false; }
+            if (!VideoEngine.LibsInstalled) return;
+        }
+        _ = Task.Run(VideoEngine.Warm);
+    }
+
+    bool _engineLibsBusy;
+
+    async Task InstallEngineLibs()
+    {
         {
             if (!SnapMode && !DialogWindow.OfferTool(this, "FFmpeg", "Pylon's own video engine",
                     "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine."))
@@ -1152,7 +1165,6 @@ public partial class MainWindow : Window
             }
             Osd(L.T("The engine is ready: it starts with the next video"), 3);
         }
-        _ = Task.Run(VideoEngine.Warm);
     }
 
     static bool TextSubtitle(string file) => Path.GetExtension(file).ToLowerInvariant() is ".srt" or ".vtt";
@@ -1467,13 +1479,30 @@ public partial class MainWindow : Window
         else NextInQueue();
     }
 
-    void NextInQueue() => PlayQueueAt(NextIndex(+1) is var n && n >= 0 && n < _queue.Count ? n : (Settings.Str("playback.repeat") == "All" ? 0 : -1));
+    void NextInQueue()
+    {
+        if (NextIndex(+1) is var n && n >= 0 && n < _queue.Count) PlayQueueAt(n);
+        else if (FolderStep(+1)) { }
+        else PlayQueueAt(Settings.Str("playback.repeat") == "All" ? 0 : -1);
+    }
 
     public void Previous()
     {
         if (RemoteShown) { RemotePane.Previous(); return; }
         if (_mp.Time > 3000) SeekTo(0); // restart first, previous on a second press
-        else PlayQueueAt(NextIndex(-1));
+        else if (NextIndex(-1) is var n && n >= 0) PlayQueueAt(n);
+        else FolderStep(-1);
+    }
+
+    /// <summary>One file alone in the queue: next / previous go through its folder, the way a file opened from Explorer is browsed.</summary>
+    bool FolderStep(int dir)
+    {
+        if (_queue.Count != 1 || _radio != null || InFolder(dir) is not { } file) return false;
+        SaveProgress();
+        _queue[0] = file;
+        BuildShuffle();
+        PlayAt(0);
+        return true;
     }
 
     public void NextFrame() => _mp.NextFrame();
@@ -1778,30 +1807,34 @@ public partial class MainWindow : Window
     /// <summary>Asks GitHub for a newer release. Silent on errors / no update unless the user asked.</summary>
     public async void CheckForUpdates(bool manual, Window? owner = null)
     {
-        if (_updating) return;
+        if (_updating) return; // set before the check: two calls during it gave two windows
+        _updating = true;
         owner ??= this;
         Updater.Release? r;
+        bool go, inPlace;
         try
         {
-            r = await Updater.CheckAsync();
-            Updater.MarkChecked();
+            try
+            {
+                r = await Updater.CheckAsync();
+                Updater.MarkChecked();
+            }
+            catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
+            {
+                if (manual) MessageBox.Show(owner, L.T("Couldn't check for updates. Check your internet connection."), "Pylon");
+                return;
+            }
+            if (r == null)
+            {
+                if (manual) MessageBox.Show(owner, L.F("You're up to date (version {0}).", Updater.Current.ToString(3)), "Pylon");
+                return;
+            }
+            var installed = Updater.IsInstalled;
+            inPlace = installed && r.SetupUrl != null;
+            // the download runs inside the dialog, with its progress bar
+            go = DialogWindow.UpdateAvailable(owner, r, installed, inPlace ? (p, c) => Updater.DownloadAndRunAsync(r, p, c) : null);
         }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
-        {
-            if (manual) MessageBox.Show(owner, L.T("Couldn't check for updates. Check your internet connection."), "Pylon");
-            return;
-        }
-        if (r == null)
-        {
-            if (manual) MessageBox.Show(owner, L.F("You're up to date (version {0}).", Updater.Current.ToString(3)), "Pylon");
-            return;
-        }
-        var installed = Updater.IsInstalled;
-        var inPlace = installed && r.SetupUrl != null;
-        _updating = true;
-        // the download runs inside the dialog, with its progress bar
-        var go = DialogWindow.UpdateAvailable(owner, r, installed, inPlace ? (p, c) => Updater.DownloadAndRunAsync(r, p, c) : null);
-        _updating = false;
+        finally { _updating = false; }
         if (!go) return;
         if (!inPlace) { Updater.OpenPage(r); return; }
         SaveProgress();
@@ -2679,7 +2712,7 @@ public partial class MainWindow : Window
             if (DialogWindow.AskName(this, "Import from Spotify", "Playlist, album or track link", "Copy it in Spotify: Share → Copy link. Songs you have play from disk, the rest from YouTube.", "https://open.spotify.com/playlist/…") is { } link)
                 ImportSpotify(link);
         }),
-        Item("Lyrics for Spotify", "microphone-stage-duotone", null, () => new SpotifyLyricsWindow(this).Show()),
+        Item("Lyrics for Spotify", "microphone-stage-duotone", null, () => { if (OwnedWindows.OfType<SpotifyLyricsWindow>().FirstOrDefault() is { } open) open.Activate(); else new SpotifyLyricsWindow(this).Show(); }),
         _party != null ? Item("Leave Watch Party", "users-three-duotone", null, LeaveParty, check: true)
             : _hosting ? Sub("Watch Together", "users-three-duotone", PartyMenu())
             : Item("Watch Together…", "users-three-duotone", null, WatchTogether),
@@ -2945,16 +2978,61 @@ public partial class MainWindow : Window
         return SeriesFolder is { } dir && Library.Data.IntroEnds.TryGetValue(dir, out var end) ? (0, end) : null;
     }
 
-    /// <summary>The file after this one in its folder, in Explorer's order ("Episode 2" before "Episode 10").</summary>
-    string? NextInFolder()
+    bool _setupNoted;
+
+    /// <summary>
+    /// Once per run, with the first video: what draws it, into errors.log. For pictures gone pale or white on some systems
+    /// (stripped Windows builds): WPF's render tier and software mode, DWM composition (the layer over the video needs it),
+    /// the GPUs, the decoder settings, the video's codec and size.
+    /// </summary>
+    void NoteVideoSetup()
     {
-        if (CurrentPath is not { } p || p.Contains("://") || Path.GetDirectoryName(p) is not { } dir) return null;
+        if (_setupNoted) return;
+        _setupNoted = true;
+        var engine = _mp.OnOwnEngine ? "Pylon" : "libVLC";
+        var track = _mp.OnOwnEngine ? null : _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video);
+        var video = track is { } v ? $"{FourCC(v.Codec)} {v.Data.Video.Width}x{v.Data.Video.Height} sar {v.Data.Video.SarNum}:{v.Data.Video.SarDen}" : "?";
+        var wpf = $"tier {RenderCapability.Tier >> 16}, mode {RenderOptions.ProcessRenderMode}, dpi {VisualTreeHelper.GetDpi(this).PixelsPerDip:0.##}";
+        _ = Task.Run(() =>
+        {
+            string os, gpus;
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                os = $"{key?.GetValue("ProductName")} {key?.GetValue("EditionID")} {key?.GetValue("DisplayVersion")} build {Environment.OSVersion.Version.Build}.{key?.GetValue("UBR")}";
+            }
+            catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or IOException) { os = Environment.OSVersion.VersionString; }
+            try
+            {
+                using var factory = Vortice.DXGI.DXGI.CreateDXGIFactory1<Vortice.DXGI.IDXGIFactory1>();
+                var names = new List<string>();
+                for (uint i = 0; factory.EnumAdapters1(i, out var a).Success; i++) using (a) names.Add($"{a.Description1.Description} ({a.Description1.Flags})");
+                gpus = string.Join("; ", names);
+            }
+            catch (Exception e) { gpus = e.GetType().Name; }
+            var dwm = DwmIsCompositionEnabled(out var on) == 0 && on;
+            ErrorLog.Note("video setup", $"engine {engine}; video {video}; WPF {wpf}; DWM composition {dwm}; os {os}; GPUs {gpus}; "
+                + $"hw {Settings.Str("perf.hw")}, decoder {Settings.Str("perf.decoder")}");
+        });
+    }
+
+    static string FourCC(uint c) => new([.. BitConverter.GetBytes(c).Select(b => b is >= 32 and < 127 ? (char)b : '?')]);
+
+    [DllImport("dwmapi.dll")] static extern int DwmIsCompositionEnabled(out bool enabled);
+
+    string? NextInFolder() => InFolder(+1);
+
+    /// <summary>The file after (or before) this one in its folder, of its kind (video / audio), in Explorer's order ("Episode 2" before "Episode 10").</summary>
+    string? InFolder(int dir)
+    {
+        if (CurrentPath is not { } p || p.Contains("://") || Path.GetDirectoryName(p) is not { } folder) return null;
+        var kind = AudioExt.Contains(Path.GetExtension(p)) ? AudioExt : VideoExt;
         try
         {
-            var files = Directory.EnumerateFiles(dir).Where(f => VideoExt.Contains(Path.GetExtension(f))).ToList();
+            var files = Directory.EnumerateFiles(folder).Where(f => kind.Contains(Path.GetExtension(f))).ToList();
             files.Sort(StrCmpLogicalW);
-            var i = files.FindIndex(f => string.Equals(f, p, StringComparison.OrdinalIgnoreCase));
-            return i >= 0 && i + 1 < files.Count ? files[i + 1] : null;
+            var i = files.FindIndex(f => string.Equals(f, p, StringComparison.OrdinalIgnoreCase)) + dir;
+            return i >= 0 && i < files.Count && files[i] != p ? files[i] : null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
@@ -3327,6 +3405,10 @@ public partial class MainWindow : Window
             Placement = below ? (anchor.IsDescendantOf(Sidebar) ? PlacementMode.Right : PlacementMode.Bottom) : PlacementMode.Top,
             VerticalOffset = below ? 6 : -4,
         };
+        // it stays inside the window and scrolls (24 of its height is the shadow's margin)
+        var top = anchor.TranslatePoint(new Point(), this).Y;
+        var room = cm.Placement switch { PlacementMode.Top => top, PlacementMode.Bottom => ActualHeight - top - anchor.ActualHeight - 6, _ => ActualHeight - top } + 24 - 8;
+        cm.MaxHeight = Math.Max(240, room);
         foreach (var i in items) cm.Items.Add(i);
         cm.IsOpen = true;
     }

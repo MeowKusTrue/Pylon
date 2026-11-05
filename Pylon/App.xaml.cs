@@ -57,6 +57,13 @@ public static class ErrorLog
         AppDomain.CurrentDomain.UnhandledException += (_, e) => { if (e.ExceptionObject is Exception ex) Write(ex, "fatal"); }; // can't be stopped: at least it's written
     }
 
+    /// <summary>A note for diagnosing (no popup), in the same file.</summary>
+    public static void Note(string where, string text)
+    {
+        try { System.IO.File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{where}] Pylon {Updater.Current.ToString(3)}{Environment.NewLine}{text}{Environment.NewLine}{Environment.NewLine}"); }
+        catch (Exception io) when (io is System.IO.IOException or UnauthorizedAccessException) { }
+    }
+
     public static void Write(Exception e, string where)
     {
         var key = e.GetType().FullName + e.StackTrace?.Split('\n').FirstOrDefault();

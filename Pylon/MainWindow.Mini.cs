@@ -86,11 +86,18 @@ public partial class MainWindow
             return;
         }
         if (!(_mini || _minimal) || _fullscreen || e.ChangedButton != MouseButton.Left) return;
-        if (e.OriginalSource is DependencyObject d && FindAncestor<ButtonBase>(d) != null) return;
-        if (e.OriginalSource is DependencyObject d2 && FindAncestor<SeekBar>(d2) != null) return;
+        if (e.OriginalSource is DependencyObject d && (Clickable(d) || FindAncestor<SeekBar>(d) != null)) return;
         if (e.ClickCount == 2 && _mini) { ToggleMiniplayer(); e.Handled = true; return; }
         try { DragMove(); } catch (InvalidOperationException) { }
         e.Handled = true;
+    }
+
+    /// <summary>A button, a box or anything with the hand cursor (tiles, lyrics lines): DragMove there would take the mouse and the click would never come.</summary>
+    public static bool Clickable(DependencyObject? d)
+    {
+        for (; d != null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is TextBoxBase or ButtonBase || d is FrameworkElement { Cursor: { } c } && c == Cursors.Hand) return true;
+        return false;
     }
 
     static T? FindAncestor<T>(DependencyObject d) where T : DependencyObject

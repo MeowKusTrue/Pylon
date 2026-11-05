@@ -366,6 +366,28 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
         && VideoEngine.PickColorSpace(bt2020, tv, pq, 3840, 2160) == Vortice.DXGI.ColorSpaceType.YcbcrStudioG2084LeftP2020);
 }
 
+// ── offline songs carry their names and cover in the file (m4a / webm too when PYLON_FFMPEG can make them)
+{
+    var dir = Directory.CreateTempSubdirectory("pylon-tags").FullName;
+    var cover = Path.Combine(dir, "c.jpg");
+    File.WriteAllBytes(cover, [0xFF, 0xD8, 0xFF, 0xE0, 0, 16, .. "JFIF"u8, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0xFF, 0xD9]);
+    List<string> files = [Path.Combine(dir, "a.wav")];
+    WriteTone(files[0], 1);
+    if (Environment.GetEnvironmentVariable("PYLON_FFMPEG") is { } ff)
+        foreach (var (ext, codec) in new[] { ("m4a", "aac"), ("webm", "libopus") })
+        {
+            var f = Path.Combine(dir, "a." + ext);
+            System.Diagnostics.Process.Start(ff, ["-v", "error", "-y", "-i", files[0], "-c:a", codec, f])!.WaitForExit();
+            files.Add(f);
+        }
+    foreach (var f in files)
+    {
+        await MainWindow.WriteTags(f, "Песня", "Артист", "Альбом", cover);
+        using var t = TagLib.File.Create(f);
+        Check($"offline tags in .{Path.GetExtension(f)[1..]}", t.Tag.Title == "Песня" && t.Tag.FirstPerformer == "Артист" && (t.Tag.Album == "Альбом" || f.EndsWith(".webm")) && t.Tag.Pictures.Length == 1, $"{t.Tag.Title}|{t.Tag.FirstPerformer}|{t.Tag.Album}|{t.Tag.Pictures.Length}");
+    }
+}
+
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 

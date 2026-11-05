@@ -13,7 +13,7 @@ namespace Pylon;
 public static class Covers
 {
     static readonly string Dir = Path.Combine(Library.Dir, "covers");
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10), DefaultRequestHeaders = { { "User-Agent", "Pylon (https://github.com/MeowKusTrue/Pylon)" } } };
+    internal static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10), DefaultRequestHeaders = { { "User-Agent", "Pylon (https://github.com/MeowKusTrue/Pylon)" } } };
 
     /// <summary>A local image file, or null.</summary>
     public static async Task<string?> FindAsync(string? artist, string title, string? album)

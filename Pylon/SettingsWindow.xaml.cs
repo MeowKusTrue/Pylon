@@ -16,8 +16,7 @@ public partial class SettingsWindow : Window
         if (Motion.ByPointer) Loaded += (_, _) => Motion.Pop((UIElement)Content);
         Owner = owner;
         var work = SystemParameters.WorkArea;
-        if (Height > work.Height - 20) Height = work.Height - 20;
-        _current = Settings.Categories.FirstOrDefault(c => c.Name == category) ?? Settings.Categories[0];
+        if (Height > work.Height - 20) Height = work.Height - 20;        _current = Settings.Categories.FirstOrDefault(c => c.Name == category) ?? Settings.Categories[0];
         BuildNav();
         Render();
         // the theme and accent can change from this very window
@@ -111,6 +110,6 @@ public partial class SettingsWindow : Window
     bool Match(string text) => text.Contains(SearchBox.Text.Trim(), StringComparison.OrdinalIgnoreCase) || L.T(text).Contains(SearchBox.Text.Trim(), StringComparison.OrdinalIgnoreCase);
 
     void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
-    void Drag(object sender, MouseButtonEventArgs e) { if (e.ButtonState == MouseButtonState.Pressed && e.OriginalSource is not TextBox) DragMove(); }
+    void Drag(object sender, MouseButtonEventArgs e) { if (e.ButtonState == MouseButtonState.Pressed && !MainWindow.Clickable(e.OriginalSource as DependencyObject)) DragMove(); }
     void Close_Click(object sender, RoutedEventArgs e) => Close();
 }
