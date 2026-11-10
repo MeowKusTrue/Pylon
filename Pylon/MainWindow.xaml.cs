@@ -87,6 +87,7 @@ public partial class MainWindow : Window
             ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
         }
         Settings.Load();
+        _volumeMaximum = ReadMaxVolume();
         if (Settings.Bool("playback.ownengine")) Task.Run(VideoEngine.Warm); // alongside the window, so the first file doesn't wait
         Library.Load();
         Dispatcher.BeginInvoke(ShellRegistration.MusicMenu, DispatcherPriority.ApplicationIdle);
@@ -581,20 +582,23 @@ public partial class MainWindow : Window
     }
 
     EventHandler<LogEventArgs>? _logHandler;
+    LibVLC? _loggedVlc;
+    readonly PlaybackDiagnostics _playbackDiagnostics = new();
+    PlaybackFailure? _lastPlaybackFailure;
+    string _lastFailedName = "";
 
     void HookLog()
     {
-        if (_logHandler != null) Vlc.Log -= _logHandler; // one handler at a time: an old one kept writing to a closed file
+        if (_logHandler != null && _loggedVlc != null) _loggedVlc.Log -= _logHandler;
         _logHandler = null;
         _log?.Dispose();
         _log = null;
-        if (!Settings.Bool("general.log")) return;
-        try
+        if (Settings.Bool("general.log")) try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Settings.Str("general.logfile"))!);
             _log = new StreamWriter(Settings.Str("general.logfile"), append: true) { AutoFlush = true };
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { }
         var min = Settings.Str("general.loglevel") switch
         {
             "Everything" => LogLevel.Debug,
@@ -605,11 +609,13 @@ public partial class MainWindow : Window
         var log = _log;
         _logHandler = (_, e) =>
         {
-            if (e.Level < min) return;
+            if (e.Level >= LogLevel.Warning) _playbackDiagnostics.Add(e.Module ?? "VLC", e.Message);
+            if (e.Level < min || log == null) return;
             var line = $"{DateTime.Now:HH:mm:ss.fff} [{e.Level}] {e.Module}: {e.Message}";
             try { lock (log) log.WriteLine(html ? $"<div>{System.Net.WebUtility.HtmlEncode(line)}</div>" : line); }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException) { } // disk full, or the log was just switched
         };
+        _loggedVlc = Vlc;
         Vlc.Log += _logHandler;
     }
 
@@ -997,6 +1003,8 @@ public partial class MainWindow : Window
 
     void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay, bool? audio = null)
     {
+        _errorAttempt++;
+        _playbackDiagnostics.Clear();
         var ext = isUrl ? "" : Path.GetExtension(src);
         _isAudio = audio ?? (AudioExt.Contains(ext) || (media.Tracks.Length > 0 && media.Tracks.All(t => t.TrackType != TrackType.Video)));
         _lyricsFor = null;
@@ -1198,6 +1206,7 @@ public partial class MainWindow : Window
         if (_mp.OnOwnEngine) StartOwnSubtitles();
         else if (_afterOwnEngine) ApplyVolume(); // the engine left the session's volume at 100 %
         _afterOwnEngine = _mp.OnOwnEngine;
+        ErrorLog.Note("audio level", FormattableString.Invariant($"engine={(_mp.OnOwnEngine ? "Pylon" : "libVLC")}; requested={VolumePercent}%; output={AudioChain.Output}; libVLC volume={_mp.Volume}; track gain={_trackGain:0.###}; muted={_mp.Mute}"));
         if (ShowEngine && !_isAudio) Osd(_mp.OnOwnEngine ? "Движок: Pylon" : "Движок: libVLC", 4);
     }
 
@@ -1226,7 +1235,10 @@ public partial class MainWindow : Window
 
     string? _retried;
 
-    void OnError()
+    long _errorAttempt;
+    long _reportedErrorAttempt = -1;
+
+    async void OnError()
     {
         // a web address YouTube turned down (a 403 now and then, or one that ran out while waiting): fetched again once
         // before giving up on the song
@@ -1237,10 +1249,24 @@ public partial class MainWindow : Window
             PlayAt(_index, startAt: Math.Max(0, _mp.Time));
             return;
         }
-        var name = CurrentPath is { } p ? Library.DisplayName(p) : "this media";
-        if (Settings.Bool("general.errors"))
-            MessageBox.Show(this, L.F("Pylon can't open {0}.\nThe file may be damaged or in a format that isn't supported.", name), L.T("Playback error"), MessageBoxButton.OK, MessageBoxImage.Warning);
-        else Osd(L.F("Can't open {0}", name));
+        if (CurrentPath is not { } failedPath) return;
+        var attempt = _errorAttempt;
+        if (_reportedErrorAttempt == attempt) return;
+        _reportedErrorAttempt = attempt;
+        var player = _mp;
+        var name = Library.DisplayName(failedPath);
+        var tracks = string.Join("; ", (_mp.Media?.Tracks ?? []).Select(t => $"{t.TrackType}: {FourCC(t.Codec)}"));
+        var messages = _playbackDiagnostics.Snapshot();
+        var failure = await Task.Run(() => PlaybackDiagnostics.Inspect(failedPath, messages));
+        if (!IsLoaded || Dispatcher.HasShutdownStarted || attempt != _errorAttempt || CurrentPath != failedPath || _mp != player) return;
+        failure = failure with { Details = $"Engine: {(_mp.OnOwnEngine ? "Pylon" : "libVLC")}\nTracks: {(tracks.Length > 0 ? tracks : "not identified")}\n" + failure.Details };
+        _lastPlaybackFailure = failure;
+        _lastFailedName = name;
+        ErrorLog.Note("playback error", L.T(failure.Reason) + "\n" + failure.Details);
+        if (!SnapMode && IsVisible && (_queue.Count == 1 || Settings.Bool("general.errors")))
+            DialogWindow.PlaybackError(_settings is { IsVisible: true } ? _settings : this, name, failure);
+        else Osd(L.F("Can't open {0}", name) + "\n" + L.T(failure.Reason), 8);
+        if (attempt != _errorAttempt || CurrentPath != failedPath || _mp != player) return;
         var next = NextIndex(+1);
         if (next >= 0 && next < _queue.Count) PlayAt(next);
     }
@@ -1566,7 +1592,9 @@ public partial class MainWindow : Window
         Osd(L.F("Speed {0}×", rate.ToString("0.##")));
     }
 
-    double MaxVolume => double.TryParse(Settings.Str("audio.maxvol").TrimEnd('%'), out var m) ? m : 125;
+    double _volumeMaximum = 125;
+    static double ReadMaxVolume() => double.TryParse(Settings.Str("audio.maxvol").TrimEnd('%'), out var m) && double.IsFinite(m) && m is >= 100 and <= 300 ? m : 125;
+    double MaxVolume => _volumeMaximum;
     double VolumeLevel => Volume.Value * MaxVolume / 100; // 1 = 100 %
     int VolumePercent => (int)Math.Round(Volume.Value * MaxVolume);
 
@@ -1575,6 +1603,14 @@ public partial class MainWindow : Window
         AudioChain.SetVolume(_mp, VolumeLevel);
         _mp.SetOwnVolume(VolumeLevel, _trackGain);
         UpdateVolumeIcon();
+    }
+
+    void UpdateVolumeMaximum()
+    {
+        var previous = _volumeMaximum;
+        _volumeMaximum = ReadMaxVolume();
+        Volume.Value = AudioChain.ResizeVolumeSlider(Volume.Value, previous, _volumeMaximum);
+        ApplyVolume();
     }
 
     void SetMute(bool mute)
@@ -1877,7 +1913,7 @@ public partial class MainWindow : Window
         if (_mp?.OnOwnEngine == true && CurrentPath is { } own && !OwnEngineFits(own)) PlayAt(_index, startAt: Math.Max(0, _mp.Time), autoplay: _mp.IsPlaying);
         switch (key)
         {
-            case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;
+            case "*": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); UpdateVolumeMaximum(); ApplyVideoSettings(); ApplyAudioSettings(); UpdateControlButtons(); break;
             case "general.language": AskRestart(); break;
             case "general.theme" or "general.accent": ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent")); break;
             case "ui.corners": ApplyCorners(); break;
@@ -1903,7 +1939,7 @@ public partial class MainWindow : Window
             case "playback.thumbs": OpenSeekPreview(); break;
             case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(edited: true); break;
             case "audio.eq": ApplyEqualizer(edited: true); break;
-            case "audio.maxvol": ApplyVolume(); break;
+            case "audio.maxvol": UpdateVolumeMaximum(); break;
             case "audio.device": ReloadEngine(); break; // a new player on the new device, resuming where it was
             case "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
             case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
@@ -2772,6 +2808,7 @@ public partial class MainWindow : Window
         Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("Report a Problem…", "info-duotone", null, () => BugReport.Open(this, CurrentPath, _mp, Vlc.Version)),
+        Item("Last playback error…", "info-duotone", null, () => { if (_lastPlaybackFailure is { } error) DialogWindow.PlaybackError(this, _lastFailedName, error); }, enabled: _lastPlaybackFailure != null),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
 

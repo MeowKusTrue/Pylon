@@ -187,8 +187,8 @@ public static class Settings
         if (Effects.TransformArg() is { } transform) { Add("--video-filter=transform"); Add($"--transform-type={transform}"); }
         Add($"--snapshot-format={Str("video.snapformat").ToLowerInvariant()}");
         if (Str("video.par") is { Length: > 0 } par && par != "1:1") Add($"--monitor-par={par}");
-        Add("--d3d11-upscale-mode=" + Str("video.upscale") switch { "Point" => "point", "Video processor" => "processor", "Super Resolution" => "super", _ => "linear" });
-        Add("--d3d11-hdr-mode=" + Str("video.hdr") switch { "Never" => "never", "Always" => "always", "Generate HDR from SDR" => "generate", _ => "auto" });
+        Add("--d3d11-upscale-mode=" + (Str("video.upscale") switch { "Point" => "point", "Video processor" => "processor", "Super Resolution" => "super", _ => "linear" }));
+        Add("--d3d11-hdr-mode=" + (Str("video.hdr") switch { "Never" => "never", "Always" => "always", "Generate HDR from SDR" => "generate", _ => "auto" }));
 
         // Audio
         if (!Bool("audio.enable")) Add("--no-audio");

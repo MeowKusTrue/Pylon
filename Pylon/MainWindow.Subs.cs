@@ -84,7 +84,7 @@ public partial class MainWindow
             }
             if (Motion.Asleep) return;
             var text = _mp.SubtitleAt(_mp.Time / 1000.0 - Settings.Num("subs.delay"));
-            MainSub.Margin = new Thickness(0, 0, 0, Video.ActualHeight * (0.04 + Settings.Str("subs.position") switch { "Higher" => 0.055, "Much higher" => 0.13, _ => 0 }));
+            MainSub.Margin = new Thickness(0, 0, 0, Video.ActualHeight * (0.04 + (Settings.Str("subs.position") switch { "Higher" => 0.055, "Much higher" => 0.13, _ => 0 })));
             MainSub.Show(text, Video.ActualHeight);
         }, Dispatcher);
         _ownSubTimer.Start();

@@ -129,6 +129,9 @@ public static class AudioChain
         return (whole, (float)(exact / whole));
     }
 
+    public static double ResizeVolumeSlider(double value, double previousMaximum, double maximum) =>
+        Math.Clamp(value * previousMaximum / maximum, 0, 1);
+
     static bool ApplyGain(MediaPlayer mp, float gain)
     {
         if (Setter() is not { } set || (_create ??= Export<VarCreate>("var_Create")) is not { } create

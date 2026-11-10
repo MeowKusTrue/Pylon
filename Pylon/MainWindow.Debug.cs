@@ -390,6 +390,10 @@ public partial class MainWindow
                     switch (cmd, arg)
                     {
                         case (_, "interface-diagnostics"): DialogWindow.InterfaceDiagnostics(this); break;
+                        case (_, "playback-error"):
+                            if (_lastPlaybackFailure is { } failure) DialogWindow.PlaybackError(this, _lastFailedName, failure);
+                            break;
+                        case (_, "filetypes"): DialogWindow.FileTypes(this); break;
                         case ("hotkeys", _): DialogWindow.EditHotkeys(this); break;
                         case ("onboarding", _): new OnboardingWindow(this, arg.Length > 0 ? int.Parse(arg) : 0).ShowDialog(); break;
                         case ("about", _): ShowAbout(); break;

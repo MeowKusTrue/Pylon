@@ -3,6 +3,30 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.3
+
+<!-- ru -->
+**Ошибки воспроизведения**
+- **Понятнее, почему файл не открывается.** Пустой или недоступный файл, веб-страница вместо музыки, известные ошибки сервера или декодера — Pylon показывает причину, если её удалось определить. Если точная причина неизвестна, он так и пишет.
+- **Технические подробности и копирование отчёта.** В окне ошибки доступны сведения о дорожках и кодеках и последние сообщения движка. Полный журнал включать не нужно. Вернуться к отчёту можно через меню → «Последняя ошибка воспроизведения…».
+
+**Исправления**
+- **Громкость не скачет при смене её максимума.** Например, переключение максимума со 125% на 300% больше не превращает выбранные 50% в 120%. Для разбора отдельных сообщений о громкости в журнал записывается выбранный уровень при начале воспроизведения.
+- **Ассоциации файлов.** Окно показывает, какое приложение открывает каждый формат; добавлен поиск. Выбор Pylon подтверждается в настройках Windows, прежний выбор приложения не удаляется. Исправлены обработка ошибки открытия настроек Windows и удержание старой карточки настроек в памяти.
+- **HDR и апскейл.** Исправлено формирование параметров, передаваемых движку: выбранные значения теперь доходят до него корректно.
+- **Положение субтитров собственного движка.** Варианты «Выше» и «Значительно выше» теперь учитываются.
+
+<!-- en -->
+**Playback errors**
+- **Clearer reasons when a file cannot be opened.** Empty or inaccessible files, a web page downloaded instead of music, and known server or decoder errors get an explanation when Pylon can identify the cause. If the exact cause is unknown, it says so.
+- **Technical details and a copyable report.** The error dialog includes track and codec information and recent engine messages without requiring the full log. Reopen the report from the menu → "Last playback error…".
+
+**Fixes**
+- **Changing the maximum volume keeps the selected level.** Switching the maximum from 125% to 300% no longer turns a selected 50% into 120%. The selected level is recorded when playback starts to help investigate separate volume reports.
+- **File associations.** The dialog shows which app opens each format and adds search. Choosing Pylon is confirmed in Windows settings, without deleting the previous app choice. Fixed handling of Windows settings launch failures and an event subscription retaining an old settings card.
+- **HDR and upscaling.** Fixed the command-line arguments so selected values reach the engine correctly.
+- **Own-engine subtitle positioning.** The "Higher" and "Much higher" options are now applied.
+
 ## 2.1.2
 
 <!-- ru -->

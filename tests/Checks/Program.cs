@@ -11,6 +11,32 @@ void Check(string name, bool ok, string detail = "")
     if (!ok) failed++;
 }
 
+Check("maximum volume change keeps the actual level", Math.Abs(AudioChain.ResizeVolumeSlider(0.4, 125, 300) * 300 - 50) < 0.001
+    && AudioChain.ResizeVolumeSlider(1, 300, 100) == 1);
+Settings.Set("video.upscale", "Point");
+Settings.Set("video.hdr", "Never");
+Check("video options keep their command-line prefixes", Settings.EngineArgs().Contains("--d3d11-upscale-mode=point")
+    && Settings.EngineArgs().Contains("--d3d11-hdr-mode=never") && Settings.EngineArgs().All(a => a.StartsWith("--")));
+Settings.Set("video.upscale", "Linear");
+Settings.Set("video.hdr", "Auto");
+{
+    var file = Path.Combine(Library.Dir, "broken.mp3");
+    Directory.CreateDirectory(Library.Dir);
+    File.WriteAllText(file, "");
+    Check("playback failure identifies an empty file", PlaybackDiagnostics.Inspect(file, []).Reason == "The file is empty.");
+    File.WriteAllText(file, "<!DOCTYPE html><html>download expired</html>");
+    Check("playback failure detects a web page named mp3", PlaybackDiagnostics.Inspect(file, []).Reason.Contains("web page"));
+    Check("playback failure identifies missing media", PlaybackDiagnostics.Inspect(file + ".missing", []).Reason.Contains("moved or deleted"));
+    Check("playback failure does not invent a missing codec", PlaybackDiagnostics.Classify([]).Contains("exact cause is unknown")
+        && PlaybackDiagnostics.Classify(["no suitable decoder module"]).Contains("decoder"));
+    var errors = new PlaybackDiagnostics();
+    for (var i = 0; i < 50; i++) errors.Add("input", "https://user:pass@example.com/a?token=secret#fragment " + i);
+    Check("playback error trail is bounded and hides credentials", errors.Snapshot().Length == 32 && !string.Join("\n", errors.Snapshot()).Contains("secret")
+        && !string.Join("\n", errors.Snapshot()).Contains("pass"));
+    errors.Clear();
+    Check("new media starts with a clean error trail", errors.Snapshot().Length == 0);
+}
+
 // Video zoom is relative to fit, including anamorphic pixels and explicit aspect overrides.
 Check("video zoom: bounds and fit crossing", VideoZoom.Step(25, -120) == 25 && VideoZoom.Step(400, 120) == 400
     && VideoZoom.Step(95, 120) == 100 && VideoZoom.Step(105, -120) == 100 && VideoZoom.Step(90, 120) == 100 && VideoZoom.Step(110, -120) == 100 && VideoZoom.Step(100, 0) == 100);

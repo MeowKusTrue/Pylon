@@ -17,18 +17,29 @@ public partial class DialogWindow
     /// </summary>
     public static void FileTypes(Window owner)
     {
-        var tiles = new WrapPanel { Margin = new Thickness(0, 4, 0, 8) };
-        foreach (var ext in MainWindow.VideoExt.Concat(MainWindow.AudioExt))
+        var tiles = new StackPanel { Margin = new Thickness(0, 4, 0, 8) };
+        var search = Input("Search file types", "");
+        void RefreshTypes()
         {
-            var tile = new StackPanel { Width = 64, Margin = new Thickness(0, 0, 6, 10) };
-            if (FileIcon(ext) is { } icon) tile.Children.Add(new Image { Source = icon, Width = 40, Height = 40 });
-            tile.Children.Add(new TextBlock { Text = ext.TrimStart('.').ToUpperInvariant(), FontSize = 11, Foreground = R("FgA3"), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 4, 0, 0) });
-            tiles.Children.Add(tile);
+            tiles.Children.Clear();
+            foreach (var ext in MainWindow.VideoExt.Order().Concat(MainWindow.AudioExt.Order()).Where(e => e.Contains(search.Text.Trim(), StringComparison.OrdinalIgnoreCase)))
+            {
+                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+                if (FileIcon(ext) is { } icon) row.Children.Add(new Image { Source = icon, Width = 24, Height = 24, Margin = new Thickness(0, 0, 10, 0) });
+                row.Children.Add(new TextBlock { Text = ext.ToUpperInvariant(), Width = 80, FontSize = 13, Foreground = R("FgA1"), VerticalAlignment = VerticalAlignment.Center });
+                var ours = ShellRegistration.OpensInPylon(ext);
+                row.Children.Add(new TextBlock { Text = ours ? "Pylon" : ShellRegistration.ApplicationForExtension(ext) ?? L.T("No default app"), FontSize = 13,
+                    Foreground = R(ours ? "Accent" : "FgA2"), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
+                tiles.Children.Add(row);
+            }
         }
+        search.TextChanged += (_, _) => RefreshTypes();
+        RefreshTypes();
         var icaros = new Button { Content = L.T("Install Icaros"), Style = (Style)Application.Current.FindResource("SecondaryButton"), HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 4, 0, 0) };
         var body = Stack(
             Section(L.T("Open your media with Pylon"),
-                L.F("Pylon registered {0} formats with their own icons. Windows lets only you pick the default player: the button opens Pylon's page in Windows settings, where \"Set default\" takes them all.", tiles.Children.Count)),
+                L.T("See which app opens each format. Open Windows settings to choose Pylon; existing defaults stay unchanged until you confirm them there.")),
+            search, Spacer(10),
             new ScrollViewer { Content = tiles, MaxHeight = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
             Spacer(8),
             Section(L.T("Previews in Explorer"),
@@ -38,7 +49,15 @@ public partial class DialogWindow
         icaros.Click += async (_, _) => { icaros.IsEnabled = false; await ShellRegistration.InstallIcarosAsync(dlg); icaros.IsEnabled = true; };
         dlg.CancelBtn.Content = L.T("Not now");
         dlg.SaveBtn.Content = L.T("Make Pylon the default…");
-        if (dlg.Run(() => true)) ShellRegistration.MakeDefault();
+        dlg.Activated += (_, _) => RefreshTypes();
+        dlg._work = () =>
+        {
+            var (ours, total, opened) = ShellRegistration.MakeDefault();
+            RefreshTypes();
+            if (!opened && ours < total) MessageBox.Show(dlg, L.T("Couldn't open Windows default apps. Open Settings → Apps → Default apps and select Pylon."), "Pylon");
+            return Task.CompletedTask;
+        };
+        dlg.Run(() => Updater.IsInstalled && Environment.GetEnvironmentVariable("PYLON_DATA") == null);
     }
 
     /// <summary>
@@ -51,9 +70,9 @@ public partial class DialogWindow
         var status = new TextBlock { FontSize = 13, Foreground = R("FgA2"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
         var note = new TextBlock { FontSize = 12, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0), Visibility = Visibility.Collapsed };
         var make = new Button { Content = L.T("Make Pylon the default"), Style = (Style)Application.Current.FindResource("PrimaryButton"), Height = 36, Padding = new Thickness(18, 0, 18, 0),
-            ToolTip = L.T("Every audio and video format Pylon plays will open in Pylon, replacing the app chosen for it now. You can change any of them back in Windows' default apps.") };
+            ToolTip = L.T("Opens Pylon's page in Windows default apps. Confirm the formats you want to change there.") };
         var types = new Button { Content = L.T("File types…"), Style = (Style)Application.Current.FindResource("SecondaryButton"), Height = 36, Margin = new Thickness(8, 0, 0, 0), Background = R("BgRaised") };
-        var installed = Updater.IsVelopackInstall;
+        var installed = Updater.IsInstalled && Environment.GetEnvironmentVariable("PYLON_DATA") == null;
         void Refresh()
         {
             var (ours, total) = ShellRegistration.DefaultStatus();
@@ -68,8 +87,9 @@ public partial class DialogWindow
             var (ours, total, opened) = ShellRegistration.MakeDefault();
             Refresh();
             note.Visibility = Visibility.Visible;
-            note.Text = opened ? L.F("{0} of {1} formats now open in Pylon. Windows protects the rest: pick Pylon for them in the window that opened.", ours, total)
-                : L.F("Done: all {0} formats open in Pylon.", total);
+            note.Text = opened ? L.T("Choose Pylon for the formats you want in Windows settings. The count updates when you return.")
+                : ours == total ? L.F("Done: all {0} formats open in Pylon.", total)
+                : L.T("Couldn't open Windows default apps. Open Settings → Apps → Default apps and select Pylon.");
         };
         types.Click += (_, _) => FileTypes(Window.GetWindow(types));
         var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children =
@@ -84,8 +104,9 @@ public partial class DialogWindow
         grid.Children.Add(buttons);
         var card = new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(10), Padding = new Thickness(18, 16, 18, 16), Child = grid };
         EventHandler back = (_, _) => Refresh();
-        card.Loaded += (_, _) => { Refresh(); if (Window.GetWindow(card) is { } w) w.Activated += back; };
-        card.Unloaded += (_, _) => { if (Window.GetWindow(card) is { } w) w.Activated -= back; };
+        Window? host = null;
+        card.Loaded += (_, _) => { Refresh(); if (host != null) host.Activated -= back; host = Window.GetWindow(card); if (host != null) host.Activated += back; };
+        card.Unloaded += (_, _) => { if (host != null) host.Activated -= back; host = null; };
         return card;
     }
 
@@ -106,8 +127,12 @@ public partial class DialogWindow
 public static partial class ShellRegistration
 {
     /// <summary>Pylon's page in Settings → Apps → Default apps (Windows 11 / recent Windows 10).</summary>
-    public static void OpenDefaultApps() =>
-        Process.Start(new ProcessStartInfo("ms-settings:defaultapps?registeredAppUser=Pylon") { UseShellExecute = true });
+    public static bool OpenDefaultApps()
+    {
+        try { Process.Start(new ProcessStartInfo("ms-settings:defaultapps?registeredAppUser=Pylon") { UseShellExecute = true }); return true; }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        { ErrorLog.Note("default apps", e.GetType().Name); return false; }
+    }
 
     /// <summary>
     /// Icaros (github.com/Xanashi/Icaros): after the user agrees, its latest installer is downloaded and started as it is;

@@ -222,6 +222,14 @@ public static partial class ShellRegistration
 
     static bool IsOurs(string? progId) => progId?.StartsWith("Pylon.", StringComparison.OrdinalIgnoreCase) == true;
 
+    public static bool OpensInPylon(string extension) => IsOurs(ProgIdOf(extension));
+    public static string? ApplicationForExtension(string extension)
+    {
+        var buffer = new System.Text.StringBuilder(512);
+        uint length = 512;
+        return AssocQueryString(0, 4 /*ASSOCSTR_FRIENDLYAPPNAME*/, extension, null, buffer, ref length) == 0 ? buffer.ToString() : null;
+    }
+
     static string? ProgIdOf(string ext)
     {
         var buf = new System.Text.StringBuilder(260);
@@ -234,31 +242,18 @@ public static partial class ShellRegistration
         [.. Extensions().Select(e => e.Ext).Where(ext => !IsOurs(progIdOf(ext)))];
 
     /// <summary>
-    /// The big button, done the way 7-Zip and K-Lite do it, because the user asked for it: for every format that doesn't
-    /// open in Pylon, the app chosen for it (UserChoice, and UserChoiceLatest on newer Windows 11; their hashes can't be
-    /// written, but the keys can be removed) is cleared, the extension's default in the user's own classes points at
-    /// Pylon, and Windows' "new app available" toast for it is marked as seen. Anything Windows still protects (it can
-    /// block some types) is left to its default-apps page, which then opens on Pylon. Returns how many formats open in
-    /// Pylon afterwards, and whether that page was opened.
+    /// Register the installed app and let Windows confirm defaults. Deleting UserChoice is not a supported way to
+    /// change them and can leave a type without a handler when Windows blocks the replacement.
     /// </summary>
     public static (int Ours, int Total, bool OpenedSettings) MakeDefault()
     {
-        Register(); // ProgIDs and icons up to date first
-        using var hkcu = Registry.CurrentUser;
-        foreach (var ext in NotOurs(ProgIdOf))
-        {
-            var fileExts = $@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}";
-            foreach (var choice in new[] { "UserChoice", "UserChoiceLatest" })
-                try { hkcu.DeleteSubKeyTree($@"{fileExts}\{choice}", throwOnMissingSubKey: false); }
-                catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException) { } // protected: settings page
-            using (var k = hkcu.CreateSubKey($@"{Classes}\{ext}")) k.SetValue("", "Pylon" + ext);
-            using (var toasts = hkcu.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\ApplicationAssociationToasts"))
-                toasts.SetValue($"Pylon{ext}_{ext}", 0, RegistryValueKind.DWord);
-        }
-        Notify();
+        if (!Updater.IsInstalled || Environment.GetEnvironmentVariable("PYLON_DATA") != null)
+        { var current = DefaultStatus(); return (current.Ours, current.Total, false); }
+        try { Register(); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException)
+        { ErrorLog.Note("file associations", e.GetType().Name); }
         var (ours, total) = DefaultStatus();
-        if (ours < total) OpenDefaultApps();
-        return (ours, total, ours < total);
+        return (ours, total, ours < total && OpenDefaultApps());
     }
 
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
