@@ -60,7 +60,9 @@ public static class Updater
             && Environment.ProcessPath?.StartsWith(dir, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>The latest release when it's newer than this build, otherwise null. Throws on network errors.</summary>
-    public static async Task<Release?> CheckAsync()
+    public static Task<Release?> CheckAsync() => Task.Run(CheckCoreAsync);
+
+    static async Task<Release?> CheckCoreAsync()
     {
         if (Velopack is { } velo)
         {
@@ -89,7 +91,23 @@ public static class Updater
     {
         if (!Settings.Bool("general.updates")) return false;
         return !DateTime.TryParse(Settings.Str("app.lastupdatecheck"), null, System.Globalization.DateTimeStyles.RoundtripKind, out var last)
-               || DateTime.UtcNow - last > TimeSpan.FromDays(1);
+               || last.ToUniversalTime() > DateTime.UtcNow
+               || DateTime.UtcNow - last.ToUniversalTime() > TimeSpan.FromDays(1);
+    }
+
+    /// <summary>Automatic offers wait their turn and never bring a hidden player to the foreground. Call on the UI thread.</summary>
+    public static async Task<bool> WaitForAutomaticOfferAsync(System.Windows.Window owner)
+    {
+        while (Settings.Bool("general.updates") && Settings.Bool("app.onboarded") && owner.IsLoaded
+               && owner.IsVisible && owner.WindowState != System.Windows.WindowState.Minimized
+               && !owner.Dispatcher.HasShutdownStarted)
+        {
+            // The video overlay is an owned window too; only visible application windows should delay an offer.
+            if (owner.IsEnabled && !owner.OwnedWindows.OfType<System.Windows.Window>().Any(w =>
+                    w.IsVisible && w.Title != "LibVLCSharp.WPF")) return true;
+            await Task.Delay(250);
+        }
+        return false;
     }
 
     public static void MarkChecked() => Settings.Set("app.lastupdatecheck", DateTime.UtcNow.ToString("o"));

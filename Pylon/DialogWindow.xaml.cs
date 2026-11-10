@@ -241,15 +241,32 @@ public partial class DialogWindow : Window
         {
             Text = string.IsNullOrWhiteSpace(r.Notes) ? L.T("No release notes.") : PlainNotes(LocalNotes(r.Notes)),
             IsReadOnly = true, TextWrapping = TextWrapping.Wrap, BorderThickness = new Thickness(0), Background = Brushes.Transparent,
-            Foreground = R("FgA2"), FontSize = 14, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 320,
+            Foreground = R("FgA2"), FontSize = 14, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 270,
+            Padding = new Thickness(0),
         };
+        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 20) };
+        var badge = new Border
+        {
+            Width = 56, Height = 56, CornerRadius = new CornerRadius(14), Background = R("BgB2"),
+            Margin = new Thickness(0, 0, 16, 0), VerticalAlignment = VerticalAlignment.Top,
+            Child = new Icon { Glyph = "arrow-circle-up-duotone", Tint = "@Accent", Width = 32, Height = 32 },
+        };
+        DockPanel.SetDock(badge, Dock.Left);
+        heading.Children.Add(badge);
+        heading.Children.Add(Stack(
+            new TextBlock { Text = L.F("Pylon {0} is available", r.Version.ToString(3)), FontSize = 23, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), TextWrapping = TextWrapping.Wrap },
+            new TextBlock { Text = L.F("You have version {0}.", Updater.Current.ToString(3)), FontSize = 13, Foreground = R("FgA3"), Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap }));
         var body = Stack(
-            Section(L.F("Pylon {0} is available", r.Version.ToString(3)), L.F("You have version {0}.", Updater.Current.ToString(3))),
-            new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(6), Padding = new Thickness(14, 10, 14, 10), Child = notes },
-            Spacer(10));
-        var dlg = new DialogWindow(owner, "Update available", body) { Width = 640 };
+            heading,
+            new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(10), Padding = new Thickness(18, 16, 18, 16), Child = Stack(
+                new TextBlock { Text = L.T("What's new"), FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = R("FgA0"), Margin = new Thickness(0, 0, 0, 10) }, notes) },
+            new TextBlock { Text = L.T(download != null ? "Pylon will restart after the update. Your settings will be kept." : "The release page will open in your browser."), FontSize = 12, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 14, 0, 8) });
+        var dlg = new DialogWindow(owner, "Update available", body) { Width = 660 };
         dlg.CancelBtn.Content = L.T("Later");
-        dlg.SaveBtn.Content = L.T(installed && r.SetupUrl != null ? "Update now" : "Download");
+        dlg.SaveBtn.Content = L.T(download != null ? "Update and restart" : installed && r.SetupUrl != null ? "Update now" : "Download");
+        dlg.SaveBtn.MinWidth = 168;
+        dlg.SaveBtn.Height = dlg.CancelBtn.Height = 40;
+        dlg.Loaded += (_, _) => dlg.SaveBtn.Focus();
         if (download != null)
         {
             // stages, sizes, speed and time left; while the new version is assembled from the downloaded changes (no
@@ -261,29 +278,38 @@ public partial class DialogWindow : Window
             bar.Children.Add(new Border { Background = R("BgB2"), CornerRadius = new CornerRadius(3) });
             bar.Children.Add(new Border { Background = R("Accent"), CornerRadius = new CornerRadius(3), RenderTransform = fill });
             bar.Children.Add(band);
-            var status = new TextBlock { FontSize = 13, Foreground = R("FgA1") };
-            var detail = new TextBlock { FontSize = 12, Foreground = R("FgA3"), Margin = new Thickness(0, 2, 0, 8) };
+            var status = new TextBlock { FontSize = 13, Foreground = R("FgA1"), TextWrapping = TextWrapping.Wrap };
+            var detail = new TextBlock { FontSize = 12, Foreground = R("FgA3"), Margin = new Thickness(0, 2, 0, 8), TextWrapping = TextWrapping.Wrap };
             var progress = new StackPanel { Visibility = Visibility.Collapsed, Children = { status, detail, bar } };
             body.Children.Add(progress);
             var cancel = new CancellationTokenSource();
-            dlg.Closed += (_, _) => cancel.Cancel(); // "Cancel" or the window's close button stop the download
+            var closed = false;
             var assembling = System.Diagnostics.Stopwatch.StartNew();
             var tick = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            dlg.Closed += (_, _) =>
+            {
+                closed = true;
+                cancel.Cancel();
+                tick.Stop();
+                run.BeginAnimation(TranslateTransform.XProperty, null);
+            };
             tick.Tick += (_, _) => detail.Text = L.F("{0} s · this can take up to a minute", (int)assembling.Elapsed.TotalSeconds);
             void Show(Updater.Progress p)
             {
+                if (closed) return;
                 if (p.Stage == Updater.Stage.Assembling)
                 {
                     if (band.Visibility == Visibility.Visible) return;
-                    status.Text = L.T("Assembling the new version from the downloaded changes…");
+                    status.Text = L.T("Preparing the update…");
                     fill.ScaleX = 0;
                     band.Visibility = Visibility.Visible;
-                    run.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-120, Math.Max(200, bar.ActualWidth), TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
+                    if (Motion.Enabled) run.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(-120, Math.Max(200, bar.ActualWidth), TimeSpan.FromSeconds(1.4)) { RepeatBehavior = RepeatBehavior.Forever });
                     assembling.Restart();
                     tick.Start();
                     return;
                 }
                 band.Visibility = Visibility.Collapsed;
+                run.BeginAnimation(TranslateTransform.XProperty, null);
                 tick.Stop();
                 if (p.Stage == Updater.Stage.Installing)
                 {
@@ -301,24 +327,31 @@ public partial class DialogWindow : Window
             }
             dlg._work = async () =>
             {
+                if (!dlg.SaveBtn.IsEnabled || closed) return;
                 dlg.SaveBtn.IsEnabled = false;
                 dlg.CancelBtn.Content = L.T("Cancel");
                 progress.Visibility = Visibility.Visible;
                 status.Text = L.T("Downloading the update…");
+                detail.Text = "";
+                fill.ScaleX = 0;
                 try
                 {
                     await download(new Progress<Updater.Progress>(Show), cancel.Token);
-                    dlg.DialogResult = true;
+                    if (!closed && !cancel.IsCancellationRequested) dlg.DialogResult = true;
                 }
-                catch (OperationCanceledException) { } // closed
+                catch (OperationCanceledException) when (closed) { }
                 catch (Exception e)
                 {
+                    if (closed) return;
                     tick.Stop();
                     band.Visibility = Visibility.Collapsed;
                     status.Text = L.T("The update couldn't be downloaded. Try again later.");
-                    detail.Text = e.Message;
+                    run.BeginAnimation(TranslateTransform.XProperty, null);
+                    detail.Text = "";
+                    ErrorLog.Note("update download", e.ToString());
                     dlg.SaveBtn.IsEnabled = true;
                     dlg.CancelBtn.Content = L.T("Later");
+                    dlg.SaveBtn.Focus();
                 }
             };
         }

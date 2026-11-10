@@ -24,6 +24,9 @@ public partial class App : Application
         Motion.HookPress();
         Motion.HookSwitches();
         Settings.Load();
+        InterfaceRendering.Apply();
+        Settings.Changed += key => { if (key is "perf.softwareui" or "*") InterfaceRendering.Apply(); };
+        InterfaceRendering.NoteStartup();
         L.Init();
         Perf.Mark("settings + strings");
         SessionEnding += (_, _) => (MainWindow as Pylon.MainWindow)?.Quit();
@@ -60,7 +63,14 @@ public static class ErrorLog
     /// <summary>A note for diagnosing (no popup), in the same file.</summary>
     public static void Note(string where, string text)
     {
-        try { System.IO.File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{where}] Pylon {Updater.Current.ToString(3)}{Environment.NewLine}{text}{Environment.NewLine}{Environment.NewLine}"); }
+        lock (Recent)
+        try
+        {
+            System.IO.Directory.CreateDirectory(Library.Dir);
+            var file = new System.IO.FileInfo(FilePath);
+            if (file.Exists && file.Length > 1 << 20) file.Delete();
+            System.IO.File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{where}] Pylon {Updater.Current.ToString(3)}{Environment.NewLine}{text}{Environment.NewLine}{Environment.NewLine}");
+        }
         catch (Exception io) when (io is System.IO.IOException or UnauthorizedAccessException) { }
     }
 
@@ -72,14 +82,7 @@ public static class ErrorLog
             if (Recent.TryGetValue(key, out var at) && DateTime.UtcNow - at < TimeSpan.FromSeconds(30)) return;
             Recent[key] = DateTime.UtcNow;
         }
-        try
-        {
-            System.IO.Directory.CreateDirectory(Library.Dir);
-            var file = new System.IO.FileInfo(FilePath);
-            if (file.Exists && file.Length > 1 << 20) file.Delete(); // a megabyte is plenty: start over
-            System.IO.File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{where}] Pylon {Updater.Current.ToString(3)}{Environment.NewLine}{e}{Environment.NewLine}{Environment.NewLine}");
-        }
-        catch (Exception io) when (io is System.IO.IOException or UnauthorizedAccessException) { }
+        Note(where, e.ToString());
         if (where != "fatal")
             Application.Current?.Dispatcher.BeginInvoke(() => Show?.Invoke(L.F("Something went wrong ({0}). Pylon kept going; details are in errors.log.", e.GetType().Name)));
     }

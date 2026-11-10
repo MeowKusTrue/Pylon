@@ -45,7 +45,7 @@ public static class Lyrics
         var key = Key(title, artist, album, duration);
         var cached = Path.Combine(CacheDir, key + ".lrc");
         var spicyCache = Path.Combine(CacheDir, key + ".spicy.json");
-        var spicyMiss = Path.Combine(CacheDir, key + ".spicy2.none"); // Spicy has nothing for it: don't ask again
+        var spicyMiss = Path.Combine(CacheDir, key + ".spicy4.none"); // Spicy has nothing for it: don't ask again
         // a cache cut short (killed mid-write) threw here, in an async void, and closed the player whenever the song came up:
         // now it's fetched again and overwritten below
         if (File.Exists(spicyCache))
@@ -54,11 +54,11 @@ public static class Lyrics
         // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
         // a miss is asked again after a week: Spicy and ListenBrainz keep growing
         var missed = File.Exists(spicyMiss) && DateTime.UtcNow - File.GetLastWriteTimeUtc(spicyMiss) < TimeSpan.FromDays(7);
-        if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !string.IsNullOrWhiteSpace(artist) && !missed)
+        if (SpicyLyrics.Enabled && Settings.Bool("lyrics.online") && !missed)
             try
             {
                 Directory.CreateDirectory(CacheDir);
-                if (await SpicyLyrics.FetchAsync(path, title, artist!, duration, tags) is { } json && SpicyLyrics.Parse(json) is { } doc)
+                if (await SpicyLyrics.FetchAsync(path, title, artist ?? "", duration, tags) is { } json && SpicyLyrics.Parse(json) is { } doc)
                 {
                     await File.WriteAllTextAsync(spicyCache, json);
                     return doc;
@@ -92,14 +92,19 @@ public static class Lyrics
         Directory.CreateDirectory(CacheDir);
         try
         {
-            if (SpicyLyrics.Enabled && await SpicyLyrics.FetchAsync("", queryTitle, queryArtist, duration, "") is { } json && SpicyLyrics.Parse(json) is { } spicy)
+            var spicyFailed = false;
+            try
             {
-                await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy.json"), json);
-                return spicy;
+                if (SpicyLyrics.Enabled && await SpicyLyrics.FetchAsync("", queryTitle, queryArtist, duration, "") is { } json && SpicyLyrics.Parse(json) is { } spicy)
+                {
+                    await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy.json"), json);
+                    return spicy;
+                }
             }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { spicyFailed = true; }
             if (await FromLrclib(queryTitle, queryArtist, null, duration) is not { } lrc) return null;
             File.Delete(Path.Combine(CacheDir, key + ".spicy.json")); // the old pick was wrong
-            await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy2.none"), "");
+            if (!spicyFailed) await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy4.none"), "");
             await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".lrc"), lrc);
             return Parse(lrc, "LRCLIB");
         }

@@ -11,6 +11,54 @@ void Check(string name, bool ok, string detail = "")
     if (!ok) failed++;
 }
 
+// Video zoom is relative to fit, including anamorphic pixels and explicit aspect overrides.
+Check("video zoom: bounds and fit crossing", VideoZoom.Step(25, -120) == 25 && VideoZoom.Step(400, 120) == 400
+    && VideoZoom.Step(95, 120) == 100 && VideoZoom.Step(105, -120) == 100 && VideoZoom.Step(90, 120) == 100 && VideoZoom.Step(110, -120) == 100 && VideoZoom.Step(100, 0) == 100);
+Check("video zoom: saved percentages", VideoZoom.Percent("110%") == 110 && VideoZoom.Percent("999%") == 400 && VideoZoom.Percent("Fit") == 100);
+Check("video zoom: landscape fit", Math.Abs(VideoZoom.Scale(1920, 1080, 1280, 720, 1, 0, 150) - 1) < 0.0001);
+Check("video zoom: resize and pillarbox", Math.Abs(VideoZoom.Scale(1920, 1080, 640, 720, 1, 0, 150) - 0.5) < 0.0001);
+Check("video zoom: SAR", Math.Abs(VideoZoom.Scale(720, 576, 1024, 576, 64.0 / 45, 0, 200) - 2) < 0.0001);
+Check("video zoom: aspect overrides SAR", Math.Abs(VideoZoom.Scale(720, 576, 768, 576, 64.0 / 45, 4.0 / 3, 200) - 2) < 0.0001);
+Check("video zoom: no layout yet", VideoZoom.Scale(1920, 1080, 0, 720, 1, 0, 110) == 0);
+// Diagnostics must exist even when no video has been opened, including on a new profile.
+ErrorLog.Note("startup check", "music-only startup");
+Check("diagnostic log without video", File.ReadAllText(Path.Combine(Library.Dir, "errors.log")).Contains("music-only startup"));
+Settings.Set("perf.softwareui", true);
+InterfaceRendering.Apply();
+Check("interface compatibility mode", System.Windows.Media.RenderOptions.ProcessRenderMode == System.Windows.Interop.RenderMode.SoftwareOnly);
+Settings.Set("perf.softwareui", false);
+InterfaceRendering.Apply();
+Check("interface rendering restored", System.Windows.Media.RenderOptions.ProcessRenderMode == System.Windows.Interop.RenderMode.Default);
+Settings.Set("general.updates", false);
+Check("automatic update checks respect opt-out", !Updater.DueForCheck());
+Settings.Set("general.updates", true);
+Settings.Set("app.lastupdatecheck", DateTime.UtcNow.AddDays(2).ToString("o"));
+Check("clock correction does not disable update checks", Updater.DueForCheck());
+Settings.Set("app.lastupdatecheck", DateTime.UtcNow.ToString("o"));
+Check("update checks are not repeated within a day", !Updater.DueForCheck());
+
+// An existing executable can be chosen explicitly; installation must then avoid the network.
+{
+    var configured = Path.Combine(Library.Dir, "chosen ffmpeg.exe");
+    var explicitExe = Path.Combine(Library.Dir, "override ffmpeg.exe");
+    File.WriteAllText(configured, "test executable path");
+    File.WriteAllText(explicitExe, "test override path");
+    var previous = Environment.GetEnvironmentVariable("PYLON_FFMPEG");
+    try
+    {
+        Environment.SetEnvironmentVariable("PYLON_FFMPEG", null);
+        Settings.Set("tools.ffmpeg", configured);
+        Check("ffmpeg: configured executable avoids download", Ffmpeg.Exe == configured && await Ffmpeg.InstallAsync(null));
+        Environment.SetEnvironmentVariable("PYLON_FFMPEG", explicitExe);
+        Check("ffmpeg: environment override wins", Ffmpeg.Exe == explicitExe);
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("PYLON_FFMPEG", previous);
+        Settings.Set("tools.ffmpeg", "");
+    }
+}
+
 // ── lyrics: translations from Apple TTML and bilingual LRC; duplicate LRC times must not end lines early
 var ttml = Lyrics.ParseTtml("""
     <tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" xmlns:ttm="http://www.w3.org/ns/ttml#metadata">
@@ -36,6 +84,10 @@ var bgSpicy = SpicyLyrics.Parse("""
     """)!;
 Check("Spicy background vocals", bgSpicy.Lines.Length == 2 && bgSpicy.Lines[0].Background.Length == 1
     && bgSpicy.Lines[1].Words.Length == 0 && bgSpicy.Lines[1].Background.Length == 2, $"{bgSpicy.Lines.Length} lines");
+Check("Spicy plain lyrics without timed Content", SpicyLyrics.Parse("""
+    {"Body":{"Type":"Static","Lines":[{"Text":"Hello"},{"Text":"World"}]}}
+    """) is { Synced: false, Lines.Length: 2 });
+Check("Spicy null response is not lyrics", SpicyLyrics.Parse("{\"Body\":null}") == null);
 var lrc = Lyrics.ParseLrc("[00:01.00]Hello\n[00:01.00]Привет\n[00:04.00]Next\n", "l")!;
 Check("LRC bilingual", lrc.Lines.Length == 2 && lrc.Lines[0].Translation == "Привет" && lrc.Lines[0].End == 4, $"{lrc.Lines[0].Start}-{lrc.Lines[0].End}");
 

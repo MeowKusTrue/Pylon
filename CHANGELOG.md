@@ -3,6 +3,38 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.2
+
+<!-- ru -->
+**Видео и интерфейс**
+- **Ctrl + колесо мыши — приближение видео.** Прокрутите вверх, чтобы приблизить, вниз — чтобы отдалить. Обычное колесо работает как раньше.
+- **Диагностика интерфейса.** Настройки → Производительность → «Диагностика интерфейса»: режим отрисовки, видеокарта и цветовой режим дисплеев, копирование отчёта и открытие журнала. Если видны чёрные прямоугольники или искажаются цвета, можно попробовать режим совместимости интерфейса.
+- **Журнал появляется и без видео.** Сведения об интерфейсе пишутся в errors.log при запуске, в том числе при музыке из другого приложения.
+
+**Тексты и распознавание музыки**
+- **Надёжнее поиск Spicy Lyrics:** варианты названия и составного исполнителя, перебор версий трека, поддержка обычных текстов без таймингов. Старые отрицательные результаты больше не мешают повторному поиску, а ошибки сервиса не сохраняются как «текст не найден». При сбое остаётся запасной поиск LRCLIB.
+- **Распознавание:** исправлены обработка отпечатка и тайм-ауты. Ошибка загрузки обложки больше не теряет уже найденную песню. Результат по-прежнему зависит от наличия записи в каталоге AcoustID.
+
+**Конвертация и обновления**
+- **Используется установленный ffmpeg.** Pylon ищет его в PATH и типовых папках; свой ffmpeg можно выбрать кнопкой в конвертере. Скачивание требуется, только если он не найден.
+- **Новые пресеты:** H.264 высокого качества, HEVC, VP9, AV1 и ProRes 422 HQ. Улучшен стандартный H.264, проверяется наличие нужных кодировщиков.
+- **Обновлённое предложение обновиться:** версия, список изменений и кнопка «Обновить и перезапустить». Автоматическая проверка при запуске не блокирует интерфейс, окно ждёт закрытия других диалогов.
+
+<!-- en -->
+**Video and interface**
+- **Ctrl + mouse wheel zooms video.** Scroll up to zoom in and down to zoom out. The ordinary wheel keeps its existing action.
+- **Interface diagnostics.** Settings → Performance → "Interface diagnostics" shows the rendering mode, graphics card and display color information, with buttons to copy the report and open the log. Try interface compatibility mode if you see black rectangles or incorrect colors.
+- **Diagnostics without video.** Startup information is written to errors.log even when playing music from another app.
+
+**Lyrics and music recognition**
+- **More reliable Spicy Lyrics search:** title and collaborator variations, alternate track versions and plain lyrics without timings. Old negative results no longer prevent a fresh search, and service failures are not cached as missing lyrics. LRCLIB remains available as a fallback.
+- **Recognition:** improved fingerprint handling and timeouts. An artwork download failure no longer discards a recognized song. Results still depend on AcoustID's catalog.
+
+**Conversion and updates**
+- **Uses an existing ffmpeg.** Pylon searches PATH and common installation folders; you can also choose your executable in the converter. A download is needed only when it isn't found.
+- **New presets:** high-quality H.264, HEVC, VP9, AV1 and ProRes 422 HQ. The standard H.264 preset is improved, and required encoders are checked.
+- **A refreshed update offer:** version, release notes and an "Update and restart" button. Automatic startup checks keep the interface responsive and wait for other dialogs to close.
+
 ## 2.1.1
 
 <!-- ru -->

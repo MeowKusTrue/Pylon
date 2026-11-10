@@ -1814,9 +1814,11 @@ public partial class MainWindow : Window
         bool go, inPlace;
         try
         {
+            if (!manual && !await Updater.WaitForAutomaticOfferAsync(owner)) return;
             try
             {
                 r = await Updater.CheckAsync();
+                if (!manual && !await Updater.WaitForAutomaticOfferAsync(owner)) return;
                 Updater.MarkChecked();
             }
             catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException)
@@ -1936,7 +1938,7 @@ public partial class MainWindow : Window
         if (t + b + l + r > 0 && w > l + r && h > t + b) _mp.CropGeometry = $"{w - l - r}x{h - t - b}+{l}+{t}";
         else _mp.CropGeometry = Settings.Str("video.crop") is var crop && crop != "None" ? crop : null;
 
-        _mp.Scale = Settings.Str("video.zoom") switch { "1:4" => 0.25f, "1:2" => 0.5f, "1:1" => 1f, "2:1" => 2f, _ => Settings.Bool("video.scale") ? 0f : 1f };
+        ApplyVideoZoom();
         var mode = Settings.Str("video.deintmode") switch { "Automatic" => "blend", "Yadif (2x)" => "yadif2x", var m => m.ToLowerInvariant() };
         switch (Settings.Str("video.deint"))
         {
@@ -2171,6 +2173,7 @@ public partial class MainWindow : Window
         if (!VideoBoxed || !_mp.Size(0, ref w, ref h) || w == 0 || h == 0 || Stage.ActualWidth <= 0 || Stage.ActualHeight <= 0)
         {
             Video.Width = Video.Height = double.NaN;
+            ApplyVideoZoom();
             return;
         }
         static double? Ratio(string s) => s.Split(':') is [var a, var b] && double.TryParse(a, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x)
@@ -2180,6 +2183,7 @@ public partial class MainWindow : Window
         double sw = Stage.ActualWidth, sh = Stage.ActualHeight;
         if (sw / sh > aspect) { Video.Height = sh; Video.Width = Math.Round(sh * aspect); }
         else { Video.Width = sw; Video.Height = Math.Round(sw / aspect); }
+        ApplyVideoZoom();
     }
 
     /// <summary>Behind the music: the blurred cover, the theme's stage color, or the cover's main color (toned toward it).</summary>
@@ -2199,7 +2203,7 @@ public partial class MainWindow : Window
         else MusicBg.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, "StageBg");
     }
 
-    void Video_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateCornerMask();
+    void Video_SizeChanged(object sender, SizeChangedEventArgs e) { UpdateCornerMask(); ApplyVideoZoom(); }
     void Stage_SizeChanged(object sender, SizeChangedEventArgs e) => FitVideo();
 
     /// <summary>A tiny snapshot of the current frame becomes the blurred backdrop (taken off the UI thread).</summary>
@@ -2501,8 +2505,7 @@ public partial class MainWindow : Window
 
     void Overlay_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (_is360) { _view.Zoom(-e.Delta / 120.0 * 6); return; } // wheel = field of view in 360° video
-        Wheel(e.Delta, horizontal: false);
+        HandleVideoWheel(e);
     }
 
     void Overlay_MouseUp(object sender, MouseButtonEventArgs e) => EndLook();
@@ -2560,8 +2563,53 @@ public partial class MainWindow : Window
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
-        if (!e.Handled && Stage.IsMouseOver) Wheel(e.Delta, horizontal: false);
+        if (!e.Handled && (Stage.IsMouseOver
+#if DEBUG
+            || _debugCtrlWheel
+#endif
+            )) HandleVideoWheel(e);
         base.OnMouseWheel(e);
+    }
+
+    void HandleVideoWheel(MouseWheelEventArgs e)
+    {
+        if (e.Handled) return;
+        e.Handled = true; // VideoView has a separate overlay window; never process the same routed event twice.
+        if (_is360) { _view.Zoom(-e.Delta / 120.0 * 6); return; }
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0
+#if DEBUG
+            || _debugCtrlWheel
+#endif
+            )
+        {
+            if (_index < 0 || _isAudio || e.Delta == 0) return;
+            var percent = VideoZoom.Step(VideoZoom.Percent(Settings.Str("video.zoom")), e.Delta);
+            if (percent == 100) Settings.Set("video.scale", true);
+            Settings.Set("video.zoom", percent == 100 ? "Fit" : $"{percent}%");
+            Osd(L.F("Zoom {0}%", percent));
+            return;
+        }
+        Wheel(e.Delta, horizontal: false);
+    }
+
+    void ApplyVideoZoom()
+    {
+        if (_mp == null || _index < 0 || _isAudio) return;
+        var zoom = Settings.Str("video.zoom");
+        if (!zoom.EndsWith('%'))
+        {
+            _mp.Scale = zoom switch { "1:4" => 0.25f, "1:2" => 0.5f, "1:1" => 1f, "2:1" => 2f, _ => Settings.Bool("video.scale") ? 0f : 1f };
+            return;
+        }
+        uint w = 0, h = 0;
+        if (!_mp.Size(0, ref w, ref h) || w == 0 || h == 0) return;
+        var sar = _mp.Media?.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video).Data.Video is { SarNum: > 0, SarDen: > 0 } v ? (double)v.SarNum / v.SarDen : 1;
+        double aspect = 0;
+        if (Settings.Str("video.aspect").Split(':') is [var a, var b]
+            && double.TryParse(a, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x)
+            && double.TryParse(b, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) && x > 0 && y > 0) aspect = x / y;
+        var dpi = VisualTreeHelper.GetDpi(Video);
+        _mp.Scale = VideoZoom.Scale(w, h, Video.ActualWidth * dpi.DpiScaleX, Video.ActualHeight * dpi.DpiScaleY, sar, aspect, VideoZoom.Percent(zoom));
     }
 
     void Wheel(int delta, bool horizontal)

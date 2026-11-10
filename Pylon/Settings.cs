@@ -753,6 +753,8 @@ public static class Settings
                 C("perf.loopfilter", "Skip the H.264 loop filter", "Never", ["Never", "Non-reference frames", "Bidirectional frames", "Non-key frames", "All frames"], "Faster on weak CPUs, slightly blurrier.", engine: true),
                 N("perf.threads", "Decoding threads", 0, 0, 64, "", engine: true)),
             Sec("Smooth Playback",
+                Act("Interface diagnostics", "Open", w => DialogWindow.InterfaceDiagnostics(w)),
+                T("perf.softwareui", "Interface compatibility mode", false, "Use if lyrics, buttons or backgrounds show black rectangles or incorrect colors. Draws the interface without GPU acceleration; video decoding is unchanged."),
                 T("perf.drop", "Drop frames when the system can't keep up", true, engine: true),
                 T("perf.realtime", "Give Pylon real-time priority", false, "Raises the process priority."),
                 C("perf.priority", "Process priority", "Normal", ["Below normal", "Normal", "Above normal", "High"]),

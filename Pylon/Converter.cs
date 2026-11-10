@@ -17,10 +17,15 @@ public static class Converter
         new("Opus (160 kbps)", ".opus", false, ["-vn", "-c:a", "libopus", "-b:a", "160k", "-ac", "2"]),
         new("WAV", ".wav", false, ["-vn", "-c:a", "pcm_s16le", "-ac", "2"]),
         // 8-bit 4:2:0 and even sizes: what phones and TVs play
-        new("MP4 (H.264 + AAC)", ".mp4", true, ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
+        new("MP4 (H.264 + AAC)", ".mp4", true, ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
         new("GIF (400 px)", ".gif", true, ["-an", "-vf", "fps=20,scale=400:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse", "-loop", "0"]),
         // every stream as it is; a cut starts at the keyframe before the start
         new("Copy streams (fast)", "", true, ["-map", "0", "-dn", "-ignore_unknown", "-c", "copy", "-avoid_negative_ts", "make_zero"]),
+        new("MP4 (H.264, high quality)", ".mp4", true, ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"]),
+        new("MP4 (H.265 / HEVC)", ".mp4", true, ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx265", "-preset", "medium", "-crf", "28", "-tag:v", "hvc1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]),
+        new("WebM (VP9 + Opus)", ".webm", true, ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-deadline", "good", "-cpu-used", "2", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", "160k"]),
+        new("WebM (AV1 + Opus, slow)", ".webm", true, ["-c:v", "libaom-av1", "-crf", "30", "-b:v", "0", "-cpu-used", "4", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", "160k"]),
+        new("MOV (ProRes 422 HQ)", ".mov", true, ["-vf", "scale=trunc(iw/2)*2:ih", "-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le", "-c:a", "pcm_s24le"]),
     ];
 
     /// <summary>The whole ffmpeg command line. A start or stop below 0 means none; seeking before -i is both fast and exact when encoding.</summary>

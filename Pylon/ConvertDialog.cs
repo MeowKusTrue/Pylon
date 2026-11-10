@@ -116,12 +116,21 @@ public partial class DialogWindow
         whereRow.Children.Add(where);
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+        var chooseFfmpeg = new Button { Content = L.T("Choose ffmpeg…"), Style = (Style)Application.Current.FindResource("SecondaryButton"), Margin = new Thickness(12, 0, 0, 0), ToolTip = Settings.Str("tools.ffmpeg") };
+        chooseFfmpeg.Click += (_, _) =>
+        {
+            var pick = new OpenFileDialog { Filter = "ffmpeg (ffmpeg.exe)|ffmpeg.exe", Title = L.T("Choose ffmpeg…") };
+            if (pick.ShowDialog(Window.GetWindow(chooseFfmpeg)) != true) return;
+            Settings.Set("tools.ffmpeg", pick.FileName);
+            chooseFfmpeg.ToolTip = pick.FileName;
+        };
         var add = new Button { Content = L.T("Add files"), Style = (Style)Application.Current.FindResource("SecondaryButton") };
         if (!clip) tools.Children.Add(add);
         // several files can become one (ffmpeg): copied as they are, or re-encoded to MP4
         var join = new CheckBox { Style = (Style)Application.Current.FindResource("ToggleSwitch"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(24, 0, 10, 0) };
         var joinLabel = new TextBlock { Text = L.T("Join into one file"), FontSize = 14, Foreground = R("FgA1"), VerticalAlignment = VerticalAlignment.Center };
         if (!clip) { tools.Children.Add(join); tools.Children.Add(joinLabel); }
+        tools.Children.Add(chooseFfmpeg);
 
         var body = Stack(
             Section(clip ? L.T("Save clip") : L.T("Convert"),
@@ -166,6 +175,7 @@ public partial class DialogWindow
             if (!await EnsureFfmpeg(dlg, items[0].State, items[0].Bar)) return;
             if (join.IsChecked == true && items.Count > 1)
             {
+                chooseFfmpeg.IsEnabled = false;
                 if (!await JoinFiles(dlg, items, preset, folder, outputs, cancel.Token)) return;
                 finished = true;
                 dlg.SaveBtn.IsEnabled = outputs.Count > 0;
@@ -174,7 +184,7 @@ public partial class DialogWindow
                 return;
             }
             var (cutFrom, cutTo) = Trimmed() ?? (-1, -1);
-            presets.IsEnabled = change.IsEnabled = add.IsEnabled = trim.IsEnabled = trimFields.IsEnabled = range.IsEnabled = false;
+            presets.IsEnabled = change.IsEnabled = add.IsEnabled = chooseFfmpeg.IsEnabled = trim.IsEnabled = trimFields.IsEnabled = range.IsEnabled = false;
             dlg.SaveBtn.IsEnabled = false;
             dlg.SaveBtn.Content = L.T("Converting…");
             foreach (var (path, bar, state) in items)
@@ -202,7 +212,7 @@ public partial class DialogWindow
     /// <summary>Asks and fetches ffmpeg the first time; false when it isn't there after that.</summary>
     static async Task<bool> EnsureFfmpeg(DialogWindow dlg, TextBlock status, ScaleTransform bar)
     {
-        if (Ffmpeg.Available) return true;
+        if (await Task.Run(() => Ffmpeg.Available)) return true;
         if (!OfferTool(dlg, "ffmpeg", "Convert with ffmpeg",
                 "Converting needs ffmpeg, a free open-source tool. Pylon can download it now (about 200 MB from github.com/BtbN/FFmpeg-Builds).")) return false;
         dlg.SaveBtn.IsEnabled = false;

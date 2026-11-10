@@ -14,27 +14,71 @@ namespace Pylon;
 /// </summary>
 public static class Ffmpeg
 {
-    /// <summary>PYLON_FFMPEG points at another ffmpeg (tests).</summary>
-    public static string Exe => Environment.GetEnvironmentVariable("PYLON_FFMPEG")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "ffmpeg.exe");
+    static string DownloadExe => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "ffmpeg.exe");
+
+    /// <summary>An explicit override wins; otherwise use an existing installation before downloading.</summary>
+    public static string Exe
+    {
+        get
+        {
+            if (Environment.GetEnvironmentVariable("PYLON_FFMPEG") is { Length: > 0 } explicitPath) return explicitPath;
+            if (Settings.Str("tools.ffmpeg") is { Length: > 0 } configured && File.Exists(configured)) return configured;
+            return Candidates().FirstOrDefault(File.Exists) ?? DownloadExe;
+        }
+    }
+
+    static IEnumerable<string> Candidates()
+    {
+        yield return DownloadExe;
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+        {
+            var path = Environment.ExpandEnvironmentVariables(dir.Trim().Trim('"'));
+            if (Path.IsPathFullyQualified(path)) yield return Path.Combine(path, "ffmpeg.exe");
+        }
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var root in new[] { Path.Combine(Path.GetPathRoot(Environment.SystemDirectory)!, "ffmpeg"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ffmpeg"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "ffmpeg"),
+            Path.Combine(local, "Programs", "ffmpeg"), Path.Combine(home, "scoop", "apps", "ffmpeg", "current"),
+            Path.Combine(Environment.GetEnvironmentVariable("ProgramData") ?? @"C:\ProgramData", "chocolatey", "bin") })
+        {
+            yield return Path.Combine(root, "ffmpeg.exe");
+            yield return Path.Combine(root, "bin", "ffmpeg.exe");
+        }
+        // WinGet's portable packages include a versioned directory, without always updating this process's PATH.
+        string[] packages;
+        try { packages = Directory.GetDirectories(Path.Combine(local, "Microsoft", "WinGet", "Packages"), "*FFmpeg*"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+        foreach (var package in packages)
+        {
+            yield return Path.Combine(package, "bin", "ffmpeg.exe");
+            string[] builds;
+            try { builds = Directory.GetDirectories(package, "ffmpeg*"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            foreach (var build in builds) yield return Path.Combine(build, "bin", "ffmpeg.exe");
+        }
+    }
 
     public static bool Available => File.Exists(Exe);
 
     /// <summary>Downloads the zip (about 200 MB) and keeps only ffmpeg.exe; false on failure.</summary>
     public static async Task<bool> InstallAsync(IProgress<double>? progress)
     {
-        var zip = Exe + ".zip";
+        if (Available) return true;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYLON_FFMPEG"))) return false;
+        var zip = DownloadExe + ".zip";
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(Exe)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(DownloadExe)!);
             using var http = NewHttp();
             await DownloadAsync(http, Builds + "ffmpeg-master-latest-win64-gpl.zip", zip, progress);
             using (var archive = ZipFile.OpenRead(zip))
             {
                 var entry = archive.Entries.First(e => e.FullName.EndsWith("/bin/ffmpeg.exe", StringComparison.OrdinalIgnoreCase));
-                entry.ExtractToFile(Exe, overwrite: true);
+                entry.ExtractToFile(DownloadExe, overwrite: true);
             }
-            return true;
+            return Available;
         }
         catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException or InvalidDataException or InvalidOperationException)
         {
@@ -135,6 +179,16 @@ public static class Ffmpeg
         Process? process = null;
         try
         {
+            cancel.ThrowIfCancellationRequested();
+            var required = psi.ArgumentList.Select((a, i) => (a, i))
+                .Where(x => x.a is "-c:v" or "-c:a" or "-c")
+                .Select(x => psi.ArgumentList[x.i + 1]).Where(a => a != "copy").Distinct().ToArray();
+            if (required.Length > 0)
+            {
+                var encoders = await EncodersAsync(psi.FileName, cancel);
+                var missing = required.Where(e => !encoders.Contains(e)).ToArray();
+                if (missing.Length > 0) return (false, "ffmpeg: missing encoders: " + string.Join(", ", missing));
+            }
             var p = process = Process.Start(psi)!;
             var errors = p.StandardError.ReadToEndAsync(cancel);
             // out_time_us is how far it got
@@ -161,6 +215,37 @@ public static class Ffmpeg
             return (false, e.Message);
         }
         finally { process?.Dispose(); } // after the catches: a "using" inside the try would leave Kill nothing to kill
+    }
+
+    static async Task<HashSet<string>> EncodersAsync(string exe, CancellationToken cancel)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var psi = new ProcessStartInfo(exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        psi.ArgumentList.Add("-hide_banner");
+        psi.ArgumentList.Add("-encoders");
+        using var process = Process.Start(psi)!;
+        try
+        {
+            var output = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var errors = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            var text = await output;
+            var error = await errors;
+            if (process.ExitCode != 0) throw new IOException("ffmpeg: " + error.Trim());
+            return text.Split('\n').Select(l => l.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                .Where(p => p.Length >= 2 && p[0].Length == 6 && "VAS".Contains(p[0][0]))
+                .Select(p => p[1]).ToHashSet(StringComparer.Ordinal);
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        {
+            throw new IOException("ffmpeg: encoder detection timed out.");
+        }
+        finally
+        {
+            try { if (!process.HasExited) { process.Kill(entireProcessTree: true); process.WaitForExit(2000); } }
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        }
     }
     static LibVLC? _vlc;
 

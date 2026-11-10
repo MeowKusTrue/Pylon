@@ -20,6 +20,7 @@ namespace Pylon;
 public partial class MainWindow
 {
 #if DEBUG
+    bool _debugCtrlWheel;
     /// <summary>
     /// Debug-only UI test hook: PYLON_SNAP=out.png renders the window to a PNG (no input injection, no focus needed) and exits.
     /// PYLON_SNAP_DO is a ';'-separated script: library:Videos | folder:&lt;dir&gt; | row:&lt;title&gt; | menu | ctx | search:&lt;text&gt; |
@@ -104,6 +105,22 @@ public partial class MainWindow
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"fps shown {(st.DisplayedPictures - st0.DisplayedPictures) / 10.0:0.0} decoded {(st.DecodedVideo - st0.DecodedVideo) / 10.0:0.0} lost {(st.LostPictures - st0.LostPictures) / 10.0:0.0}" + Environment.NewLine);
                         break;
                     }
+                case "ctrlwheel": // signed delta, optionally ",stage"; routes a WPF wheel event without global input injection.
+                    {
+                        var parts = arg.Split(',');
+                        var target = parts.Length > 1 && parts[1] == "stage" ? Stage : Overlay;
+                        var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, int.Parse(parts[0], System.Globalization.CultureInfo.InvariantCulture))
+                            { RoutedEvent = MouseWheelEvent, Source = target };
+                        _debugCtrlWheel = true;
+                        try { target.RaiseEvent(wheel); }
+                        finally { _debugCtrlWheel = false; }
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"ctrlwheel target={target.Name} delta={wheel.Delta} handled={wheel.Handled}{Environment.NewLine}");
+                        break;
+                    }
+                case "zoomstate":
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), FormattableString.Invariant(
+                        $"zoom={Settings.Str("video.zoom")} scale={_mp.Scale:0.######} fit={Settings.Bool("video.scale")} viewport={Video.ActualWidth:0.##}x{Video.ActualHeight:0.##} dpi={VisualTreeHelper.GetDpi(Video).DpiScaleX:0.##} own={_mp.OnOwnEngine} audio={_isAudio} is360={_is360} fov={_view.Fov:0.##} time={_mp.Time} playing={_mp.IsPlaying} volume={_mp.Volume}{Environment.NewLine}"));
+                    break;
                 case "lyricswheel": // a notch down on the lyrics: they scroll and the scrollbar shows
                     LyricsPane.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = MouseWheelEvent, Source = LyricsPane });
                     break;
@@ -372,6 +389,7 @@ public partial class MainWindow
                     });
                     switch (cmd, arg)
                     {
+                        case (_, "interface-diagnostics"): DialogWindow.InterfaceDiagnostics(this); break;
                         case ("hotkeys", _): DialogWindow.EditHotkeys(this); break;
                         case ("onboarding", _): new OnboardingWindow(this, arg.Length > 0 ? int.Parse(arg) : 0).ShowDialog(); break;
                         case ("about", _): ShowAbout(); break;
@@ -381,8 +399,11 @@ public partial class MainWindow
                         case (_, "clip"): DialogWindow.Convert(this, [CurrentPath!], 12_000, 27_500); break;
                         case (_, "subs"): DialogWindow.AddSubtitles(this, CurrentPath ?? "C:\\video.mp4"); break;
                         case (_, "update"):
-                            DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 1, 0), "v1.1.0",
-                                "## What's Changed\n* Russian interface\n* In-app updates from GitHub\n* Miniplayer fixes", "https://github.com/x", "https://github.com/x"), true);
+                            var next = new Version(Updater.Current.Major, Updater.Current.Minor, Updater.Current.Build + 1);
+                            DialogWindow.UpdateAvailable(this, new Updater.Release(next, $"v{next}",
+                                L.Ru ? "## Исправления\n* Более надёжный поиск текстов и распознавание музыки\n* Новые пресеты конвертации\n* Режим совместимости интерфейса"
+                                    : "## Fixes\n* More reliable lyrics search and music recognition\n* New conversion presets\n* Interface compatibility mode", "velopack", "https://github.com/MeowKusTrue/Pylon/releases"), true,
+                                (_, cancel) => Task.Delay(60_000, cancel));
                             break;
                         case (_, "update-dl" or "update-asm"): // the download stages, faked: sizes and speed, then assembling
                             DialogWindow.UpdateAvailable(this, new Updater.Release(new Version(1, 9, 4), "v1.9.4", "Fixes", "velopack", "https://github.com/x"), true,
