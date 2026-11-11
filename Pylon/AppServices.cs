@@ -9,7 +9,7 @@ public static class SingleInstance
 {
     // a copy on its own profile (PYLON_DATA: tests, a second profile) is a separate player with its own pipe: it never
     // hands its files to, or takes them from, the main one
-    static readonly string PipeName = "Pylon-" + Environment.UserName
+    static string PipeName => "Pylon-" + Environment.UserName
         + (Environment.GetEnvironmentVariable("PYLON_DATA") is { } data ? "-" + Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(data.ToLowerInvariant())))[..8] : "");
     static Mutex? _mutex;
 

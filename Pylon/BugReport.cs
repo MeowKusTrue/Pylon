@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
 using LibVLCSharp.Shared;
 using Microsoft.Win32;
 
@@ -19,41 +20,39 @@ public static class BugReport
     // settings that may hold secrets or identify the user: left out of the report
     static readonly Regex Secret = new("key|token|secret|pass|cookie|session|auth|user|email|account|proxy|clientid|code", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public static void Open(Window owner, string? playing, MediaPlayer mp, string vlcVersion)
+    public static async void Open(Window owner, string? playing, MediaPlayer mp, string vlcVersion)
     {
-        if (MessageBox.Show(owner, L.T("Pylon will put a report on your desktop (versions, graphics card, the codecs of what's playing, settings without keys or accounts, recent errors) and open GitHub with a filled-in form. Attach the report there. Nothing is sent without you."),
-                L.T("Report a Problem"), MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
-        var text = Build(playing, mp, vlcVersion);
-        var stamp = DateTime.Now.ToString("yyyyMMdd-HHmm");
-        var zip = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"Pylon-report-{stamp}.zip");
+        var text = Build(playing, mp, vlcVersion) + "\nInterface:\n" + await InterfaceRendering.ReportAsync(owner);
+        foreach (var log in new[] { Path.Combine(Library.Dir, "errors.log"), Settings.Bool("general.log") ? Settings.Str("general.logfile") : "" })
+            if (log.Length > 0)
+                try { text += "\n\n" + Path.GetFileName(log) + ":\n" + string.Join("\n", File.ReadLines(log).TakeLast(400)); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { text += "\nLog unavailable: " + e.GetType().Name; }
+        text = Sanitize(text);
+        if (!DialogWindow.ReportPreview(owner, text)) return;
+        var pick = new SaveFileDialog { FileName = $"Pylon-report-{DateTime.Now:yyyyMMdd-HHmmss}.zip", Filter = "ZIP|*.zip", DefaultExt = ".zip" };
+        if (pick.ShowDialog(owner) != true) return;
+        var zip = pick.FileName;
         try
         {
-            using (var z = ZipFile.Open(zip, ZipArchiveMode.Create))
+            using (var output = new FileStream(zip, FileMode.Create, FileAccess.Write))
+            using (var z = new ZipArchive(output, ZipArchiveMode.Create))
             {
                 using (var w = new StreamWriter(z.CreateEntry("report.txt").Open(), Encoding.UTF8)) w.Write(text);
-                foreach (var log in new[] { Path.Combine(Library.Dir, "errors.log"), Settings.Bool("general.log") ? Settings.Str("general.logfile") : "" })
-                    if (log.Length > 0 && File.Exists(log)) AddTail(z, log, 400);
             }
             Process.Start("explorer.exe", $"/select,\"{zip}\"");
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { zip = ""; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { MessageBox.Show(owner, e.Message, L.T("Report a Problem"), MessageBoxButton.OK, MessageBoxImage.Error); return; }
         var summary = string.Join("\n", text.Split('\n').TakeWhile(l => l.Length > 0)); // the first block: versions and system
         var body = $"**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n1. \n\n---\n{summary}\n\n" +
-                   (zip.Length > 0 ? $"_Drop {Path.GetFileName(zip)} from your desktop here._" : "");
+                   $"_Attach {Path.GetFileName(zip)} here._";
         var url = "https://github.com/MeowKusTrue/Pylon/issues/new?title=" + Uri.EscapeDataString("Problem: ") + "&body=" + Uri.EscapeDataString(body);
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     }
 
-    static void AddTail(ZipArchive z, string path, int lines)
-    {
-        try
-        {
-            var all = File.ReadAllLines(path);
-            using var w = new StreamWriter(z.CreateEntry(Path.GetFileName(path)).Open(), Encoding.UTF8);
-            foreach (var l in all.Skip(Math.Max(0, all.Length - lines))) w.WriteLine(Regex.Replace(l, @"[A-Za-z]:\[^""<>|\r\n]*", "<path>")); // no file names
-        }
-        catch (IOException) { }
-    }
+    public static string Sanitize(string text) => Regex.Replace(
+        Regex.Replace(PlaybackDiagnostics.Redact(text), @"(?i)\b(?:token|password|secret|authorization|cookie|api[_-]?key)\s*[:=]\s*[^\r\n]+", "<secret>"),
+        @"[A-Za-z]:\\[^""<>|\r\n]*|\\\\[^\s""<>|]+", "<path>");
 
     static string Build(string? playing, MediaPlayer mp, string vlcVersion)
     {
@@ -63,6 +62,7 @@ public static class BugReport
             sb.AppendLine($"Windows {nt?.GetValue("DisplayVersion")} build {Environment.OSVersion.Version.Build}.{nt?.GetValue("UBR")}, {Environment.ProcessorCount} threads, {Math.Round(GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1073741824.0)} GB RAM");
         sb.AppendLine("GPU: " + string.Join(", ", Gpus()));
         sb.AppendLine($"Language {L.Code}, theme {Settings.Str("general.theme")}, output {AudioChain.Output}");
+        sb.AppendLine($"Engine {(mp is Player p && p.OnOwnEngine ? "Pylon" : "libVLC")}, native volume {mp.Volume}, mute {mp.Mute}");
         sb.AppendLine();
         if (playing != null)
         {
@@ -93,5 +93,19 @@ public static class BugReport
             using var k = cls.OpenSubKey(n);
             if (k?.GetValue("DriverDesc") is string d) yield return $"{d} (driver {k.GetValue("DriverVersion")})";
         }
+    }
+}
+
+public partial class DialogWindow
+{
+    public static bool ReportPreview(Window owner, string text)
+    {
+        var preview = new TextBox { Text = text, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Height = 360,
+            Background = R("BgB2"), Foreground = R("FgA1"), Padding = new Thickness(12), BorderThickness = new Thickness(0) };
+        var dlg = new DialogWindow(owner, "Report a Problem", Stack(
+            Section("Report preview", "Review the report before saving. Nothing is sent automatically."), preview)) { Width = 740 };
+        dlg.SaveBtn.Content = L.T("Save report…");
+        return dlg.Run(() => true);
     }
 }

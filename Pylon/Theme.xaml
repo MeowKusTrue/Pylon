@@ -330,6 +330,22 @@
     </Style>
 
     <!-- Dropdown (mockup "Dropdown"): 36px, r6, caret on the right; list styled like the menus -->
+    <Style x:Key="ThinProgressBar" TargetType="ProgressBar">
+        <Setter Property="Height" Value="4"/>
+        <Setter Property="Background" Value="{DynamicResource BgB2}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid x:Name="PART_Track" ClipToBounds="True">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="2"/>
+                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="2" HorizontalAlignment="Left"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="Dropdown" TargetType="ComboBox">
         <Setter Property="Foreground" Value="{DynamicResource FgA0}"/>
         <Setter Property="FontSize" Value="14"/>

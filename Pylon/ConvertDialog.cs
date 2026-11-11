@@ -159,10 +159,13 @@ public partial class DialogWindow
             where.Text = folder;
         };
 
-        var cancel = new CancellationTokenSource();
+        BackgroundJob? runningJob = null;
+        var succeeded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stopWork = new Button { Content = L.T("Cancel task"), Style = (Style)Application.Current.FindResource("SecondaryButton"), Visibility = Visibility.Collapsed };
+        tools.Children.Add(stopWork);
+        stopWork.Click += (_, _) => runningJob?.Cancel();
         var outputs = new List<string>();
         var finished = false;
-        dlg.CancelBtn.Click += (_, _) => cancel.Cancel();
         dlg._work = async () =>
         {
             if (finished) // second press: "Show in folder"
@@ -173,40 +176,60 @@ public partial class DialogWindow
             }
             var preset = (ConvertPreset)((ComboBoxItem)presets.SelectedItem).Tag;
             if (!await EnsureFfmpeg(dlg, items[0].State, items[0].Bar)) return;
-            if (join.IsChecked == true && items.Count > 1)
+            stopWork.Visibility = Visibility.Visible;
+            stopWork.IsEnabled = true;
+            dlg.CancelBtn.Content = L.T("Run in background");
+            if (runningJob == null)
             {
-                chooseFfmpeg.IsEnabled = false;
-                if (!await JoinFiles(dlg, items, preset, folder, outputs, cancel.Token)) return;
-                finished = true;
-                dlg.SaveBtn.IsEnabled = outputs.Count > 0;
-                dlg.SaveBtn.Content = L.T("Show in folder");
-                dlg.CancelBtn.Content = L.T("Close");
-                return;
+                runningJob = BackgroundJobs.Start(L.T(join.IsChecked == true ? "Join into one file" : "Convert"), async (job, cancel) =>
+                {
+                    var failures = 0;
+                    if (join.IsChecked == true && items.Count > 1)
+                    {
+                        presets.IsEnabled = change.IsEnabled = add.IsEnabled = chooseFfmpeg.IsEnabled = join.IsEnabled = trim.IsEnabled = false;
+                        if (!await JoinFiles(dlg, items, preset, folder, outputs, job, cancel))
+                        { cancel.ThrowIfCancellationRequested(); throw new IOException(items[0].State.ToolTip?.ToString() ?? items[0].State.Text); }
+                        finished = true;
+                        dlg.SaveBtn.IsEnabled = outputs.Count > 0;
+                        dlg.SaveBtn.Content = L.T("Show in folder");
+                        dlg.CancelBtn.Content = L.T("Close");
+                        return outputs.FirstOrDefault();
+                    }
+                    var (cutFrom, cutTo) = Trimmed() ?? (-1, -1);
+                    presets.IsEnabled = change.IsEnabled = add.IsEnabled = chooseFfmpeg.IsEnabled = trim.IsEnabled = trimFields.IsEnabled = range.IsEnabled = false;
+                    dlg.SaveBtn.IsEnabled = false;
+                    dlg.SaveBtn.Content = L.T("Converting…");
+                    foreach (var (path, bar, state) in items)
+                    {
+                        cancel.ThrowIfCancellationRequested();
+                        if (succeeded.Contains(path)) continue;
+                        var dst = Converter.OutputPath(path, preset, folder, cutFrom >= 0 ? $" ({Time(cutFrom).Replace(':', '.')}-{Time(cutTo > 0 ? cutTo : length).Replace(':', '.')})" : "");
+                        state.Text = "…";
+                        var progress = new Progress<double>(p => { bar.ScaleX = p; job.Report((succeeded.Count + p) / items.Count, Path.GetFileName(path)); });
+                        var (ok, error) = await Converter.RunAsync(path, dst, preset, cutFrom, cutTo, progress, cancel);
+                        bar.ScaleX = ok ? 1 : 0;
+                        state.Text = ok ? "✓" : L.T(cancel.IsCancellationRequested ? "Cancelled" : error?.Contains("does not contain any stream") == true ? "No sound in this file" : "Failed");
+                        state.ToolTip = ok ? null : error;
+                        state.Foreground = ok ? R("Accent") : R("FgA3");
+                        if (ok) { outputs.Add(dst); succeeded.Add(path); job.Output = dst; }
+                        else { cancel.ThrowIfCancellationRequested(); failures++; }
+                    }
+                    if (failures > 0) throw new IOException(L.F("{0} files could not be converted. Retry to process the remaining files.", failures));
+                    finished = true;
+                    dlg.SaveBtn.IsEnabled = outputs.Count > 0;
+                    dlg.SaveBtn.Content = L.T("Show in folder");
+                    dlg.CancelBtn.Content = L.T("Close");
+                    return outputs.FirstOrDefault();
+                });
             }
-            var (cutFrom, cutTo) = Trimmed() ?? (-1, -1);
-            presets.IsEnabled = change.IsEnabled = add.IsEnabled = chooseFfmpeg.IsEnabled = trim.IsEnabled = trimFields.IsEnabled = range.IsEnabled = false;
-            dlg.SaveBtn.IsEnabled = false;
-            dlg.SaveBtn.Content = L.T("Converting…");
-            foreach (var (path, bar, state) in items)
-            {
-                if (cancel.IsCancellationRequested) break;
-                var dst = Converter.OutputPath(path, preset, folder, cutFrom >= 0 ? $" ({Time(cutFrom).Replace(':', '.')}-{Time(cutTo > 0 ? cutTo : length).Replace(':', '.')})" : "");
-                state.Text = "…";
-                var progress = new Progress<double>(p => bar.ScaleX = p);
-                var (ok, error) = await Converter.RunAsync(path, dst, preset, cutFrom, cutTo, progress, cancel.Token);
-                bar.ScaleX = ok ? 1 : 0;
-                state.Text = ok ? "✓" : L.T(cancel.IsCancellationRequested ? "Cancelled" : error?.Contains("does not contain any stream") == true ? "No sound in this file" : "Failed");
-                state.ToolTip = ok ? null : error;
-                state.Foreground = ok ? R("Accent") : R("FgA3");
-                if (ok) outputs.Add(dst);
-            }
-            finished = true;
-            dlg.SaveBtn.IsEnabled = outputs.Count > 0;
-            dlg.SaveBtn.Content = L.T("Show in folder");
+            else runningJob.Retry();
+            await runningJob.Completion;
+            stopWork.IsEnabled = false;
+            finished = runningJob.State == JobState.Completed;
             dlg.CancelBtn.Content = L.T("Close");
+            if (!finished) { dlg.SaveBtn.IsEnabled = true; dlg.SaveBtn.Content = L.T("Retry"); }
         };
         dlg.Run(() => items.Count > 0 && Trimmed() != null, fromBox, toBox);
-        cancel.Cancel(); // closing the window stops a running conversion
     }
 
     /// <summary>Asks and fetches ffmpeg the first time; false when it isn't there after that.</summary>
@@ -225,20 +248,20 @@ public partial class DialogWindow
 
     /// <summary>
     /// "Join into one file": ffmpeg (fetched on first use) concatenates in list order. "Copy streams" keeps them as they
-    /// are; any other format joins into an H.264 MP4.
+    /// are; other presets encode to the selected format.
     /// </summary>
     static async Task<bool> JoinFiles(DialogWindow dlg, List<(string Path, ScaleTransform Bar, TextBlock State)> items, ConvertPreset preset,
-        string? folder, List<string> outputs, CancellationToken cancel)
+        string? folder, List<string> outputs, BackgroundJob job, CancellationToken cancel)
     {
         var status = items[0].State;
         var copy = preset.Extension.Length == 0;
         var first = items[0].Path;
-        var dst = Converter.OutputPath(first, copy ? preset : preset with { Extension = ".mp4" }, folder, " " + L.T("(joined)"));
+        var dst = Converter.OutputPath(first, preset, folder, " " + L.T("(joined)"));
         dlg.SaveBtn.IsEnabled = false;
         dlg.SaveBtn.Content = L.T("Joining…");
         foreach (var i in items) i.State.Text = "…";
-        var (done, error) = await Ffmpeg.JoinAsync([.. items.Select(i => i.Path)], dst, copy,
-            new Progress<double>(p => { foreach (var i in items) i.Bar.ScaleX = p; }), cancel);
+        var (done, error) = await Ffmpeg.JoinAsync([.. items.Select(i => i.Path)], dst, preset,
+            new Progress<double>(p => { foreach (var i in items) i.Bar.ScaleX = p; job.Report(p); }), cancel);
         foreach (var i in items)
         {
             i.Bar.ScaleX = done ? 1 : 0;
@@ -246,12 +269,15 @@ public partial class DialogWindow
             i.State.Foreground = done ? R("Accent") : R("FgA3");
         }
         if (done) outputs.Add(dst);
-        else if (error != null && copy) status.Text = L.T("Failed: files differ, choose MP4"); // copying needs files of one kind
-        else if (error != null) status.ToolTip = error;
-        return true;
+        else if (error != null)
+        {
+            status.Text = L.T(copy ? "Joining failed. Stream copying requires matching codecs and track parameters. Convert the parts to the same format first." : "Joining failed. Check the input files and the selected preset.");
+            status.ToolTip = error;
+        }
+        return done;
     }
 
-    static string Time(long ms) => TimeSpan.FromMilliseconds(ms).ToString(ms >= 3_600_000 ? @"h\:mm\:ss" : @"m\:ss");
+    static string Time(long ms) => Converter.FormatTime(ms / 1000 * 1000);
 
     /// <summary>The trim range: two handles on a line, 0 to 1.</summary>
     sealed class RangeBar : FrameworkElement

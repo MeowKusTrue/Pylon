@@ -14,6 +14,8 @@ public static partial class ShellRegistration
 {
     const string Classes = @"Software\Classes";
     const string Capabilities = @"Software\Pylon\Capabilities";
+    public static bool CanWriteShell => Environment.GetEnvironmentVariable("PYLON_DATA") == null
+        && Environment.GetEnvironmentVariable("PYLON_VELOPACK_TEST") == null;
 
     /// <summary>Velopack's launcher next to "current\": its path doesn't change from one update to the next.</summary>
     static string Exe
@@ -28,6 +30,7 @@ public static partial class ShellRegistration
 
     public static void Register()
     {
+        if (!CanWriteShell) return;
         var exe = Exe;
         var icons = Path.Combine(AppContext.BaseDirectory, "FileIcons");
         var open = $"\"{exe}\" \"%1\"";
@@ -108,7 +111,7 @@ public static partial class ShellRegistration
     {
         var targets = Library.MusicTargets();
         var key = string.Join("|", targets);
-        if (key == _musicMenuFor || Environment.GetEnvironmentVariable("PYLON_DATA") != null) return;
+        if (key == _musicMenuFor || !CanWriteShell) return;
         _musicMenuFor = key;
         using var hkcu = Registry.CurrentUser;
         using (var caps = hkcu.OpenSubKey(Capabilities)) if (caps == null) return;
@@ -129,7 +132,7 @@ public static partial class ShellRegistration
     /// <summary>"Keep Pylon ready in the background": start with Windows, no window. Installed copies only.</summary>
     public static void Autostart(bool on)
     {
-        if (!Updater.IsInstalled) return;
+        if (!CanWriteShell || !Updater.IsInstalled) return;
         using var run = Registry.CurrentUser.CreateSubKey(RunKey);
         if (on) run.SetValue("Pylon", $"\"{Exe}\" --background");
         else run.DeleteValue("Pylon", throwOnMissingValue: false);
@@ -137,6 +140,7 @@ public static partial class ShellRegistration
 
     public static void Unregister()
     {
+        if (!CanWriteShell) return;
         using var hkcu = Registry.CurrentUser;
         using (var run = hkcu.OpenSubKey(RunKey, writable: true)) run?.DeleteValue("Pylon", throwOnMissingValue: false);
         foreach (var key in new[] { $@"{Classes}\Pylon.Video", $@"{Classes}\Pylon.Audio", $@"{Classes}\Applications\Pylon.exe", $@"{Classes}\Directory\shell\Pylon.Play", $@"{Classes}\Pylon.MusicMenu", $@"{Classes}\pylon", @"Software\Pylon" }
@@ -173,6 +177,7 @@ public static partial class ShellRegistration
     /// </summary>
     public static void RemoveInnoInstall()
     {
+        if (!CanWriteShell) return;
         using (var k = Registry.CurrentUser.OpenSubKey(InnoKey)) // per-user installs only: an all-users one would need admin rights
         {
             if (k?.GetValue("UninstallString") is not string uninstall) return;
@@ -247,7 +252,7 @@ public static partial class ShellRegistration
     /// </summary>
     public static (int Ours, int Total, bool OpenedSettings) MakeDefault()
     {
-        if (!Updater.IsInstalled || Environment.GetEnvironmentVariable("PYLON_DATA") != null)
+        if (!CanWriteShell || !Updater.IsInstalled)
         { var current = DefaultStatus(); return (current.Ours, current.Total, false); }
         try { Register(); }
         catch (Exception e) when (e is UnauthorizedAccessException or IOException or System.Security.SecurityException)

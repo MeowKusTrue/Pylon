@@ -11,11 +11,11 @@ namespace Pylon;
 /// <summary>Apple's spring, described the way UIKit/SwiftUI do: response (seconds, ≈ how fast) and damping ratio (1 = no overshoot).</summary>
 public readonly record struct Spring(double Response, double Damping)
 {
-    public static readonly Spring Smooth = new(0.38, 1.0);  // panels, pages: graceful, no bounce
-    public static readonly Spring Snappy = new(0.28, 1.0);  // menus, popovers, toasts
+    public static readonly Spring Smooth = new(0.28, 1.0);  // panels, pages: no bounce
+    public static readonly Spring Snappy = new(0.20, 1.0);  // menus, popovers, toasts
     public static readonly Spring Press = new(0.12, 1.0);   // finger-down feedback, near instant
-    public static readonly Spring Release = new(0.36, 0.62); // finger-up: a small, physical bounce back
-    public static readonly Spring Toggle = new(0.32, 0.78);  // switch knob
+    public static readonly Spring Release = new(0.24, 0.78); // finger-up: a small bounce back
+    public static readonly Spring Toggle = new(0.22, 1.0);  // switch knob
 }
 
 /// <summary>
@@ -26,7 +26,11 @@ public readonly record struct Spring(double Response, double Damping)
 /// </summary>
 public static class Motion
 {
-    public static bool Enabled => SystemParameters.ClientAreaAnimation;
+    public static bool Enabled =>
+#if DEBUG
+        DebugEnabled ??
+#endif
+        SystemParameters.ClientAreaAnimation;
 
     /// <summary>The main window is minimized or in the tray: per-frame work (lyrics, spectrum, seek bar, moving backgrounds) stops.</summary>
     public static bool Asleep { get; private set; }
@@ -43,7 +47,11 @@ public static class Motion
     public static bool Lite => Settings.Bool("ui.lite");
 
     /// <summary>The change came from the mouse (or pen/touch). Hotkey-driven changes don't animate.</summary>
-    public static bool ByPointer => InputManager.Current.MostRecentInputDevice is not KeyboardDevice;
+    public static bool ByPointer =>
+#if DEBUG
+        DebugPointer ??
+#endif
+        InputManager.Current.MostRecentInputDevice is not KeyboardDevice;
 
     // ───────── spring engine ─────────
 
@@ -71,6 +79,12 @@ public static class Motion
             return;
         }
         var key = (target, property);
+        if (!Drivers.ContainsKey(key) && (from ?? (double)target.GetValue(property)) == to)
+        {
+            target.SetValue(property, to);
+            done?.Invoke();
+            return;
+        }
         if (!Drivers.TryGetValue(key, out var d))
             Drivers[key] = d = new Driver { Target = target, Property = property, Value = (double)target.GetValue(property) };
         if (from is { } f)
@@ -101,6 +115,7 @@ public static class Motion
     static void Stop(DependencyObject target, DependencyProperty property) => Drivers.Remove((target, property));
 
 #if DEBUG
+    internal static bool? DebugEnabled, DebugPointer;
     /// <summary>Off-screen test windows get few Rendering frames: probes drive them by hand.</summary>
     internal static void DebugFrame() => Tick(null, EventArgs.Empty);
 
@@ -142,6 +157,34 @@ public static class Motion
     }
 
     // ───────── enter / exit ─────────
+
+    /// <summary>Lay out once, then bridge the old and new bounds with render transforms.</summary>
+    public static void Relayout(FrameworkElement[] elements, Action change, bool animate = true)
+    {
+        var before = new List<(FrameworkElement Element, Visual Parent, Rect Bounds)>();
+        if (Enabled && animate)
+            foreach (var el in elements)
+                if (el.IsVisible && el.RenderSize.Width > 0 && el.RenderSize.Height > 0 && VisualTreeHelper.GetParent(el) is Visual parent)
+                    before.Add((el, parent, el.TransformToVisual(parent).TransformBounds(new Rect(el.RenderSize))));
+        foreach (var el in elements) Reset(el);
+        change();
+        if (before.Count == 0) return;
+        (before[0].Parent as UIElement)?.UpdateLayout();
+        foreach (var (el, parent, old) in before)
+        {
+            var bounds = el.TransformToVisual(parent).TransformBounds(new Rect(el.RenderSize));
+            if (bounds.Width <= 0 || bounds.Height <= 0) continue;
+            el.RenderTransformOrigin = new Point(0, 0);
+            var (scale, move) = Transforms(el);
+            Animate(move, TranslateTransform.XProperty, 0, Spring.Snappy, old.X - bounds.X);
+            Animate(move, TranslateTransform.YProperty, 0, Spring.Snappy, old.Y - bounds.Y);
+            if (el is not TextBlock)
+            {
+                Animate(scale, ScaleTransform.ScaleXProperty, 1, Spring.Snappy, old.Width / bounds.Width);
+                Animate(scale, ScaleTransform.ScaleYProperty, 1, Spring.Snappy, old.Height / bounds.Height);
+            }
+        }
+    }
 
     sealed class State { public int Gen; public bool Leaving; }
     static readonly ConditionalWeakTable<UIElement, State> States = new();
@@ -235,11 +278,11 @@ public static class Motion
     public static void HookMenus()
     {
         EventManager.RegisterClassHandler(typeof(ContextMenu), ContextMenu.OpenedEvent, new RoutedEventHandler((s, _) =>
-            Pop((ContextMenu)s, dy: -6, scale: 0.95, origin: new Point(0, 0))));
+            { if (ByPointer) Pop((ContextMenu)s, dy: -6, scale: 0.95, origin: new Point(0, 0)); else Reset((ContextMenu)s); }));
         EventManager.RegisterClassHandler(typeof(MenuItem), MenuItem.SubmenuOpenedEvent, new RoutedEventHandler((s, e) =>
         {
             if (e.OriginalSource != s || s is not MenuItem mi || mi.Template?.FindName("PART_Popup", mi) is not Popup { Child: UIElement child }) return;
-            Pop(child, dx: -6, scale: 0.97, origin: new Point(0, 0));
+            if (ByPointer) Pop(child, dx: -6, scale: 0.97, origin: new Point(0, 0)); else Reset(child);
         }));
     }
 

@@ -89,9 +89,15 @@ public partial class MainWindow
     public async void DownloadPlaylist(Playlist p)
     {
         if (!YtDlp.Available && (_ytDlpDeclined || !await OfferYtDlp())) return;
+        if (_downloading.Contains(p)) return;
+        BackgroundJobs.Start(L.F("Download: {0}", p.Name), (job, cancel) => DownloadPlaylistCore(p, job, cancel));
+    }
+
+    async Task<string?> DownloadPlaylistCore(Playlist p, BackgroundJob job, CancellationToken cancel)
+    {
         p.Offline = true;
         Library.Touch();
-        if (!_downloading.Add(p)) return;
+        if (!_downloading.Add(p)) throw new InvalidOperationException("This playlist is already downloading.");
         static string Safe(string s) => string.Concat(s.Split(Path.GetInvalidFileNameChars())).Trim().TrimEnd('.') is { Length: > 0 } x ? x[..Math.Min(x.Length, 120)] : "_";
         var dir = Path.Combine(Settings.Str("library.offline"), Safe(p.Name));
         var todo = p.Items.Where(i => i.Contains("://")).Distinct().ToList();
@@ -101,11 +107,16 @@ public partial class MainWindow
             Directory.CreateDirectory(dir);
             foreach (var item in todo)
             {
-                if (!p.Offline || !Library.Data.Playlists.Contains(p)) break; // stopped, or the list was deleted
+                cancel.ThrowIfCancellationRequested();
+                if (!p.Offline || !Library.Data.Playlists.Contains(p)) throw new OperationCanceledException();
+                job.Report((saved + missed) / (double)Math.Max(1, todo.Count), Library.TitleOf(item));
                 Osd(L.F("Saving “{0}” for offline: {1} of {2}", p.Name, saved + missed + 1, todo.Count), 4);
                 var meta = Library.Data.Meta.GetValueOrDefault(item);
                 var name = Safe(meta is { Title: { } t } ? meta.Artist is { } a ? $"{a} - {t}" : t : Library.TitleOf(item));
-                if (await YtDlp.DownloadAudioAsync(await YtDlp.PageOf(item), Path.Combine(dir, name)) is not { } file) { missed++; continue; }
+                var page = await YtDlp.PageOf(item);
+                var stem = YtDlp.OfflineStem(name, page);
+                if (await YtDlp.DownloadAudioAsync(page, Path.Combine(dir, stem), cancel) is not { } file)
+                { cancel.ThrowIfCancellationRequested(); missed++; continue; }
                 // the file carries the song's names and cover; its stamp tells the music indexer it's read already
                 await WriteTags(file, meta?.Title ?? name, meta?.Artist, meta?.Album, meta?.Art);
                 Library.Data.Meta[file] = new TrackMeta
@@ -120,9 +131,13 @@ public partial class MainWindow
                 Library.Touch();
             }
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Osd(e.Message, 5); }
+        catch (OperationCanceledException) { p.Offline = false; Library.Touch(); throw; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Osd(e.Message, 5); throw; }
         finally { _downloading.Remove(p); }
         Osd(missed == 0 ? L.F("“{0}” is saved for offline: {1} songs", p.Name, saved) : L.F("“{0}”: {1} saved, {2} not found", p.Name, saved, missed), 5);
+        job.Output = dir;
+        if (missed > 0) throw new IOException(L.F("{0} tracks could not be downloaded. Retry to download the remaining tracks.", missed));
+        return dir;
     }
 
     /// <summary>Names and cover into the file itself, so other players and a copied folder keep them. Failure leaves the file as it is.</summary>

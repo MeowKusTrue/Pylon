@@ -193,6 +193,8 @@
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="PrevBtn" Style="{StaticResource IconButton}" Tag="skip-back-fill" Padding="3,2" Click="Prev_Click" ToolTip="{local:T 'Previous (P)'}"/>
                     <Button x:Name="StopBtn" Style="{StaticResource IconButton}" Tag="stop-fill" Padding="3,2" Margin="8,0,0,0" Click="Stop_Click" ToolTip="{local:T 'Stop (S)'}" Visibility="Collapsed"/>
+                    <Button x:Name="CancelOpeningBtn" Style="{StaticResource SecondaryButton}" Content="{local:T 'Cancel opening'}"
+                            Margin="8,0,0,0" Click="CancelOpening_Click" ToolTip="{local:T 'Cancel opening (Esc)'}" Visibility="Collapsed"/>
                     <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">

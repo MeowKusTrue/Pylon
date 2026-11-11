@@ -86,10 +86,8 @@ public partial class MainWindow : Window
             Left = -20000;
             ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
         }
-        Settings.Load();
         _volumeMaximum = ReadMaxVolume();
         if (Settings.Bool("playback.ownengine")) Task.Run(VideoEngine.Warm); // alongside the window, so the first file doesn't wait
-        Library.Load();
         Dispatcher.BeginInvoke(ShellRegistration.MusicMenu, DispatcherPriority.ApplicationIdle);
         Perf.Mark("settings + library loaded");
         ThemeManager.Apply(Settings.Str("general.theme"), Settings.Str("general.accent"));
@@ -170,6 +168,7 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             ApplyTray();
+            WatchAudioOutputs();
             if (!ShowInTaskbar && _tray != null) Hide();
             Perf.Mark("loaded");
             // VideoView creates its video HWND in OnApplyTemplate, which a Collapsed element never gets until first shown.
@@ -189,6 +188,7 @@ public partial class MainWindow : Window
             Perf.Mark("startup work done");
             var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
             if (args.Length > 0 && !Background) Open(args);
+            else RestoreQueueSession();
             if (Settings.Bool("ui.compact")) ToggleMiniplayer();
 #if DEBUG
             DebugSnapshot();
@@ -219,6 +219,7 @@ public partial class MainWindow : Window
         {
             if (!_mini && !_fullscreen) SaveBounds();
             SaveProgress();
+            SaveQueueSession();
             Settings.Set("app.volume", Math.Round(Volume.Value * MaxVolume));
             if (KeepInBackground)
             {
@@ -235,6 +236,8 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _tick.Stop();
+            _outputWatch?.Dispose();
+            BackgroundJobs.CancelAll();
             _duck.Stop();
             _tray?.Dispose();
             _remote?.Dispose();
@@ -284,6 +287,7 @@ public partial class MainWindow : Window
         var oldVlc = Vlc;
         var time = oldMp?.Time ?? 0;
         var playing = oldMp?.IsPlaying ?? false;
+        var muted = oldMp?.Mute ?? false;
 
         var pre = _prewarmed;
         _prewarmed = null;
@@ -300,6 +304,7 @@ public partial class MainWindow : Window
         HookLog();
         EndCrossfade();
         _mp = NewPlayer();
+        _mp.Mute = muted;
 
         if (oldMp != null)
         {
@@ -335,22 +340,41 @@ public partial class MainWindow : Window
         mp.TimeChanged += (_, e) => { if (mp == _mp) (_heardMs, _heardAt) = (e.Time, Stopwatch.GetTimestamp()); };
         mp.EncounteredError += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnError(); });
         mp.Playing += (_, _) => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
-        void VideoShown() => Dispatcher.BeginInvoke(async () => { if (mp != _mp) return; if (_mini) SizeMini(); else FitToVideo(); FitVideo(); OpenSeekPreview(); NoteVideoSetup(); await Task.Delay(400); if (AmbientOn) GrabAmbient(); });
+        void VideoShown(long? generation = null)
+        {
+            var request = _playRequest;
+            Dispatcher.BeginInvoke(async () =>
+            {
+                if (mp != _mp || request != _playRequest || generation is { } g && g != mp.OwnGeneration) return;
+                if (_mini) SizeMini(); else FitToVideo();
+                FitVideo(); OpenSeekPreview(); NoteVideoSetup();
+                await Task.Delay(400);
+                if (mp == _mp && request == _playRequest && AmbientOn) GrabAmbient();
+            });
+        }
         mp.Vout += (_, e) => { if (e.Count > 0) VideoShown(); };
-        mp.OwnEnded += () => Dispatcher.BeginInvoke(() => { if (mp == _mp) OnEnded(); });
-        mp.OwnPlaying += () =>
+        mp.OwnEnded += generation =>
         {
-            Dispatcher.BeginInvoke(() => { if (mp == _mp) OnPlaying(); });
-            VideoShown();
+            var request = _ownPlayRequest;
+            Dispatcher.BeginInvoke(() => { if (mp == _mp && generation == mp.OwnGeneration && request == _playRequest && _stoppedRequest != _playRequest) OnEnded(); });
         };
-        mp.OwnRefused += why => Dispatcher.BeginInvoke(() =>
+        mp.OwnPlaying += generation =>
         {
-            if (mp != _mp || !mp.OnOwnEngine) return;
-            Perf.Mark("own engine refused: " + why);
-            if (ShowEngine) Osd("Движок: libVLC (" + why + ")", 6);
-            _ownRefused = CurrentPath;
-            PlayAt(_index, startAt: Math.Max(0, mp.Time), autoplay: !mp.OwnPaused);
-        });
+            var request = _ownPlayRequest;
+            Dispatcher.BeginInvoke(() => { if (mp == _mp && generation == mp.OwnGeneration && request == _playRequest && _stoppedRequest != _playRequest) { OnPlaying(); VideoShown(generation); } });
+        };
+        mp.OwnRefused += (generation, why) =>
+        {
+            var request = _ownPlayRequest;
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (mp != _mp || generation != mp.OwnGeneration || request != _playRequest || _stoppedRequest == _playRequest || !mp.OnOwnEngine) return;
+                Perf.Mark("own engine refused: " + why);
+                Osd(L.F("Playing through libVLC: {0}", L.T(why)), 6);
+                _ownRefused = CurrentPath;
+                PlayAt(_index, startAt: Math.Max(0, mp.Time), autoplay: !mp.OwnPaused);
+            });
+        };
         return mp;
     }
 
@@ -736,6 +760,20 @@ public partial class MainWindow : Window
         return pos >= 0 && pos < _shuffle.Count ? _shuffle[pos] : -1;
     }
 
+    long _playRequest;
+    long _stoppedRequest = -1;
+    long _ownPlayRequest = -1;
+    bool _openingMedia;
+    Task _pendingStop = Task.CompletedTask;
+
+    void FinishOpening()
+    {
+        _openingMedia = false;
+        CancelOpeningBtn.Visibility = Visibility.Collapsed;
+    }
+
+    void CancelOpening_Click(object sender, RoutedEventArgs e) => Stop();
+
     async void PlayAt(int i, bool stopAtEnd = false, long startAt = -1, bool? autoplay = null)
     {
         if (i < 0 || i >= _queue.Count)
@@ -744,8 +782,22 @@ public partial class MainWindow : Window
             return;
         }
         if (!_fadeStarting) EndCrossfade();
+        var request = ++_playRequest;
+        _queueResume = -1;
+        _openingMedia = true;
+        CancelOpeningBtn.Visibility = Visibility.Visible;
+        Osd(L.T("Opening media… Cancel with Esc."), 30);
         _index = i;
         _switch = Stopwatch.StartNew();
+        await _pendingStop;
+        if (request != _playRequest) return;
+        if (!SnapMode && Settings.Bool("audio.enable") && Settings.Str("audio.device") != "System default"
+            && AudioChain.DeviceId(_mp, Settings.Str("audio.device")) == null)
+        {
+            RecoverAudioOutput(_mp.AudioOutputDeviceEnum.Select(d => AudioChain.DeviceName(d.Description)).Distinct().ToArray(),
+                Math.Max(0, startAt), autoplay ?? Settings.Bool("playback.autoplay"));
+            return;
+        }
         TopUpRadio(); // when the switch is made, not when the song sounds: skipping fast never got there
         // leaving a video: libVLC's stop joins its video output, up to half a second (longer when that video was itself still
         // starting), and inside Play() it froze the window on every quick switch. Stopped off the UI thread first, Play() is
@@ -754,12 +806,12 @@ public partial class MainWindow : Window
         {
             var player = _mp;
             await Task.Run(player.Stop);
-            if (_index != i || player != _mp) return; // another switch came meanwhile: it plays instead
+            if (request != _playRequest || _index != i || player != _mp) return; // another switch came meanwhile: it plays instead
         }
         var src = _queue[i];
         var isUrl = src.Contains("://");
-        if (isUrl && YtDlp.Handles(src) && await PlaySite(i, src, startAt, autoplay)) return;
-        if (_index != i || _queue.ElementAtOrDefault(i) != src) return; // moved on while yt-dlp was busy
+        if (isUrl && YtDlp.Handles(src) && await PlaySite(i, src, startAt, autoplay, request)) return;
+        if (request != _playRequest || _index != i || _queue.ElementAtOrDefault(i) != src) return; // moved on while yt-dlp was busy
         var media = isUrl ? new Media(Vlc, new Uri(src)) : new Media(Vlc, src, FromType.FromPath);
         try
         {
@@ -775,13 +827,13 @@ public partial class MainWindow : Window
                 await parsing;
                 _switchParsed = _switch?.ElapsedMilliseconds ?? 0;
                 _metaPending = false;
-                if (_index != i || CurrentPath != src) return;
+                if (request != _playRequest || _index != i || CurrentPath != src) return;
                 ApplyMeta(media, src, isUrl, parsed: true);
                 return;
             }
             await parsing;
             _switchParsed = _switch?.ElapsedMilliseconds ?? 0;
-            if (_index != i || _queue.ElementAtOrDefault(i) != src) return; // user moved on while we were parsing
+            if (request != _playRequest || _index != i || _queue.ElementAtOrDefault(i) != src) return; // user moved on while we were parsing
             StartMedia(media, src, isUrl, startAt, autoplay ?? Settings.Bool("playback.autoplay"));
         }
         finally { Library.DisposeLater(media); }
@@ -811,7 +863,7 @@ public partial class MainWindow : Window
     /// A web page (YouTube and the rest) through yt-dlp: a playlist or channel turns into its videos, a video into its
     /// stream addresses. True when it took care of the item (or the user moved on); false lets libVLC try the address.
     /// </summary>
-    async Task<bool> PlaySite(int i, string src, long startAt, bool? autoplay)
+    async Task<bool> PlaySite(int i, string src, long startAt, bool? autoplay, long request)
     {
         // a song from a Spotify import that isn't on disk: only yt-dlp can find it (libVLC can't open "ytsearch://")
         var search = src.StartsWith("ytsearch://");
@@ -819,7 +871,7 @@ public partial class MainWindow : Window
         Osd(search ? L.F("Looking for it on YouTube: {0}", Uri.UnescapeDataString(src["ytsearch://".Length..])) : L.T("Loading…"), 30);
         if (await YtDlp.ExpandAsync(src) is { Count: > 0 } items)
         {
-            if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
+            if (request != _playRequest || _index != i || _queue.ElementAtOrDefault(i) != src) return true;
             _queue.RemoveAt(i);
             _queue.InsertRange(i, items.Select(x => x.Url));
             foreach (var (url, title) in items) if (title.Length > 0 && Library.HistoryOf(url) == null) Library.Titles[url] = title;
@@ -829,11 +881,12 @@ public partial class MainWindow : Window
         }
         var q = Settings.Str("playback.quality");
         var s = await YtDlp.ResolveItemAsync(src, q == "Best available" ? 0 : int.Parse(q.TrimEnd('p')), audioOnly: !Settings.Bool("video.enable"));
-        if (_index != i || _queue.ElementAtOrDefault(i) != src) return true;
+        if (request != _playRequest || _index != i || _queue.ElementAtOrDefault(i) != src) return true;
         // a failed search stops here with the reason (YouTube blocked, "confirm you're not a bot"…) instead of handing
         // the address to libVLC, which failed too and went on to the next song: a chain of waits that looked like a hang
         if (s == null)
         {
+            FinishOpening();
             // an age check or "confirm you're not a bot": the first time, ask which browser's sign-in to use, then try again
             // asked again when the sign-in chosen earlier didn't work (out of date, or a profile that isn't signed in), but
             // not again and again for the same choice
@@ -852,7 +905,7 @@ public partial class MainWindow : Window
             if (search && ++_missedInRow < 3)
             {
                 await Task.Delay(1500);
-                if (_index == i && _queue.ElementAtOrDefault(i) == src) NextInQueue();
+                if (request == _playRequest && _index == i && _queue.ElementAtOrDefault(i) == src) NextInQueue();
             }
             return search;
         }
@@ -1077,10 +1130,11 @@ public partial class MainWindow : Window
         if (!isUrl && OwnEngineFits(src))
         {
             _mp.Media = media; // its tags and tracks still come from libVLC's parsing
-            _mp.SetOwnVolume(VolumeLevel, _trackGain);
+            ApplyVolume();
             var device = Settings.Str("audio.device");
             var added = Library.Data.Subtitles.GetValueOrDefault(src)?.Where(File.Exists).ToList() ?? [];
             var files = Settings.Bool("subs.autoload") ? SubText.Beside(src) : added; // Beside puts the ones added in Pylon first
+            _ownPlayRequest = _playRequest;
             _mp.PlayOwn(src, Math.Max(0, startAt), !autoplay, device == "System default" ? null : device.Split(" ($")[0],
                 new TrackChoice(Settings.Int("playback.audiotrack"), Settings.Lang("audio.lang"), Settings.Int("playback.subtrack"), Settings.Lang("subs.lang"), Settings.Bool("subs.enable")), files, added.Count);
         }
@@ -1128,10 +1182,10 @@ public partial class MainWindow : Window
     /// <summary>Whether this file can go on Pylon's own engine: nothing asked for that only libVLC has.</summary>
     bool OwnEngineFits(string src)
     {
-        if (!Settings.Bool("playback.ownengine") || _cast != null || _recording || _party != null || _hosting || _tail != null || _second != null || src == _ownRefused) return false;
+        if (!Settings.Bool("playback.ownengine") || !Player.SupportsOwnVolume(VolumeLevel, _trackGain) || _cast != null || _recording || _party != null || _hosting || _tail != null || _second != null || src == _ownRefused) return false;
         if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) return false; // tests stay silent unless they ask
         if (AudioChain.HasEffects || !Settings.Bool("video.enable") || !Settings.Bool("audio.enable")) return false;
-        string[] plain = ["video.aspect", "video.crop", "video.zoom", "video.scale", "audio.speakers", "audio.delay", "fxv.hue", "fxv.brightness", "fxv.contrast", "fxv.saturation", "fxv.gamma", "fxv.crop.t", "fxv.crop.b", "fxv.crop.l", "fxv.crop.r",
+        string[] plain = ["video.hdr", "video.upscale", "video.aspect", "video.crop", "video.zoom", "video.scale", "audio.speakers", "audio.delay", "fxv.hue", "fxv.brightness", "fxv.contrast", "fxv.saturation", "fxv.gamma", "fxv.crop.t", "fxv.crop.b", "fxv.crop.l", "fxv.crop.r",
             "subs.encoding", "subs.matching", "subs.folders", "subs.direction"];
         if (plain.Any(key => Settings.Str(key) != Settings.Find(key)?.Default) || Settings.Str("video.deint") == "On") return false;
         if (Library.Data.Subtitles.GetValueOrDefault(src)?.Any(f => !TextSubtitle(f)) == true) return false;
@@ -1190,6 +1244,8 @@ public partial class MainWindow : Window
 
     void OnPlaying()
     {
+        if (_stoppedRequest == _playRequest) return;
+        FinishOpening();
         SkipLeadingSilence();
         if (_switch != null) { SwitchTiming = $"parsed {_switchParsed} ms, StartMedia blocked the UI {_switchStartMedia} ms, playing {_switch.ElapsedMilliseconds} ms"; _switch = null; }
         LoadChapters();
@@ -1208,10 +1264,29 @@ public partial class MainWindow : Window
         _afterOwnEngine = _mp.OnOwnEngine;
         ErrorLog.Note("audio level", FormattableString.Invariant($"engine={(_mp.OnOwnEngine ? "Pylon" : "libVLC")}; requested={VolumePercent}%; output={AudioChain.Output}; libVLC volume={_mp.Volume}; track gain={_trackGain:0.###}; muted={_mp.Mute}"));
         if (ShowEngine && !_isAudio) Osd(_mp.OnOwnEngine ? "Движок: Pylon" : "Движок: libVLC", 4);
+        NoticePartialPlayback(_errorAttempt, _mp, CurrentPath);
+    }
+
+    async void NoticePartialPlayback(long attempt, Player player, string? path)
+    {
+        await Task.Delay(2000);
+        if (!IsLoaded || attempt != _errorAttempt || player != _mp || path == null || path != CurrentPath || !_mp.IsPlaying || _mp.OnOwnEngine) return;
+        var messages = _playbackDiagnostics.Snapshot();
+        if (!PlaybackDiagnostics.HasDecoderFailure(messages)) return;
+        if (_mp.Media is not { } media) return;
+        var stats = media.Statistics;
+        var missingAudio = Settings.Bool("audio.enable") && stats.DecodedAudio == 0 && media.Tracks.Any(t => t.TrackType == TrackType.Audio);
+        var missingVideo = Settings.Bool("video.enable") && stats.DecodedVideo == 0 && media.Tracks.Any(t => t.TrackType == TrackType.Video);
+        if (!missingAudio && !missingVideo) return;
+        var reason = "Playback continues, but the engine could not decode one or more tracks. See Last playback error for details.";
+        _lastPlaybackFailure = new(reason, string.Join("\n", messages));
+        _lastFailedName = Library.DisplayName(path);
+        Osd(L.T(reason), 10);
     }
 
     void OnEnded()
     {
+        if (_stoppedRequest == _playRequest) return;
         SaveProgress(finished: true);
         KeepAwake(false);
         if (_sleepEndOfItem) { _sleepEndOfItem = false; Refresh(); Osd(L.T("Sleep timer: stopped")); return; }
@@ -1240,6 +1315,8 @@ public partial class MainWindow : Window
 
     async void OnError()
     {
+        if (_stoppedRequest == _playRequest) return;
+        FinishOpening();
         // a web address YouTube turned down (a 403 now and then, or one that ran out while waiting): fetched again once
         // before giving up on the song
         if (CurrentPath is { } web && YtDlp.Handles(web) && _retried != web)
@@ -1325,9 +1402,10 @@ public partial class MainWindow : Window
         // automatic runs: once per file per session (a song AcoustID doesn't know stays unknown)
         if (!Recognize.Possible || quiet && !_recognizeTried.Add(src)) return;
         if (!quiet) Osd(L.T("Listening…"), 15);
-        var song = await Recognize.IdentifyAsync(src);
+        var result = await Recognize.IdentifyDetailedAsync(src);
+        var song = result.Song;
         if (CurrentPath != src) return;
-        if (song == null) { if (!quiet) Osd(L.T("Couldn't recognize this song"), 3); return; }
+        if (song == null) { if (!quiet) Osd(L.T(result.Message), 8); return; }
         // the Cover Art Archive has no picture for many releases: iTunes by the name we now know
         if (song.Cover == null && await Covers.FindAsync(song.Artist, song.Title, song.Album) is { } found) song = song with { Cover = found };
         if (CurrentPath != src) return;
@@ -1447,7 +1525,11 @@ public partial class MainWindow : Window
         if (++_ticks % 25 == 0 && _mp.IsPlaying) SaveProgress(); // every ~5 s
     }
 
-    static string Fmt(long ms) => TimeSpan.FromMilliseconds(Math.Max(0, ms)).ToString(@"hh\:mm\:ss");
+    static string Fmt(long ms)
+    {
+        var time = TimeSpan.FromMilliseconds(Math.Max(0, ms));
+        return ((long)time.TotalHours).ToString("00") + time.ToString(@"\:mm\:ss");
+    }
 
     // ───────────────────────── actions (buttons, hotkeys, menus) ─────────────────────────
 
@@ -1456,6 +1538,9 @@ public partial class MainWindow : Window
         if (_party != null && _partyHttp != null) { _ = PartySend($"api/toggle?n={Uri.EscapeDataString(PartyName)}"); return; } // the host leads: pause for everyone
         if (RemoteShown) { RemotePane.TogglePlay(); return; }
         if (_index < 0) { if (_queue.Count > 0) PlayAt(0); else OpenFiles(); return; }
+        if (RecoverDeferredOutput()) return;
+        if (_mp.Media == null && !_mp.OnOwnEngine) { PlayAt(_index, startAt: Math.Max(0, _queueResume)); return; }
+        if (_stoppedRequest == _playRequest) { PlayAt(_index, startAt: 0); return; }
         EndCrossfade();
         _duckPaused = false;
         if (_prebuffering) { _prebuffering = false; _prebufferId++; PlayBtn.IsChecked = true; return; } // paused while it was still filling: stays paused
@@ -1491,9 +1576,18 @@ public partial class MainWindow : Window
 
     public void Stop()
     {
+        var opening = _openingMedia;
+        _stoppedRequest = ++_playRequest;
+        FinishOpening();
         SaveProgress();
         EndCrossfade();
-        _mp.Stop();
+        if (opening || !_pendingStop.IsCompleted)
+        {
+            var player = _mp;
+            var pending = _pendingStop;
+            _pendingStop = Task.Run(async () => { await pending; player.Stop(); });
+        }
+        else _mp.Stop();
         if (_recording) ToggleRecord();
         KeepAwake(false);
         Osd(L.T("Stopped"));
@@ -1548,6 +1642,7 @@ public partial class MainWindow : Window
             var m = Library.Data.Meta.GetValueOrDefault(path) ?? new TrackMeta();
             (m.Title, m.Artist, m.Album, m.Genre, m.Art) = (f.Tag.Title, f.Tag.JoinedPerformers, f.Tag.Album, f.Tag.JoinedGenres, null); // the cover is read again
             m.Stamp = File.GetLastWriteTimeUtc(path).Ticks;
+            m.DurationMs = (long)f.Properties.Duration.TotalMilliseconds;
             Library.Data.Meta[path] = m;
         }
         catch (Exception e) when (e is IOException or TagLib.UnsupportedFormatException or TagLib.CorruptFileException) { Library.Data.Meta.Remove(path); }
@@ -1600,8 +1695,9 @@ public partial class MainWindow : Window
 
     void ApplyVolume()
     {
-        AudioChain.SetVolume(_mp, VolumeLevel);
-        _mp.SetOwnVolume(VolumeLevel, _trackGain);
+        var fade = _sleepAt is { } at ? Math.Clamp((at - DateTime.Now).TotalSeconds / 10, 0, 1) : 1;
+        AudioChain.SetVolume(_mp, VolumeLevel * fade);
+        _mp.SetOwnVolume(VolumeLevel * fade, _trackGain);
         UpdateVolumeIcon();
     }
 
@@ -1711,7 +1807,8 @@ public partial class MainWindow : Window
 
     public void Escape()
     {
-        if (_fullscreen) ToggleFullscreen();
+        if (_openingMedia) Stop();
+        else if (_fullscreen) ToggleFullscreen();
         else if (_minimal) ToggleMinimal();
         else if (_mini) ToggleMiniplayer();
         else if (FxPanel.Visibility == Visibility.Visible) { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }
@@ -1940,7 +2037,7 @@ public partial class MainWindow : Window
             case "audio.eqpreset": Effects.ApplyPreset(Settings.Str(key)); ApplyEqualizer(edited: true); break;
             case "audio.eq": ApplyEqualizer(edited: true); break;
             case "audio.maxvol": UpdateVolumeMaximum(); break;
-            case "audio.device": ReloadEngine(); break; // a new player on the new device, resuming where it was
+            case "audio.device": if (!_recoveringOutput) ReloadEngine(); break;
             case "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
             case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
             case "net.preset": ApplyNetworkPreset(); break;
@@ -2808,6 +2905,7 @@ public partial class MainWindow : Window
         Item("Settings", "gear-six-duotone", KeyOf("settings"), OpenSettings),
         Item("Check for Updates…", "arrow-circle-up-duotone", null, () => CheckForUpdates(manual: true)),
         Item("Report a Problem…", "info-duotone", null, () => BugReport.Open(this, CurrentPath, _mp, Vlc.Version)),
+        Item("Background tasks…", "playlist", null, () => DialogWindow.BackgroundTasks(this)),
         Item("Last playback error…", "info-duotone", null, () => { if (_lastPlaybackFailure is { } error) DialogWindow.PlaybackError(this, _lastFailedName, error); }, enabled: _lastPlaybackFailure != null),
         Item("About Pylon", "info-duotone", KeyOf("about"), ShowAbout),
     ];
@@ -2989,7 +3087,7 @@ public partial class MainWindow : Window
         _sleepTimer!.Interval = TimeSpan.FromMilliseconds(100);
         if (left > TimeSpan.Zero)
         {
-            AudioChain.SetVolume(_mp, VolumeLevel * left.TotalSeconds / 10); // fade out
+            ApplyVolume();
             return;
         }
         _sleepTimer.Stop();

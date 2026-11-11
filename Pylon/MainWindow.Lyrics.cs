@@ -32,11 +32,31 @@ public partial class MainWindow
     {
         var on = Settings.Bool("ui.lyrics") && _isAudio && _index >= 0 && !_mini;
         LyricsBtn.IsChecked = Settings.Bool("ui.lyrics");
-        if ((LyricsPane.Visibility == Visibility.Visible) != on)
+        if (Motion.IsShown(LyricsPane) != on)
         {
-            LyricsColumn.Width = on ? new GridLength(1.5, GridUnitType.Star) : new GridLength(0);
-            if (on) Motion.In(LyricsPane, dx: 40, animate: Motion.ByPointer);
-            else LyricsPane.Visibility = Visibility.Collapsed;
+            if (on)
+            {
+                LyricsPane.IsHitTestVisible = true;
+                Motion.Relayout([ArtFrame, MusicCaption], () =>
+                {
+                    LyricsColumn.Width = new GridLength(1.5, GridUnitType.Star);
+                    Motion.In(LyricsPane, dx: 24, spring: Spring.Snappy, animate: Motion.ByPointer);
+                    MusicLayout_SizeChanged(MusicLayout, null!);
+                }, Motion.ByPointer);
+            }
+            else
+            {
+                LyricsPane.IsHitTestVisible = false;
+                Motion.Out(LyricsPane, () =>
+                {
+                    Motion.Relayout([ArtFrame, MusicCaption], () =>
+                    {
+                        LyricsPane.Visibility = Visibility.Collapsed;
+                        LyricsColumn.Width = new GridLength(0);
+                        MusicLayout_SizeChanged(MusicLayout, null!);
+                    }, Motion.ByPointer && _isAudio && !_mini);
+                }, dx: 24, spring: Spring.Snappy, animate: Motion.ByPointer && _isAudio && !_mini);
+            }
             Dispatcher.BeginInvoke(() => MusicLayout_SizeChanged(MusicLayout, null!), DispatcherPriority.Loaded);
         }
         // every song's lyrics are looked up as it starts (with its real tags), shown or not: opening the panel, the
@@ -55,17 +75,22 @@ public partial class MainWindow
         }
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
         var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
-        var doc = _lyricsAhead.Remove(path, out var early) && await early is { } found ? found
+        var result = _lyricsAhead.Remove(path, out var early) && await early is { Document: not null } found ? found
             // a song from the web: the original's length (Spotify's), not the found recording's (a clip runs longer); the
             // same key the lookahead used
-            : await Lyrics.FindAsync(path, _track.Title, _track.Artist, _track.Album,
+            : await Lyrics.FindDetailedAsync(path, _track.Title, _track.Artist, _track.Album,
                 Library.Data.Meta.GetValueOrDefault(path) is { DurationMs: > 0 } m ? m.DurationMs / 1000.0 : _track.Duration, tags);
         if (CurrentPath != path) return;
-        if (doc != null) LyricsPane.Show(doc);
-        else LyricsPane.ShowMessage(L.T("No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
+        if (result.Document != null) LyricsPane.Show(result.Document);
+        else
+        {
+            LyricsPane.ShowMessage(L.T(result.ServiceFailed ? "Lyrics services could not be reached. Check your connection and try again."
+                : "No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
+            LyricsPane.MessageActions(() => { _lyricsAhead.Remove(path); LoadLyrics(path); }, FindLyrics);
+        }
     }
 
-    readonly Dictionary<string, Task<LyricsDoc?>> _lyricsAhead = [];
+    readonly Dictionary<string, Task<Lyrics.Result>> _lyricsAhead = [];
 
     /// <summary>
     /// The next song's lyrics are looked up while this one plays (by its library tags), so they are there the moment it
@@ -77,7 +102,7 @@ public partial class MainWindow
         if (Library.Data.Meta.GetValueOrDefault(next) is not { Title: { Length: > 0 } title } m) return; // untagged: looked up when it plays
         var seconds = m.DurationMs > 0 ? m.DurationMs / 1000.0 : (Library.HistoryOf(next)?.Length ?? 0) / 1000.0;
         if (_lyricsAhead.Count > 6) _lyricsAhead.Clear();
-        _lyricsAhead[next] = Lyrics.FindAsync(next, title, m.Artist, m.Album, seconds, m.SpotifyId is { } id ? "\nspotify:track:" + id : "");
+        _lyricsAhead[next] = Lyrics.FindDetailedAsync(next, title, m.Artist, m.Album, seconds, m.SpotifyId is { } id ? "\nspotify:track:" + id : "");
     }
 
     /// <summary>Seconds this track's lyrics are moved ahead (Lyrics → Timing); negative = later.</summary>
@@ -101,10 +126,15 @@ public partial class MainWindow
         var (artist, title) = dash > 0 ? (q[..dash].Trim(), q[(dash + 3)..].Trim()) : ("", q.Trim());
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
         if (!Settings.Bool("ui.lyrics")) Settings.Set("ui.lyrics", true);
-        var doc = await Lyrics.SearchAsync(_track.Title, _track.Artist, _track.Album, _track.Duration, artist, title);
+        var result = await Lyrics.SearchDetailedAsync(_track.Title, _track.Artist, _track.Album, _track.Duration, artist, title);
+        var doc = result.Document;
         if (CurrentPath != path) return;
         if (doc != null) { Library.Data.LyricFiles.Remove(path); Library.Touch(); LyricsPane.Show(doc); }
-        else LyricsPane.ShowMessage(L.F("Nothing found for “{0}”.", q));
+        else
+        {
+            LyricsPane.ShowMessage(result.ServiceFailed ? L.T("Lyrics services could not be reached. Check your connection and try again.") : L.F("Nothing found for “{0}”.", q));
+            LyricsPane.MessageActions(FindLyrics, FindLyrics);
+        }
     }
 
     void OpenLyricsFile()

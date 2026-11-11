@@ -331,8 +331,12 @@ public sealed class RemoteView : Grid
     void Show(bool lyrics)
     {
         _lyricsTab.Tag = lyrics;
-        _lyrics.Visibility = lyrics ? Visibility.Visible : Visibility.Collapsed;
-        _queueScroll.Visibility = lyrics ? Visibility.Collapsed : Visibility.Visible;
+        var incoming = lyrics ? (UIElement)_lyrics : _queueScroll;
+        var outgoing = lyrics ? (UIElement)_queueScroll : _lyrics;
+        incoming.IsHitTestVisible = true;
+        outgoing.IsHitTestVisible = false;
+        Motion.In(incoming, dy: 4, spring: Spring.Press, animate: Motion.ByPointer && IsVisible && IsLoaded);
+        Motion.Out(outgoing, () => outgoing.Visibility = Visibility.Collapsed, dy: 4, spring: Spring.Press, animate: Motion.ByPointer && IsVisible && IsLoaded);
         foreach (var (tab, on) in new[] { (_lyricsTab, lyrics), (_queueTab, !lyrics) })
         {
             if (on) tab.SetResourceReference(BackgroundProperty, "BgRaised");

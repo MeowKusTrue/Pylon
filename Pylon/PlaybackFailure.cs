@@ -71,4 +71,8 @@ public sealed class PlaybackDiagnostics
         if (log.Contains("connection failed") || log.Contains("connection timed out") || log.Contains("cannot resolve")) return "The media server could not be reached. Check the connection and address.";
         return "The engine could not open this media. The exact cause is unknown; see the technical details.";
     }
+
+    public static bool HasDecoderFailure(IEnumerable<string> messages) => messages.Any(message =>
+        message.Contains("no suitable decoder", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("codec", StringComparison.OrdinalIgnoreCase) && message.Contains("not supported", StringComparison.OrdinalIgnoreCase));
 }

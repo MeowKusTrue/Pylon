@@ -23,7 +23,49 @@ public partial class App : Application
         Motion.HookMenus();
         Motion.HookPress();
         Motion.HookSwitches();
-        Settings.Load();
+        while (true)
+        {
+            var document = "settings.json";
+            try
+            {
+                System.IO.Directory.CreateDirectory(Library.Dir);
+                Settings.Load();
+                document = "library.json";
+                Library.Load();
+                document = "";
+                var probe = System.IO.Path.Combine(Library.Dir, ".pylon-profile-" + Guid.NewGuid().ToString("N"));
+                using (new System.IO.FileStream(probe, System.IO.FileMode.CreateNew, System.IO.FileAccess.Write,
+                    System.IO.FileShare.None, 1, System.IO.FileOptions.DeleteOnClose)) { }
+                break;
+            }
+            catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                L.Init();
+                if (document.Length > 0 && ProfileBackups.Latest(document) is { } backup)
+                {
+                    var answer = MessageBox.Show(L.F("Could not read {0}. A backup is available.\nYes: restore the backup and keep the damaged original.\nNo: choose another profile.\nCancel: exit.", document),
+                        L.T("Profile recovery"), MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+                    if (answer == MessageBoxResult.Cancel) { Shutdown(); return; }
+                    if (answer == MessageBoxResult.Yes)
+                    {
+                        try { ProfileBackups.Restore(document, backup); continue; }
+                        catch (Exception restore) when (restore is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+                        { MessageBox.Show(restore.Message, L.T("Profile recovery"), MessageBoxButton.OK, MessageBoxImage.Error); }
+                    }
+                }
+                var message = L.T("Pylon could not read this profile. The original files have not been changed.") + "\n\n"
+                    + Library.Dir + "\n\n" + error.Message + "\n\n" + L.T("Choose another profile folder to continue, or cancel to exit.");
+                if (MessageBox.Show(message, L.T("Profile error"), MessageBoxButton.OKCancel, MessageBoxImage.Error) != MessageBoxResult.OK)
+                { Shutdown(); return; }
+                var folder = new OpenFolderDialog();
+                if (folder.ShowDialog() != true) { Shutdown(); return; }
+                SingleInstance.Release();
+                Library.Dir = folder.FolderName;
+                Environment.SetEnvironmentVariable("PYLON_DATA", Library.Dir);
+                if (SingleInstance.IsRunning())
+                { MessageBox.Show(L.T("Pylon is already running with the selected profile."), "Pylon"); Shutdown(); return; }
+            }
+        }
         InterfaceRendering.Apply();
         Settings.Changed += key => { if (key is "perf.softwareui" or "*") InterfaceRendering.Apply(); };
         InterfaceRendering.NoteStartup();

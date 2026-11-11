@@ -124,6 +124,11 @@ public static class Updater
 
     public static async Task DownloadAndRunAsync(Release r, IProgress<Progress>? progress, CancellationToken cancel = default)
     {
+        (System.Windows.Application.Current?.MainWindow as MainWindow)?.SaveQueueSession();
+        Settings.Save();
+        Library.Save();
+        ProfileBackups.BeforeReplace(Path.Combine(Library.Dir, "settings.json"), force: true);
+        ProfileBackups.BeforeReplace(Path.Combine(Library.Dir, "library.json"), force: true);
         var clock = Stopwatch.StartNew();
         double speed = 0, lastT = 0;
         long lastBytes = 0;

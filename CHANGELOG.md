@@ -3,6 +3,40 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.4
+
+<!-- ru -->
+- Плавное обратимое включение и выключение текста песни, переход обложки к новой раскладке, короткие переходы мини-текста и вкладок пульта. Панели и меню реагируют быстрее; настройки Windows и клавиатурное управление учитываются.
+- Локальные треки сопоставляются по точному исполнителю, длительности и ISRC; исправлен поиск после изменения тегов и лишние перестройки индекса во время импорта.
+- Три резервные копии настроек и библиотеки с предложением восстановления. Очередь и позиция сохраняются между запусками без автоматического воспроизведения.
+- Фоновые загрузки и конвертации: список задач, отмена, повтор оставшихся элементов, переход к результату. Окно конвертации можно закрыть, оставив работу в фоне.
+- При смене или отключении аудиовыхода плеер предлагает выбрать устройство, сохраняя громкость и позицию. Скрытый плеер не открывает диалог поверх других приложений.
+- Сохраняется mute при пересоздании движка. Отдельные тестовые профили не меняют общую регистрацию и автозапуск Pylon.
+- Разные параметры частей автоматически приводятся к общему формату при склейке с кодированием. Исправлен заголовок длительности объединённого FLAC.
+- Офлайн-загрузки различают источники даже при одинаковых названиях файлов.
+- Исправлены запоздавшие события и отмена открытия собственного движка. HDR и неподдерживаемое усиление передаются libVLC; таймер сна затухает на обоих выходах.
+- Склейка использует выбранный пресет. Конвертация сохраняет результат через временный файл без перезаписи существующих данных. Исправлено время обрезки после 24 часов.
+- Безопасный запуск при повреждённом или недоступном профиле с выбором другой папки.
+- Предпросмотр отчёта о проблеме, расширенная диагностика и очистка личных данных.
+- Отмена открытия медиа кнопкой и Esc; предупреждения о недекодируемых дорожках.
+- Более точные причины неудачи поиска текстов и распознавания; повтор и ручной поиск текстов.
+
+<!-- en -->
+- Reversible lyrics show/hide transitions, cover layout transitions, and short mini-lyrics and remote-tab transitions. Panels and menus respond faster, respecting Windows animation settings and keyboard input.
+- Local recordings match exact artists, duration and ISRC; fixed stale lookups after retagging and repeated index rebuilding during imports.
+- Three settings/library backups with recovery offers. Queue selection and position survive restarts without automatic playback.
+- Background downloads and conversions with cancellation, retries of remaining items, and output access. Conversion continues after its window is closed.
+- Changed or disconnected audio outputs offer a device choice while preserving volume and position. Hidden players defer the dialog instead of interrupting another application.
+- Mute survives engine recreation. Isolated test profiles no longer change Pylon's shared shell registration or autostart.
+- Joining with an encoding preset normalizes incompatible part parameters. Fixed the combined FLAC duration header.
+- Offline downloads distinguish sources even when their filenames match.
+- Fixed stale own-engine events and cancelled openings. HDR and unsupported amplification use libVLC; sleep fades affect both outputs.
+- Joining follows the selected preset. Conversion commits temporary output without overwriting existing data. Fixed trim times beyond 24 hours.
+- Safe startup for unreadable or damaged profiles, with a choice of another folder.
+- Problem report preview, expanded diagnostics, and personal-data redaction.
+- Cancel media opening with a button or Esc; warnings for tracks that cannot be decoded.
+- More precise lyrics and recognition failures, with retry and manual lyrics search.
+
 ## 2.1.3
 
 <!-- ru -->

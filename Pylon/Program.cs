@@ -56,6 +56,8 @@ public static class Program
     /// <summary>No window: log the running version, and if the feed has a newer one, download it (delta) and apply it.</summary>
     static void RunProbe(string log)
     {
+        Settings.Load();
+        Library.Load();
         File.AppendAllText(log, $"started {Updater.Current.ToString(3)} from {AppContext.BaseDirectory} firstRun={FirstRun}{Environment.NewLine}");
         var update = Updater.CheckAsync().GetAwaiter().GetResult();
         if (update == null) return;

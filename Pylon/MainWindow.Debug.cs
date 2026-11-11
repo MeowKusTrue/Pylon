@@ -53,9 +53,181 @@ public partial class MainWindow
                     await Task.Delay(1500);
                     break;
                 case "next": Next(); break;
+                case "reload-audio-state-test":
+                    {
+                        var value = Volume.Value;
+                        _mp.Mute = true;
+                        CreateEngine(resume: false);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"reload-audio-state muted={_mp.Mute} volumeKept={Math.Abs(value - Volume.Value) < 0.0001}\n");
+                        break;
+                    }
+                case "background-convert-test":
+                    {
+                        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        BackgroundJobs.DebugGate = gate.Task;
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            try
+                            {
+                                DialogWindow? dialog = null;
+                                for (var i = 0; i < 60 && dialog == null; i++)
+                                { await Task.Delay(50); dialog = Application.Current.Windows.OfType<DialogWindow>().FirstOrDefault(); }
+                                if (dialog == null) throw new TimeoutException("Convert dialog did not open.");
+                                dialog.SaveBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                for (var i = 0; i < 60 && !BackgroundJobs.All.Any(j => j.State == JobState.Running); i++) await Task.Delay(50);
+                                var job = BackgroundJobs.All.Last(j => j.State == JobState.Running);
+                                dialog.CancelBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                var closedWhileRunning = !dialog.IsVisible && job.State == JobState.Running;
+                                gate.TrySetResult();
+                                await job.Completion.WaitAsync(TimeSpan.FromSeconds(20));
+                                File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"background-convert closedWhileRunning={closedWhileRunning} completed={job.State == JobState.Completed} outputExists={File.Exists(job.Output)}\n");
+                                completed.TrySetResult();
+                            }
+                            catch (Exception error) { completed.TrySetException(error); }
+                            finally { gate.TrySetResult(); BackgroundJobs.DebugGate = null; }
+                        });
+                        DialogWindow.Convert(this, [arg]);
+                        await completed.Task.WaitAsync(TimeSpan.FromSeconds(25));
+                        break;
+                    }
+                case "jobs-demo":
+                    {
+                        var done = BackgroundJobs.Start("Completed conversion", (_, _) => Task.FromResult<string?>(Library.Dir));
+                        await done.Completion;
+                        var failed = BackgroundJobs.Start("Failed download", (_, _) => Task.FromException<string?>(new IOException("Example: the server is unavailable")));
+                        await failed.Completion;
+                        BackgroundJobs.Start("Downloading playlist", async (job, cancel) => { job.Report(0.4, "Track 4 of 10"); await Task.Delay(60000, cancel); return Library.Dir; });
+                        break;
+                    }
+                case "audio-device-test":
+                    {
+                        if (_queue.Count == 0) _queue.Add("device-test.wav");
+                        _index = 0;
+                        var level = Volume.Value;
+                        _recoveringOutput = true;
+                        Settings.Set("audio.device", "Disconnected fixture output");
+                        _recoveringOutput = false;
+                        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            for (var i = 0; i < 30; i++)
+                            {
+                                await Task.Delay(50);
+                                if (Application.Current.Windows.OfType<DialogWindow>().FirstOrDefault() is not { } dialog) continue;
+                                Snap(dialog, Path.ChangeExtension(outFile, ".dialog.png"));
+                                dialog.CancelBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                closed.TrySetResult();
+                                return;
+                            }
+                            closed.TrySetException(new TimeoutException("Audio output dialog did not open."));
+                        });
+                        OutputsChanged(["Headphones"], false);
+                        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"audio-device-test stopped={!_mp.IsPlaying && _stoppedRequest == _playRequest} volumeKept={Math.Abs(Volume.Value - level) < 0.0001}\n");
+                        Hide();
+                        RecoverAudioOutput(["Headphones"], position: 1234, resume: true);
+                        await _pendingStop;
+                        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                        SaveQueueSession();
+                        var deferred = _deferredOutput is { Position: 1234 } && !Application.Current.Windows.OfType<DialogWindow>().Any();
+                        var positionKept = QueueSession.Load()?.Position == 1234;
+                        Show();
+                        var dismissed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            for (var i = 0; i < 30; i++)
+                            {
+                                await Task.Delay(50);
+                                if (Application.Current.Windows.OfType<DialogWindow>().FirstOrDefault() is not { } dialog) continue;
+                                dialog.CancelBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                dismissed.TrySetResult(); return;
+                            }
+                            dismissed.TrySetException(new TimeoutException("Deferred audio output dialog did not open."));
+                        });
+                        TogglePlay();
+                        await dismissed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"audio-device-background deferred={deferred} positionKept={positionKept} stayedStopped={!_mp.IsPlaying}\n");
+                        break;
+                    }
+                case "lyrics-motion-test":
+                    {
+                        Motion.DebugEnabled = Motion.DebugPointer = true;
+                        _metaPending = true;
+                        _isAudio = true;
+                        if (_queue.Count == 0) _queue.Add("motion-test.wav");
+                        _index = 0;
+                        LyricsPane.ShowMessage("Motion test\nLyrics appear and leave without a jump.");
+                        async Task Frames(int milliseconds)
+                        {
+                            var clock = Stopwatch.StartNew();
+                            while (clock.ElapsedMilliseconds < milliseconds) { Motion.DebugFrame(); await Task.Delay(8); }
+                        }
+                        try
+                        {
+                            Settings.Set("ui.lyrics", false); ApplyLyricsLayout(); await Frames(600);
+                            Settings.Set("ui.lyrics", true); ApplyLyricsLayout(); await Frames(60);
+                            var entering = LyricsPane.Opacity > 0 && LyricsPane.Opacity < 1 && Motion.IsShown(LyricsPane);
+                            Settings.Set("ui.lyrics", false); ApplyLyricsLayout(); await Frames(24);
+                            var leaving = !Motion.IsShown(LyricsPane) && LyricsPane.Visibility == Visibility.Visible && LyricsColumn.Width.Value > 0;
+                            var before = LyricsPane.Opacity;
+                            Settings.Set("ui.lyrics", true); ApplyLyricsLayout();
+                            var reversed = Math.Abs(LyricsPane.Opacity - before) < 0.01 && Motion.IsShown(LyricsPane);
+                            await Frames(600);
+                            var shown = LyricsPane.Visibility == Visibility.Visible && Math.Abs(LyricsPane.Opacity - 1) < 0.001;
+                            Snap(this, Path.ChangeExtension(outFile, ".shown.png"));
+                            Settings.Set("ui.lyrics", false); ApplyLyricsLayout(); await Frames(750);
+                            var hidden = LyricsPane.Visibility == Visibility.Collapsed && LyricsColumn.Width.Value == 0;
+                            Motion.DebugEnabled = false;
+                            Settings.Set("ui.lyrics", true); ApplyLyricsLayout();
+                            var reducedOn = LyricsPane.Visibility == Visibility.Visible && LyricsPane.Opacity == 1;
+                            Settings.Set("ui.lyrics", false); ApplyLyricsLayout();
+                            var reducedOff = LyricsPane.Visibility == Visibility.Collapsed;
+                            Motion.DebugEnabled = true; Motion.DebugPointer = false;
+                            Settings.Set("ui.lyrics", true); ApplyLyricsLayout();
+                            var keyboardOn = LyricsPane.Opacity == 1;
+                            Settings.Set("ui.lyrics", false); ApplyLyricsLayout();
+                            var keyboardOff = LyricsPane.Visibility == Visibility.Collapsed;
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"lyrics-motion entering={entering} leaving={leaving} reversed={reversed} shown={shown} hidden={hidden} reducedOn={reducedOn} reducedOff={reducedOff} keyboardOn={keyboardOn} keyboardOff={keyboardOff}\n");
+                        }
+                        finally { Motion.DebugEnabled = Motion.DebugPointer = null; }
+                        break;
+                    }
+                case "own-event-race":
+                    {
+                        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var closing = typeof(Player).GetField("_closing", flags)!;
+                        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        closing.SetValue(_mp, blocked.Task);
+                        _ownPlayRequest = ++_playRequest;
+                        _mp.PlayOwn("queued-test.mp4", 0, false, null, new TrackChoice(0, "en", 0, "en", false), [], 0);
+                        var old = (VideoEngine)typeof(Player).GetField("_engine", flags)!.GetValue(_mp)!;
+                        ++_playRequest; // the UI chose a new item but is still waiting for the old player to stop
+                        _openingMedia = true;
+                        var before = _index;
+                        try
+                        {
+                            ((Action?)typeof(VideoEngine).GetField("FirstFrame", flags)!.GetValue(old))?.Invoke();
+                            ((Action?)typeof(VideoEngine).GetField("Ended", flags)!.GetValue(old))?.Invoke();
+                            ((Action<Exception>?)typeof(VideoEngine).GetField("Failed", flags)!.GetValue(old))?.Invoke(new IOException("old test failure"));
+                            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+                            var passed = _openingMedia && _index == before && _mp.OnOwnEngine;
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"own-event-race passed={passed}\n");
+                        }
+                        finally
+                        {
+                            _mp.Stop();
+                            blocked.TrySetResult();
+                            await ((Task)closing.GetValue(_mp)!).WaitAsync(TimeSpan.FromSeconds(10));
+                            FinishOpening();
+                        }
+                        break;
+                    }
                 case "prev": Previous(); break;
                 case "path": File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"path={Path.GetFileName(CurrentPath)} queue={_queue.Count}{Environment.NewLine}"); break;
                 case "state":
+                    File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"opening={_openingMedia} request={_playRequest} cancelVisible={CancelOpeningBtn.IsVisible} pendingStop={_pendingStop.Status}\n");
                     File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), Environment.NewLine + $"osd={StageOsd.Opacity:0.00}/{OsdBorder.Opacity:0.00} own={_mp.OnOwnEngine} audiotrack={_mp.AudioTrack} spu={_mp.Spu} subtext=[{(_mp.OnOwnEngine ? _mp.SubtitleAt(_mp.Time / 1000.0)?.Replace("\n", "/") : "")}] state={_mp.State} length={_mp.Length} hwnd={_mp.Hwnd} overlay={_overlayWindow?.IsVisible} video={Video.IsVisible} time={_mp.Time} playing={_mp.IsPlaying} vol={_mp.Volume} rate={_mp.Rate} index={_index} audio={_isAudio} snapdir={Settings.Str("video.snapdir")} rec={_recording} file={_recordFile} party={_party} playingPath={CurrentPath} osdtext=[{StageOsdText.Text}] osdvisible={StageOsd.Opacity + OsdBorder.Opacity > 0.5} pausedBy={_pausedBy}");
                     break;
                 case "settings":
@@ -250,7 +422,7 @@ public partial class MainWindow
                 case "join": // the queue joined by ffmpeg ("copy" or "mp4"), next to the snapshot
                     {
                         var dst = Path.Combine(Path.GetDirectoryName(outFile)!, "joined-" + arg + (arg == "copy" ? Path.GetExtension(_queue[0]) : ".mp4"));
-                        var (ok, error) = await Ffmpeg.JoinAsync(_queue.ToList(), dst, arg == "copy", null, CancellationToken.None);
+                        var (ok, error) = await Ffmpeg.JoinAsync(_queue.ToList(), dst, Converter.Presets.First(p => arg == "copy" ? p.Extension.Length == 0 : p.Name == "MP4 (H.264 + AAC)"), null, CancellationToken.None);
                         File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"join {arg}: ok={ok} error={error}{Environment.NewLine}");
                         break;
                     }
@@ -390,6 +562,9 @@ public partial class MainWindow
                     switch (cmd, arg)
                     {
                         case (_, "interface-diagnostics"): DialogWindow.InterfaceDiagnostics(this); break;
+                        case (_, "report-preview"): DialogWindow.ReportPreview(this, BugReport.Sanitize("Pylon report\nEngine: libVLC\nFile C:\\Users\\private\\song.mp3\nhttps://example.com/play?token=hidden\n")); break;
+                        case (_, "background-tasks"): DialogWindow.BackgroundTasks(this); break;
+                        case (_, "audio-output"): DialogWindow.RecoverAudioOutput(this, ["Speakers", "Headphones"]); break;
                         case (_, "playback-error"):
                             if (_lastPlaybackFailure is { } failure) DialogWindow.PlaybackError(this, _lastFailedName, failure);
                             break;

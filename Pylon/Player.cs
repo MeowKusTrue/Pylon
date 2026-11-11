@@ -17,7 +17,9 @@ public sealed record TrackChoice(int AudioNumber, string AudioLanguage, int SubN
 /// </summary>
 public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
 {
-    VideoEngine? _engine;
+    volatile VideoEngine? _engine;
+    readonly object _engineGate = new();
+    public long OwnGeneration { get; private set; }
     Task _opening = Task.CompletedTask, _closing = Task.CompletedTask;
     volatile bool _started, _ended;
     long _startMs;
@@ -31,10 +33,10 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     bool _soundOff;
 
     /// <summary>The first picture of a file on the engine, on its thread.</summary>
-    public event Action? OwnPlaying;
-    public event Action? OwnEnded;
+    public event Action<long>? OwnPlaying;
+    public event Action<long>? OwnEnded;
     /// <summary>The engine can't play this file (or stopped on an error): libVLC's turn, on the engine's thread.</summary>
-    public event Action<string>? OwnRefused;
+    public event Action<long, string>? OwnRefused;
 
     public bool OnOwnEngine => _engine != null;
 
@@ -43,68 +45,100 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     /// <param name="device">Start of the output device's name; null for the Windows default.</param>
     public void PlayOwn(string path, long startMs, bool paused, string? device, TrackChoice choice, IReadOnlyList<string> subtitleFiles, int addedFiles)
     {
-        StopOwn();
-        base.Stop(); // it may have played the last file
-        var engine = _engine = new VideoEngine(Hwnd, device);
-        _started = _ended = _soundOff = false;
-        _startMs = startMs;
-        _spu = -1;
-        lock (_cues) _cues.Clear();
-        _subFiles.Clear();
-        engine.SubtitleCue += AddCue;
-        engine.Volume = EngineVolume;
-        if (_rate != 1) engine.Speed = _rate;
-        engine.FirstFrame += () =>
+        lock (_engineGate)
         {
-            _started = true;
-            OwnPlaying?.Invoke();
-        };
-        engine.Ended += () =>
-        {
-            _ended = true;
-            OwnEnded?.Invoke();
-        };
-        engine.Failed += e => Refuse(engine, e.Message);
-        engine.SoundFailed += e => Refuse(engine, e.Message);
-        var closing = _closing;
-        _opening = Task.Run(async () =>
-        {
-            await closing; // a window takes a new swap chain only when the old one is gone
-            try
+            StopOwn();
+            base.Stop(); // it may have played the last file
+            var engine = _engine = new VideoEngine(Hwnd, device);
+            _started = _ended = _soundOff = false;
+            _startMs = startMs;
+            _spu = -1;
+            lock (_cues) _cues.Clear();
+            _subFiles.Clear();
+            var generation = OwnGeneration;
+            engine.SubtitleCue += (track, start, end, text) =>
             {
-                foreach (var file in subtitleFiles) _subFiles.Add((Path.GetFileName(file), SubText.Load(file)));
-                engine.Open(path, startMs, paused, strict: true, chooseAudio: (audio, subs) =>
+                lock (_engineGate) if (_engine == engine) AddCue(track, start, end, text);
+            };
+            engine.Volume = EngineVolume;
+            if (_rate != 1) engine.Speed = _rate;
+            engine.FirstFrame += () =>
+            {
+                lock (_engineGate)
                 {
-                    var inside = VideoEngine.PickTrack(subs, choice.SubNumber, choice.SubLanguage, flagged: true);
-                    // added by hand in Pylon: that's what the user wants to see
-                    _spu = !choice.SubsOn ? -1 : addedFiles > 0 || (inside < 0 && subtitleFiles.Count > 0) ? SubFileIds : inside;
-                    return VideoEngine.PickTrack(audio, choice.AudioNumber, choice.AudioLanguage, flagged: false);
-                });
-            }
-            catch (Exception e) when (e is InvalidDataException or NotSupportedException or SharpGen.Runtime.SharpGenException or DllNotFoundException)
+                    if (_engine != engine) return;
+                    _started = true;
+                    OwnPlaying?.Invoke(generation);
+                }
+            };
+            engine.Ended += () =>
             {
-                Refuse(engine, e.Message);
-            }
-        });
+                lock (_engineGate)
+                {
+                    if (_engine != engine) return;
+                    _ended = true;
+                    OwnEnded?.Invoke(generation);
+                }
+            };
+            engine.Failed += e => Refuse(engine, e.Message);
+            engine.SoundFailed += e => Refuse(engine, e.Message);
+            var closing = _closing;
+            _opening = Task.Run(async () =>
+            {
+                try
+                {
+                    await closing; // a window takes a new swap chain only when the old one is gone
+                    if (_engine != engine) return;
+                    var loaded = subtitleFiles.Select(file => (Path.GetFileName(file), SubText.Load(file))).ToList();
+                    lock (_engineGate)
+                    {
+                        if (_engine != engine) return;
+                        _subFiles.AddRange(loaded);
+                    }
+                    engine.Open(path, startMs, paused, strict: true, chooseAudio: (audio, subs) =>
+                    {
+                        var inside = VideoEngine.PickTrack(subs, choice.SubNumber, choice.SubLanguage, flagged: true);
+                        // added by hand in Pylon: that's what the user wants to see
+                        lock (_engineGate)
+                        {
+                            if (_engine != engine) throw new OperationCanceledException();
+                            _spu = !choice.SubsOn ? -1 : addedFiles > 0 || (inside < 0 && subtitleFiles.Count > 0) ? SubFileIds : inside;
+                        }
+                        return VideoEngine.PickTrack(audio, choice.AudioNumber, choice.AudioLanguage, flagged: false);
+                    });
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or ArgumentException or SharpGen.Runtime.SharpGenException or DllNotFoundException or BadImageFormatException)
+                {
+                    Refuse(engine, e.Message);
+                }
+            });
+        }
     }
 
     void Refuse(VideoEngine engine, string why)
     {
-        if (_engine == engine) OwnRefused?.Invoke(why);
+        lock (_engineGate) if (_engine == engine) OwnRefused?.Invoke(OwnGeneration, why);
     }
 
     void StopOwn()
     {
-        if (_engine is not { } engine) return;
-        _engine = null;
-        var opening = _opening;
-        var closing = _closing;
-        _closing = Task.Run(async () => // joining its threads takes a moment, which the window needn't wait for
+        VideoEngine engine;
+        lock (_engineGate)
         {
-            await opening;
-            await closing;
-            engine.Dispose();
-        });
+            OwnGeneration++;
+            if (_engine is not { } active) return;
+            engine = active;
+            _engine = null;
+            engine.RequestStop();
+            var opening = _opening;
+            var closing = _closing;
+            _closing = Task.Run(async () => // joining its threads takes a moment, which the window needn't wait for
+            {
+                try { await Task.WhenAll(opening, closing); }
+                finally { engine.Dispose(); }
+            });
+        }
     }
 
     /// <summary>Volume as libVLC's output has it: the slider's level cubed, 1 = as in the file.</summary>
@@ -178,8 +212,15 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     public void SetOwnVolume(double level, double gain)
     {
         (_level, _gain) = (level, gain);
-        if (_engine is { } engine) engine.Volume = EngineVolume;
+        if (_engine is { } engine)
+        {
+            engine.Volume = EngineVolume;
+            if (!SupportsOwnVolume(level, gain)) Refuse(engine, "requested amplification requires libVLC");
+        }
     }
+
+    public static bool SupportsOwnVolume(double level, double gain) =>
+        double.IsFinite(level) && double.IsFinite(gain) && level >= 0 && gain >= 0 && level * level * level * gain <= 2;
 
     public new bool Play(Media media)
     {

@@ -399,7 +399,13 @@ public partial class MainWindow
     {
         var show = _mini && _isAudio && Settings.Bool("ui.lyrics") && LyricsPane.HasLyrics && CurrentPath == _lyricsFor;
         var (now, next) = show ? LyricsPane.LinesAt(PlaybackClock() + LyricsOffset) : (null, null);
-        MiniLyrics.Visibility = show && ((object?)now ?? next) != null ? Visibility.Visible : Visibility.Collapsed;
+        var visible = show && ((object?)now ?? next) != null;
+        if (Motion.IsShown(MiniLyrics) != visible)
+        {
+            if (visible) Motion.In(MiniLyrics, dy: 6, spring: Spring.Press, animate: Motion.ByPointer);
+            else Motion.Out(MiniLyrics, () => MiniLyrics.Visibility = Visibility.Collapsed, dy: 6, spring: Spring.Press, animate: Motion.ByPointer);
+        }
+        if (!visible) return;
         if (now == _miniLine) return;
         _miniLine = now;
         // word by word: each word its own box in the line (so the line still wraps and centers), lit and lifted as it's

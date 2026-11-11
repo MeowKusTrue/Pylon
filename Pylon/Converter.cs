@@ -73,7 +73,9 @@ public static class Converter
     public static string FormatTime(long ms)
     {
         var t = TimeSpan.FromMilliseconds(Math.Round(ms / 100.0) * 100);
-        var whole = t.ToString(t.TotalHours >= 1 ? @"h\:mm\:ss" : @"m\:ss", CultureInfo.InvariantCulture);
+        var whole = t.TotalHours >= 1
+            ? ((long)t.TotalHours).ToString(CultureInfo.InvariantCulture) + t.ToString(@"\:mm\:ss", CultureInfo.InvariantCulture)
+            : t.ToString(@"m\:ss", CultureInfo.InvariantCulture);
         return t.Milliseconds == 0 ? whole : whole + "." + t.Milliseconds / 100;
     }
 

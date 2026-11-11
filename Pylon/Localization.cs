@@ -45,19 +45,23 @@ public static class L
     {
         var found = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
         foreach (var dir in new[] { Path.Combine(AppContext.BaseDirectory, "lang"), Path.Combine(Library.Dir, "lang") }) // the user's own files win
-            if (Directory.Exists(dir))
-                foreach (var file in Directory.EnumerateFiles(dir, "??.json").Concat(Directory.EnumerateFiles(dir, "??-??.json")))
-                {
-                    var code = Path.GetFileNameWithoutExtension(file);
-                    if (code == "en") continue; // the English source, not a translation
-                    found[code] = (Load(file).GetValueOrDefault("_name") ?? code, file);
-                }
+            try
+            {
+                if (Directory.Exists(dir))
+                    foreach (var file in Directory.EnumerateFiles(dir, "??.json").Concat(Directory.EnumerateFiles(dir, "??-??.json")))
+                    {
+                        var code = Path.GetFileNameWithoutExtension(file);
+                        if (code == "en") continue; // the English source, not a translation
+                        found[code] = (Load(file).GetValueOrDefault("_name") ?? code, file);
+                    }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         return found;
     }
 
     static Dictionary<string, string> Load(string path)
     {
-        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) is { } d ? d.Where(p => p.Value.Length > 0).ToDictionary() : []; }
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) is { } d ? d.Where(p => p.Value?.Length > 0).ToDictionary() : []; }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return []; }
     }
 

@@ -276,8 +276,26 @@ public class LyricsView : Grid
 
     static double FontFor(double width) => Math.Clamp(width * 0.07, 30, 56);
 
+    readonly StackPanel _messageActions = new() { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(12, 12, 12, 24) };
+
+    public void MessageActions(Action retry, Action search)
+    {
+        if (!Children.Contains(_messageActions)) Children.Add(_messageActions);
+        _messageActions.Children.Clear();
+        foreach (var (label, run) in new (string, Action)[] { ("Retry", retry), ("Find Lyrics", search) })
+        {
+            var button = new Button { Content = L.T(label), Margin = new Thickness(4), Padding = new Thickness(12, 8, 12, 8) };
+            button.SetResourceReference(StyleProperty, "SecondaryButton");
+            button.Click += (_, _) => run();
+            _messageActions.Children.Add(button);
+        }
+        _messageActions.Visibility = Visibility.Visible;
+    }
+
     public void ShowMessage(string text)
     {
+        _messageActions.Visibility = Visibility.Collapsed;
         _doc = null;
         _lines.Clear();
         _stack.Children.Clear();
@@ -288,6 +306,7 @@ public class LyricsView : Grid
 
     public void Show(LyricsDoc doc)
     {
+        _messageActions.Visibility = Visibility.Collapsed;
         _doc = doc;
         _refit.Stop();
         _snap = true;

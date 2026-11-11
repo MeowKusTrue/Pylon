@@ -193,15 +193,30 @@ public static class YtDlp
         return id != null ? "https://music.youtube.com/watch?v=" + id : src;
     }
 
-    /// <summary>
-    /// A song's sound saved as <paramref name="stem"/>.m4a (or the best audio there is), as the site has it: no
-    /// re-encoding, no ffmpeg. The saved file's path; null when it failed.
-    /// </summary>
-    public static async Task<string?> DownloadAudioAsync(string page, string stem)
+    /// <summary>A readable name with a stable source identity, including after filename sanitization.</summary>
+    public static string OfflineStem(string name, string source)
+    {
+        var safe = string.Concat(name.Split(Path.GetInvalidFileNameChars())).Trim().TrimEnd('.');
+        if (safe.Length == 0) safe = "_";
+        var id = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source)));
+        return safe[..Math.Min(safe.Length, 80)] + " [" + id[..32] + "]";
+    }
+
+    static readonly SemaphoreSlim AudioDownloads = new(1, 1);
+
+    /// <summary>Best audio without re-encoding; downloads serialize so two playlists cannot write the same partial file.</summary>
+    public static async Task<string?> DownloadAudioAsync(string page, string stem, CancellationToken cancel = default)
+    {
+        await AudioDownloads.WaitAsync(cancel);
+        try { return await DownloadAudioCoreAsync(page, stem, cancel); }
+        finally { AudioDownloads.Release(); }
+    }
+
+    static async Task<string?> DownloadAudioCoreAsync(string page, string stem, CancellationToken token)
     {
         if (page.StartsWith("ytsearch://")) page = "ytsearch1:" + Uri.UnescapeDataString(page["ytsearch://".Length..]);
         var psi = new ProcessStartInfo(Exe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-        foreach (var a in new[] { "--no-warnings", "--no-progress", "--no-playlist", "-f", "ba[ext=m4a]/ba", "-o", stem + ".%(ext)s", "--print", "after_move:filepath" })
+        foreach (var a in new[] { "--no-warnings", "--no-progress", "--no-playlist", "--no-overwrites", "-f", "ba[ext=m4a]/ba", "-o", stem.Replace("%", "%%") + ".%(ext)s", "--print", "after_move:filepath" })
             psi.ArgumentList.Add(a);
         Common(psi);
         psi.ArgumentList.Add(page);
@@ -210,9 +225,21 @@ public static class YtDlp
             using var p = Process.Start(psi)!;
             var stdout = p.StandardOutput.ReadToEndAsync();
             var stderr = p.StandardError.ReadToEndAsync();
-            using var cancel = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using var cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
+            cancel.CancelAfter(TimeSpan.FromMinutes(5));
+            using var cancelled = token.Register(() =>
+            {
+                try { p.Kill(entireProcessTree: true); }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            });
             try { await p.WaitForExitAsync(cancel.Token); }
-            catch (OperationCanceledException) { p.Kill(entireProcessTree: true); return null; }
+            catch (OperationCanceledException)
+            {
+                try { p.Kill(entireProcessTree: true); }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+                token.ThrowIfCancellationRequested();
+                return null;
+            }
             _ = await stderr;
             var file = (await stdout).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
             return p.ExitCode == 0 && file != null && File.Exists(file) ? file : null;

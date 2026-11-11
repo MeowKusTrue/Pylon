@@ -11,8 +11,16 @@ void Check(string name, bool ok, string detail = "")
     if (!ok) failed++;
 }
 
+Check("offline names distinguish sources after sanitizing", YtDlp.OfflineStem("Song?", "source1") != YtDlp.OfflineStem("Song*", "source2")
+    && YtDlp.OfflineStem("Song?", "source1") == YtDlp.OfflineStem("Song*", "source1")
+    && YtDlp.OfflineStem("CON", "source1").Length < 180);
+
 Check("maximum volume change keeps the actual level", Math.Abs(AudioChain.ResizeVolumeSlider(0.4, 125, 300) * 300 - 50) < 0.001
     && AudioChain.ResizeVolumeSlider(1, 300, 100) == 1);
+Check("own audio uses fallback instead of silently clipping requested gain", Player.SupportsOwnVolume(1.25, 1)
+    && !Player.SupportsOwnVolume(2, 1) && !Player.SupportsOwnVolume(1, 3) && !Player.SupportsOwnVolume(double.NaN, 1));
+Check("clip time preserves total hours", Converter.FormatTime(90_123_500) == "25:02:03.5"
+    && Converter.ParseTime(Converter.FormatTime(90_123_500)) == 90_123_500);
 Settings.Set("video.upscale", "Point");
 Settings.Set("video.hdr", "Never");
 Check("video options keep their command-line prefixes", Settings.EngineArgs().Contains("--d3d11-upscale-mode=point")
@@ -466,12 +474,211 @@ Check("per-player gain", full > 0.01 && Math.Abs(quarter / full - 0.25) < 0.05, 
     }
 }
 
+{
+    var clean = BugReport.Sanitize("file C:\\Users\\private\\song.mp3\nhttps://user:pass@example.com/music?token=hidden\nAuthorization: Bearer hidden\n\\\\server\\private\\song.mp3");
+    Check("report preview hides paths and credentials", !clean.Contains("private") && !clean.Contains("hidden") && !clean.Contains("pass"));
+    Check("partial playback only reports decoder failures", PlaybackDiagnostics.HasDecoderFailure(["no suitable decoder module"])
+        && !PlaybackDiagnostics.HasDecoderFailure(["buffering", "late picture"]));
+    var result = await Recognize.IdentifyDetailedAsync(Path.Combine(Library.Dir, "absent.mp3"));
+    Check("recognition distinguishes missing input from no match", result.Song == null && result.Message.Contains("local audio file"));
+    foreach (var (name, load) in new (string, Action)[] { ("settings.json", Settings.Load), ("library.json", Library.Load) })
+    {
+        var path = Path.Combine(Library.Dir, name);
+        var previous = File.Exists(path) ? File.ReadAllText(path) : null;
+        try
+        {
+            File.WriteAllText(path, "{broken");
+            var rejected = false;
+            try { load(); } catch (System.Text.Json.JsonException) { rejected = true; }
+            Check("profile preserves invalid " + name, rejected && File.ReadAllText(path) == "{broken");
+        }
+        finally { if (previous == null) File.Delete(path); else File.WriteAllText(path, previous); }
+    }
+}
+if (Environment.GetEnvironmentVariable("PYLON_FFMPEG") is { } realFfmpeg)
+{
+    var dir = Directory.CreateDirectory(Path.Combine(Library.Dir, "join-checks")).FullName;
+    var source = Path.Combine(dir, "part.wav");
+    WriteTone(source, 1);
+    foreach (var preset in Converter.Presets.Where(p => p.Extension is ".mp3" or ".flac"))
+    {
+        var dst = Path.Combine(dir, "joined" + preset.Extension);
+        var result = await Ffmpeg.JoinAsync([source, source], dst, preset, null, CancellationToken.None);
+        using var media = result.Ok ? TagLib.File.Create(dst) : null;
+        Check("join respects preset " + preset.Extension, result.Ok && media?.Properties.Duration.TotalSeconds > 1.8, result.Error ?? "");
+    }
+    var existing = Path.Combine(dir, "existing.wav");
+    File.WriteAllText(existing, "keep my original");
+    var wav = Converter.Presets.First(p => p.Extension == ".wav");
+    var collision = await Converter.RunAsync(source, existing, wav);
+    Check("conversion never overwrites an existing result", !collision.Ok && File.ReadAllText(existing) == "keep my original");
+    using var cancel = new CancellationTokenSource();
+    cancel.Cancel();
+    var cancelled = await Ffmpeg.RunAsync(Converter.Args(source, existing, wav, -1, -1), existing, 1000, null, cancel.Token);
+    Check("cancelled conversion preserves existing data", !cancelled.Ok && File.ReadAllText(existing) == "keep my original"
+        && !Directory.EnumerateFiles(dir, ".pylon-*").Any());
+}
+
+// Hold opening before it reaches D3D: exercise late events without creating a GPU device or playing sound.
+{
+    using var vlc = new LibVLC("--quiet", "--no-video", "--no-audio");
+    using var player = new Player(vlc);
+    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+    var closing = typeof(Player).GetField("_closing", flags)!;
+    var active = typeof(Player).GetField("_engine", flags)!;
+    var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    closing.SetValue(player, blocked.Task);
+    var started = 0;
+    var ended = 0;
+    player.OwnPlaying += _ => started++;
+    player.OwnEnded += _ => ended++;
+    var choice = new TrackChoice(0, "en", 0, "en", false);
+    player.PlayOwn("old.mp4", 0, false, null, choice, [], 0);
+    var old = (VideoEngine)active.GetValue(player)!;
+    var generation = player.OwnGeneration;
+    player.PlayOwn("new.mp4", 0, false, null, choice, [], 0);
+    ((Action?)typeof(VideoEngine).GetField("FirstFrame", flags)!.GetValue(old))?.Invoke();
+    ((Action?)typeof(VideoEngine).GetField("Ended", flags)!.GetValue(old))?.Invoke();
+    Check("late engine events cannot change the new track", started == 0 && ended == 0 && player.State == VLCState.Opening
+        && player.OwnGeneration != generation);
+    player.Stop();
+    blocked.SetResult();
+    await ((Task)closing.GetValue(player)!).WaitAsync(TimeSpan.FromSeconds(10));
+    Check("cancelled queued openings are disposed without opening video", !player.OnOwnEngine && old.Presented == 0);
+}
+
+{
+    var a = Path.Combine(Library.Dir, "match-a.mp3");
+    var b = Path.Combine(Library.Dir, "match-b.mp3");
+    File.WriteAllText(a, ""); File.WriteAllText(b, "");
+    Library.Data.Meta[a] = new TrackMeta { Title = "Song", Artist = "Joanna", DurationMs = 180000 };
+    Library.Data.Meta[b] = new TrackMeta { Title = "Song", Artist = "Ann", DurationMs = 240000, Isrc = "ISRC-B" };
+    Library.Touch();
+    Check("local song does not match a substring artist", Library.FindSong("Song", "Ann", 180000) == null);
+    Check("local song checks recording duration", Library.FindSong("Song", "Ann", 240000) == b && Library.FindSong("Song", "Ann", 300000) == null);
+    Check("local song rejects a different ISRC", Library.FindSong("Song", "Ann", 240000, "ISRC-C") == null);
+    Library.Data.Meta[b].Title = "Renamed";
+    Library.Touch();
+    Check("retagging refreshes the song index without changing its size", Library.FindSong("Renamed", "Ann", 240000) == b && Library.FindSong("Song", "Ann", 240000) == null);
+    Check("empty artist never matches an arbitrary recording", Library.FindSong("Song", "") == null);
+    Library.Data.Meta.Remove(a); Library.Data.Meta.Remove(b); Library.Touch();
+    Check("missing selected output differs from system default", AudioOutputWatch.IsMissing("Headphones", ["Speakers"])
+        && !AudioOutputWatch.IsMissing("Headphones", ["Headphones"]) && !AudioOutputWatch.IsMissing("System default", []));
+}
+{
+    var path = Path.Combine(Library.Dir, "settings.json");
+    var previous = File.Exists(path) ? File.ReadAllText(path) : null;
+    try
+    {
+        for (var i = 0; i < 5; i++) { File.WriteAllText(path, "{\"probe\":\"" + i + "\"}"); ProfileBackups.BeforeReplace(path, force: true); }
+        var backup = ProfileBackups.Latest("settings.json")!;
+        var saved = File.ReadAllText(backup);
+        File.WriteAllText(path, "{broken original");
+        ProfileBackups.Restore("settings.json", backup);
+        Check("backup restore keeps the damaged original", File.ReadAllText(path) == saved
+            && Directory.EnumerateFiles(Library.Dir, "settings.json.unreadable-*").Any(f => File.ReadAllText(f) == "{broken original"));
+        Check("profile backups are bounded", Directory.EnumerateFiles(Path.Combine(Library.Dir, "backups"), "settings-*.json").Count() == 3);
+        File.WriteAllText(backup, "{bad backup");
+        var rejected = false;
+        try { ProfileBackups.Restore("settings.json", backup); } catch (System.Text.Json.JsonException) { rejected = true; }
+        Check("invalid backup cannot replace a readable profile", rejected && File.ReadAllText(path) == saved);
+    }
+    finally { if (previous == null) File.Delete(path); else File.WriteAllText(path, previous); }
+}
+{
+    var attempts = 0;
+    var job = BackgroundJobs.Start("retry fixture", async (j, ct) => { await Task.Yield(); if (++attempts == 1) throw new IOException("fixture failure"); j.Report(0.5); return "result"; });
+    await job.Completion;
+    Check("background failure remains retryable", job.State == JobState.Failed);
+    job.Retry(); await job.Completion;
+    job.Report(0.1);
+    Check("background retry completes without stale progress", attempts == 2 && job.State == JobState.Completed && job.Progress == 1 && job.Output == "result");
+    var waiting = BackgroundJobs.Start("cancel fixture", async (j, ct) => { await Task.Delay(Timeout.Infinite, ct); return null; });
+    waiting.Cancel(); await waiting.Completion;
+    Check("background cancellation is not a failure", waiting.State == JobState.Cancelled);
+}
+if (Environment.GetEnvironmentVariable("PYLON_FFMPEG") is { } ffmpegExe)
+{
+    var dir = Directory.CreateDirectory(Path.Combine(Library.Dir, "normalize-checks")).FullName;
+    var a = Path.Combine(dir, "44k.wav"); var b = Path.Combine(dir, "48k.wav");
+    WriteTone(a, 1); WriteTone(b, 1, 48000);
+    var dst = Path.Combine(dir, "normalized.flac");
+    var joined = await Ffmpeg.JoinAsync([a, b], dst, Converter.Presets.First(p => p.Extension == ".flac"), null, CancellationToken.None);
+    using (var f = joined.Ok ? TagLib.File.Create(dst) : null)
+        Check("join normalizes different audio sample rates", joined.Ok && f?.Properties.Duration.TotalSeconds > 1.8 && f.Properties.AudioSampleRate == 44100, joined.Error ?? "");
+    var copy = await Ffmpeg.JoinAsync([a, b], Path.Combine(dir, "copy.wav"), Converter.Presets.First(p => p.Extension == ""), null, CancellationToken.None);
+    Check("incompatible lossless stream copy is explained before writing", !copy.Ok && copy.Error?.Contains("matching codecs") == true && !File.Exists(Path.Combine(dir, "copy.wav")));
+    var videos = new List<string>();
+    foreach (var (ext, codec, size, fps) in new[] { ("mp4", "libx264", "32x32", "10"), ("avi", "mpeg4", "64x48", "15") })
+    {
+        var file = Path.Combine(dir, "source." + ext);
+        var made = await Ffmpeg.RunAsync(["-hide_banner", "-nostdin", "-y", "-f", "lavfi", "-i", $"color=c=black:s={size}:r={fps}:d=1", "-c:v", codec, "-pix_fmt", "yuv420p", "-progress", "pipe:1", file], file, 1000, null, CancellationToken.None);
+        Check("video join fixture " + ext, made.Ok, made.Error ?? "");
+        videos.Add(file);
+    }
+    var videoOut = Path.Combine(dir, "normalized.mp4");
+    var video = await Ffmpeg.JoinAsync(videos, videoOut, Converter.Presets.First(p => p.Name == "MP4 (H.264 + AAC)"), null, CancellationToken.None);
+    using (var f = video.Ok ? TagLib.File.Create(videoOut) : null)
+        Check("join normalizes video codec size and frame rate", video.Ok && f?.Properties.VideoWidth == 32 && f.Properties.Duration.TotalSeconds > 1.8, video.Error ?? "");
+    var voiced = Path.Combine(dir, "with-audio.mp4");
+    var voicedMade = await Ffmpeg.RunAsync(["-hide_banner", "-nostdin", "-y", "-i", videos[1], "-i", a,
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest", "-progress", "pipe:1", voiced], voiced, 1000, null, CancellationToken.None);
+    var mixed = Path.Combine(dir, "silent-and-voiced.mp4");
+    var mixedJoin = voicedMade.Ok ? await Ffmpeg.JoinAsync([videos[0], voiced], mixed,
+        Converter.Presets.First(p => p.Name == "MP4 (H.264 + AAC)"), null, CancellationToken.None) : voicedMade;
+    var pcm = Path.Combine(dir, "joined-audio.f32");
+    var decoded = mixedJoin.Ok ? await Ffmpeg.RunAsync(["-hide_banner", "-nostdin", "-y", "-i", mixed, "-vn", "-c:a", "pcm_f32le", "-f", "f32le", "-progress", "pipe:1", pcm], pcm, 2000, null, CancellationToken.None) : mixedJoin;
+    double Quiet = 1, Sound = 0;
+    if (decoded.Ok)
+    {
+        var bytes = File.ReadAllBytes(pcm);
+        double Level(double seconds)
+        {
+            var from = (int)(seconds * 44100 * 2);
+            var to = Math.Min(bytes.Length / 4, from + 4410 * 2);
+            double energy = 0;
+            for (var i = from; i < to; i++) { var value = BitConverter.ToSingle(bytes, i * 4); energy += value * value; }
+            return to > from ? Math.Sqrt(energy / (to - from)) : 0;
+        }
+        Quiet = Level(0.2); Sound = Level(1.4);
+    }
+    Check("joining a silent and voiced video fills only the missing audio", decoded.Ok && Quiet < 0.001 && Sound > 0.05,
+        $"silent={Quiet:0.0000} sound={Sound:0.0000} {decoded.Error}");
+    using var stop = new CancellationTokenSource(700);
+    var active = Path.Combine(dir, "cancelled.wav");
+    var result = await Ffmpeg.RunAsync(["-hide_banner", "-nostdin", "-y", "-re", "-stream_loop", "-1", "-i", a, "-c:a", "pcm_s16le", "-progress", "pipe:1", active], active, 30000, null, stop.Token);
+    Check("active conversion cancellation removes its partial result", !result.Ok && !File.Exists(active)
+        && !Directory.EnumerateFiles(dir, ".pylon-*").Any() && !Directory.EnumerateDirectories(dir, ".pylon-join-*").Any());
+}
+
+{
+    QueueSession.Save(["first.wav", "https://example.com/music"], 1, 12345);
+    var saved = QueueSession.Load();
+    Check("queue session keeps the selection and playback position", saved is { Index: 1, Position: 12345 } && saved.Items.SequenceEqual(new[] { "first.wav", "https://example.com/music" }));
+    File.WriteAllText(Path.Combine(Library.Dir, "queue.json"), "{broken");
+    Check("damaged queue does not block startup", QueueSession.Load() == null);
+    QueueSession.Save([], -1, 0);
+    Check("a cleared queue stays empty on restart", QueueSession.Load() == null);
+}
+
+Check("isolated data profiles cannot alter the Windows shell", !ShellRegistration.CanWriteShell);
+{
+    var data = Environment.GetEnvironmentVariable("PYLON_DATA");
+    var probe = Environment.GetEnvironmentVariable("PYLON_VELOPACK_TEST");
+    try
+    {
+        Environment.SetEnvironmentVariable("PYLON_VELOPACK_TEST", "fixture");
+        Environment.SetEnvironmentVariable("PYLON_DATA", null);
+        Check("installer probes cannot alter the Windows shell", !ShellRegistration.CanWriteShell);
+    }
+    finally { Environment.SetEnvironmentVariable("PYLON_DATA", data); Environment.SetEnvironmentVariable("PYLON_VELOPACK_TEST", probe); }
+}
+
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 
-static void WriteTone(string path, int seconds = 3) // a 440 Hz sine, 16-bit stereo
+static void WriteTone(string path, int seconds = 3, int rate = 44100) // a 440 Hz sine, 16-bit stereo
 {
-    const int rate = 44100;
     using var w = new BinaryWriter(File.Create(path));
     int bytes = rate * seconds * 4;
     w.Write("RIFF"u8); w.Write(36 + bytes); w.Write("WAVEfmt "u8); w.Write(16); w.Write((short)1); w.Write((short)2);

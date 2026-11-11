@@ -76,7 +76,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
     AVBufferRef* _hwDevice;
     SwsContext* _sws;
     AVStream* _stream;
-    bool _hw, _strict;
+    bool _hw, _strict, _openAttempted;
     long _openTicks;
 
     ID3D11Device _device = null!;
@@ -156,12 +156,15 @@ public sealed unsafe partial class VideoEngine : IDisposable
     /// </summary>
     public void Open(string path, long startMs = 0, bool paused = false, bool strict = false, Func<IReadOnlyList<EngineTrack>, IReadOnlyList<EngineTrack>, int>? chooseAudio = null)
     {
+        _stop.Token.ThrowIfCancellationRequested();
+        _openAttempted = true;
         _strict = strict;
         _openTicks = Stopwatch.GetTimestamp();
         CreateDevice();
         Perf.Mark("engine: device");
         fixed (AVFormatContext** format = &_format)
             Check(ffmpeg.avformat_open_input(format, path, null, null), "open");
+        _stop.Token.ThrowIfCancellationRequested();
         var index = BestVideo();
         // find_stream_info reads and decodes a part of the file: only what a header doesn't tell (MPEG-TS, MPEG-PS) needs it
         if (index < 0 || _format->streams[index]->codecpar->width == 0)
@@ -180,6 +183,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
         Perf.Mark("engine: decoder");
         if (paused) Paused = true;
         if (startMs > 0) Seek(startMs);
+        _stop.Token.ThrowIfCancellationRequested();
         _timer = CreateWaitableTimerExW(IntPtr.Zero, null, 2, 0x1F0003); // CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS
         foreach (var loop in _audioStream != null ? new ThreadStart[] { DemuxLoop, DecodeLoop, PresentLoop, AudioLoop } : [DemuxLoop, DecodeLoop, PresentLoop])
         {
@@ -201,6 +205,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
         if (_format->nb_chapters > 0) return "chapters";
         var video = _stream->codecpar;
+        if (video->color_trc is AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084 or AVColorTransferCharacteristic.AVCOL_TRC_ARIB_STD_B67)
+            return "HDR video requires libVLC"; // this engine currently presents an 8-bit SDR swap chain
         if (video->field_order is not (AVFieldOrder.AV_FIELD_UNKNOWN or AVFieldOrder.AV_FIELD_PROGRESSIVE)) return "interlaced";
         if (ffmpeg.av_packet_side_data_get(video->coded_side_data, video->nb_coded_side_data, AVPacketSideDataType.AV_PKT_DATA_SPHERICAL) != null) return "360°";
         return null;
@@ -994,6 +1000,12 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
     }
 
+    public void RequestStop()
+    {
+        Volume = 0;
+        _stop.Cancel();
+    }
+
     public void Dispose()
     {
         _stop.Cancel();
@@ -1007,6 +1019,13 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
         _packets.Dispose();
         _frames.Dispose();
+        if (!_openAttempted)
+        {
+            _audioPackets.Dispose();
+            _audioStarted.Dispose();
+            _audioDone.Dispose();
+            return;
+        }
         CloseAudio();
         var shown = _shown;
         ffmpeg.av_frame_free(&shown);

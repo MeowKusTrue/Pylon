@@ -40,7 +40,7 @@ public record Category(string Name, string Glyph, string Title, string Group, Li
 /// <summary>Persistent preferences (settings.json next to the library) and the settings schema from the mockup.</summary>
 public static class Settings
 {
-    static readonly string FilePath = Path.Combine(Library.Dir, "settings.json");
+    static string FilePath => Path.Combine(Library.Dir, "settings.json");
     static Dictionary<string, string> _values = new();
 
     /// <summary>Every value the user changed (for the problem report, which drops anything secret).</summary>
@@ -54,9 +54,17 @@ public static class Settings
     {
         try
         {
-            if (File.Exists(FilePath)) _values = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(FilePath)) ?? new();
+            _values = ParseProfile(File.ReadAllText(FilePath));
         }
-        catch (JsonException) { _values = new(); }
+        catch (FileNotFoundException) { _values = new(); }
+        catch (DirectoryNotFoundException) { _values = new(); }
+    }
+
+    internal static Dictionary<string, string> ParseProfile(string text)
+    {
+        var values = JsonSerializer.Deserialize<Dictionary<string, string>>(text) ?? throw new JsonException("Invalid settings document.");
+        if (values.Values.Any(v => v == null)) throw new JsonException("Invalid settings value.");
+        return values;
     }
 
     public static void Save()
@@ -68,6 +76,7 @@ public static class Settings
         {
             Directory.CreateDirectory(Library.Dir);
             File.WriteAllText(tmp, JsonSerializer.Serialize(_values, new JsonSerializerOptions { WriteIndented = true }));
+            ProfileBackups.BeforeReplace(FilePath);
             File.Move(tmp, FilePath, true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

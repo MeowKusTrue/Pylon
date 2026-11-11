@@ -81,9 +81,9 @@ public class Bookmark
 public static class Library
 {
     /// <summary>App data folder; PYLON_DATA overrides it (used by UI test runs).</summary>
-    public static readonly string Dir = Environment.GetEnvironmentVariable("PYLON_DATA")
+    public static string Dir { get; internal set; } = Environment.GetEnvironmentVariable("PYLON_DATA")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pylon");
-    static readonly string FilePath = Path.Combine(Dir, "library.json");
+    static string FilePath => Path.Combine(Dir, "library.json");
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public static LibraryData Data { get; private set; } = new();
@@ -93,21 +93,31 @@ public static class Library
 
     public static void Load()
     {
+        _songs = null;
         try
         {
-            if (File.Exists(FilePath)) Data = JsonSerializer.Deserialize<LibraryData>(File.ReadAllText(FilePath)) ?? new();
+            Data = ParseProfile(File.ReadAllText(FilePath));
         }
-        catch (JsonException)
-        {
-            File.Copy(FilePath, FilePath + ".broken", true); // keep the user's data around, start fresh
-            Data = new();
-        }
+        catch (FileNotFoundException) { Data = new(); }
+        catch (DirectoryNotFoundException) { Data = new(); }
         // JSON loses the case-insensitive comparer
         Data.History = new(Data.History, StringComparer.OrdinalIgnoreCase);
         Data.Meta = new(Data.Meta, StringComparer.OrdinalIgnoreCase);
         Data.Subtitles = new(Data.Subtitles, StringComparer.OrdinalIgnoreCase);
         // 1.9.9 played songs from playlists as videos and wrote them down so: back among the music
         foreach (var (path, h) in Data.History) if (YtDlp.IsSong(path)) h.IsAudio = true;
+    }
+
+    internal static LibraryData ParseProfile(string text)
+    {
+        var loaded = JsonSerializer.Deserialize<LibraryData>(text) ?? throw new JsonException("Invalid library document.");
+        if (loaded.VideoFolders == null || loaded.MusicFolders == null || loaded.Pinned == null || loaded.LyricFiles == null
+            || loaded.LyricOffsets == null || loaded.IntroEnds == null || loaded.Streams == null || loaded.Podcasts == null
+            || loaded.Playlists == null || loaded.Disliked == null || loaded.History == null || loaded.Meta == null
+            || loaded.Subtitles == null || loaded.Bookmarks == null || loaded.Playlists.Any(p => p == null || p.Items == null)
+            || loaded.History.Values.Any(v => v == null) || loaded.Meta.Values.Any(v => v == null))
+            throw new JsonException("Invalid library data.");
+        return loaded;
     }
 
     /// <summary>Writes the library now (on quitting); a save still waiting is folded into this one.</summary>
@@ -132,6 +142,7 @@ public static class Library
             {
                 Directory.CreateDirectory(Dir);
                 File.WriteAllText(tmp, json);
+                ProfileBackups.BeforeReplace(FilePath);
                 File.Move(tmp, FilePath, true); // atomic replace: a crash mid-write can't eat the library
                 _written = version;
             }
@@ -149,6 +160,7 @@ public static class Library
     /// </summary>
     public static void Touch()
     {
+        _songs = null;
         if (Application.Current?.Dispatcher is { } ui && ui.CheckAccess())
         {
             _saveTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1.5), DispatcherPriority.Background, (_, _) =>
@@ -280,7 +292,7 @@ public static class Library
         if (Interlocked.Exchange(ref _indexing, 1) == 1) return;
         var folders = Data.MusicFolders.ToList();
         // Meta is a plain Dictionary the UI thread writes to: this thread only reads a copy of the stamps
-        var stamps = Data.Meta.ToDictionary(m => m.Key, m => m.Value.Stamp);
+        var stamps = Data.Meta.ToDictionary(m => m.Key, m => (m.Value.Stamp, m.Value.DurationMs));
         Task.Run(async () =>
         {
             var vlc = new LibVLC("--no-video", "--no-audio", "--quiet"); // own instance: keeps tag parsing away from playback
@@ -290,7 +302,7 @@ public static class Library
                 foreach (var file in folders.SelectMany(f => MediaFiles(f, true)).Where(IsAudio))
                 {
                     var stamp = File.GetLastWriteTimeUtc(file).Ticks;
-                    if (stamps.GetValueOrDefault(file) == stamp) continue;
+                    if (stamps.GetValueOrDefault(file) is var previous && previous.Stamp == stamp && previous.DurationMs > 0) continue;
                     var media = new Media(vlc, file, FromType.FromPath);
                     await media.Parse(MediaParseOptions.ParseLocal | MediaParseOptions.FetchLocal, 2000);
                     var meta = new TrackMeta
@@ -300,10 +312,11 @@ public static class Library
                         Artist = media.Meta(MetadataType.Artist),
                         Album = media.Meta(MetadataType.Album),
                         Genre = media.Meta(MetadataType.Genre),
+                        DurationMs = Math.Max(0, media.Duration),
                         Art = media.Meta(MetadataType.ArtworkURL),
                     };
                     DisposeLater(media);
-                    ui.Invoke(() => Data.Meta[file] = meta);
+                    ui.Invoke(() => { Data.Meta[file] = meta; _songs = null; });
                     if (++dirty % 50 == 0) ui.Invoke(Touch);
                 }
                 if (dirty > 0) ui.Invoke(Touch);
@@ -409,7 +422,8 @@ public static class Library
     // ───────── songs by name ─────────
 
     static Dictionary<string, List<string>>? _songs;
-    static int _songsFor = -1;
+    static readonly System.Text.RegularExpressions.Regex ArtistParts = new(@",|;|\s+(?:feat\.?|ft\.?|featuring)\s+",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>"The Beatles" and "the beatles!" alike: lower case, letters and digits only.</summary>
     public static string SongName(string s) => new([.. s.ToLowerInvariant().Where(char.IsLetterOrDigit)]);
@@ -419,19 +433,27 @@ public static class Library
     /// are looked up in a table built once (the disk is asked only about a match); it used to walk the whole library for
     /// every song of an import or a radio page.
     /// </summary>
-    public static string? FindSong(string title, string artist)
+    public static string? FindSong(string title, string artist, long durationMs = 0, string? isrc = null)
     {
-        // ponytail: rebuilt when the number of known songs changes, not on a retag of one file (rare; a restart fixes it)
-        if (_songs == null || _songsFor != Data.Meta.Count)
+        var song = SongName(title);
+        var who = SongName(ArtistParts.Split(artist)[0]);
+        if (song.Length == 0 || who.Length == 0) return null;
+        if (_songs == null)
         {
             _songs = [];
             foreach (var (path, m) in Data.Meta)
                 if (m.Title is { Length: > 0 } t && !path.Contains("://"))
                     (_songs.TryGetValue(SongName(t), out var list) ? list : _songs[SongName(t)] = []).Add(path);
-            _songsFor = Data.Meta.Count;
         }
-        var who = SongName(artist.Split(',')[0]);
-        return _songs.GetValueOrDefault(SongName(title))?.FirstOrDefault(p => SongName(Data.Meta.GetValueOrDefault(p)?.Artist ?? "").Contains(who) && File.Exists(p));
+        return _songs.GetValueOrDefault(song)?.Where(p =>
+        {
+            if (!Data.Meta.TryGetValue(p, out var m) || SongName(m.Title ?? "") != song
+                || !ArtistParts.Split(m.Artist ?? "")
+                    .Any(a => SongName(a) == who)) return false;
+            if (!string.IsNullOrWhiteSpace(isrc) && !string.IsNullOrWhiteSpace(m.Isrc) && SongName(isrc) != SongName(m.Isrc)) return false;
+            var length = m.DurationMs > 0 ? m.DurationMs : Data.History.GetValueOrDefault(p)?.Length ?? 0;
+            return (durationMs <= 0 || length > 0 && Math.Abs((double)length - durationMs) <= Math.Clamp(durationMs * 0.015, 2000, 5000)) && File.Exists(p);
+        }).OrderBy(p => Math.Abs((double)Data.Meta[p].DurationMs - durationMs)).FirstOrDefault();
     }
 
     // ───────── thumbnails ─────────

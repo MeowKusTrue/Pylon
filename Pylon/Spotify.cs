@@ -126,7 +126,7 @@ public static class SpotifyImport
         var items = new List<string>();
         foreach (var t in tracks)
         {
-            var file = Library.FindSong(t.Title, t.Artist);
+            var file = Library.FindSong(t.Title, t.Artist, t.DurationMs, t.Isrc);
             var item = file ?? "ytsearch://" + Uri.EscapeDataString($"{t.Artist} - {t.Title}");
             if (file != null) Library.Data.Meta[file].SpotifyId = t.Id is { Length: > 0 } ? t.Id : Library.Data.Meta[file].SpotifyId;
             else

@@ -19,6 +19,7 @@ public static class Recognize
     public static bool Possible => ApiKey.Length > 0;
 
     public record Song(string Title, string Artist, string? Album, string? Cover);
+    public record Result(Song? Song, string Message);
 
     static readonly SemaphoreSlim Gate = new(1, 1);
 
@@ -29,16 +30,26 @@ public static class Recognize
     static readonly string CoverDir = Path.Combine(Library.Dir, "covers");
 
     /// <summary>The song, or null when it isn't known (or fpcalc / the network isn't there).</summary>
-    public static async Task<Song?> IdentifyAsync(string path)
+    public static async Task<Song?> IdentifyAsync(string path) => (await IdentifyDetailedAsync(path)).Song;
+
+    public static async Task<Result> IdentifyDetailedAsync(string path)
     {
-        if (!Possible || string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+        var message = "No matching recording was found. Try another version or edit the track information manually.";
+        var song = await IdentifyCoreAsync(path, reason => message = reason);
+        return new(song, message);
+    }
+
+    static async Task<Song?> IdentifyCoreAsync(string path, Action<string> fail)
+    {
+        if (!Possible || string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        { fail("Recognition needs an available local audio file."); return null; }
         await Gate.WaitAsync();
         try
         {
-            if (!await EnsureFpcalcAsync()) return null;
+            if (!await EnsureFpcalcAsync()) { fail("The recognition tool is unavailable. Check your connection and try again."); return null; }
             var (duration, fingerprint) = await FingerprintAsync(path);
             if (duration <= 0 || string.IsNullOrWhiteSpace(fingerprint))
-            { ErrorLog.Note("recognition", "fingerprint unavailable or timed out"); return null; }
+            { fail("Could not read enough audio for recognition. Try a longer, playable recording."); ErrorLog.Note("recognition", "fingerprint unavailable or timed out"); return null; }
             // POST: a fingerprint of a long song is too long for a URL
             using var res = await Http.PostAsync("https://api.acoustid.org/v2/lookup", new FormUrlEncodedContent(new Dictionary<string, string>
             {
@@ -47,7 +58,7 @@ public static class Recognize
             res.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
             if (!doc.RootElement.TryGetProperty("status", out var status) || status.GetString() != "ok")
-            { ErrorLog.Note("recognition service", "AcoustID returned an error response"); return null; }
+            { fail("The recognition service is unavailable. Try again later."); ErrorLog.Note("recognition service", "AcoustID returned an error response"); return null; }
             var best = doc.RootElement.GetProperty("results").EnumerateArray()
                 .Where(r => r.GetProperty("score").GetDouble() > 0.6 && r.TryGetProperty("recordings", out var recordings) && recordings.ValueKind == JsonValueKind.Array)
                 .OrderByDescending(r => r.GetProperty("score").GetDouble())
@@ -57,7 +68,11 @@ public static class Recognize
                     && artists.ValueKind == JsonValueKind.Array && artists.EnumerateArray().Any(a =>
                         a.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString())));
             if (best.ValueKind != JsonValueKind.Object)
-            { ErrorLog.Note("recognition", "no matches above confidence threshold with usable metadata"); return null; }
+            {
+                if (duration < 10) fail("No matching recording was found. Try a longer audio fragment.");
+                ErrorLog.Note("recognition", "no matches above confidence threshold with usable metadata");
+                return null;
+            }
             var artist = string.Join(", ", best.GetProperty("artists").EnumerateArray().Select(a => a.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null).Where(n => !string.IsNullOrWhiteSpace(n)));
             var group = best.TryGetProperty("releasegroups", out var g) && g.GetArrayLength() > 0 ? g[0] : default;
             string? album = null, cover = null;
@@ -70,7 +85,7 @@ public static class Recognize
             return new Song(best.GetProperty("title").GetString()!, artist, album, cover);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException or IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        { NoteFailure("recognition", e); return null; }
+        { fail(e is HttpRequestException or TaskCanceledException ? "The recognition service could not be reached. Check your connection and try again." : "Could not read this recording for recognition."); NoteFailure("recognition", e); return null; }
         finally { Gate.Release(); }
     }
 
