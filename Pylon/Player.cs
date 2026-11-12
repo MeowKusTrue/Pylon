@@ -153,7 +153,8 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
         {
             if (!_cues.TryGetValue(track, out var list)) _cues[track] = list = [];
             var at = list.FindLastIndex(c => c.Start <= start); // they come in order, and again after a seek
-            if (at >= 0 && list[at].Start == start && list[at].Text == text) return;
+            for (var i = at; i >= 0 && list[i].Start == start; i--)
+                if (list[i].Text == text && list[i].End == end) return;
             list.Insert(at + 1, new SubText.Cue(start, end, text));
         }
     }

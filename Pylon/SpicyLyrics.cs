@@ -30,7 +30,7 @@ public static class SpicyLyrics
     public static bool Enabled => Key.Length > 0;
 
     /// <summary>The Spicy Lyrics JSON for the track (raw, for the cache), or null.</summary>
-    public static async Task<string?> FetchAsync(string path, string title, string artist, double duration, string tags)
+    public static async Task<string?> FetchAsync(string path, string title, string artist, double duration, string tags, CancellationToken cancel = default)
     {
         var linked = SpotifyLink.Match(tags) is { Success: true } m ? m.Groups[1].Value : LinkInFile(path);
         var tried = new HashSet<string>(StringComparer.Ordinal);
@@ -42,10 +42,10 @@ public static class SpicyLyrics
                 if (!tried.Add(id)) continue;
                 using var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.spicylyrics.org/v1/lyrics/{id}");
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Key);
-                using var res = await Http.SendAsync(req);
+                using var res = await Http.SendAsync(req, cancel);
                 if (res.StatusCode == System.Net.HttpStatusCode.NotFound) continue;
                 res.EnsureSuccessStatusCode(); // auth, throttling and outages must not become cached misses
-                var json = await res.Content.ReadAsStringAsync();
+                var json = await res.Content.ReadAsStringAsync(cancel);
                 if (Parse(json) != null) return json;
                 lookupError = new JsonException("Spicy returned no usable lyrics body");
             }
@@ -55,15 +55,15 @@ public static class SpicyLyrics
         foreach (var (queryTitle, queryArtist) in Queries(title, artist))
         {
             string[] ids;
-            try { ids = await Lookup(queryTitle, queryArtist); }
+            try { ids = await Lookup(queryTitle, queryArtist, cancel); }
             catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
-            { lookupError = e; continue; }
+            { cancel.ThrowIfCancellationRequested(); lookupError = e; continue; }
             if (await TryIds(ids) is { } lyrics) return lyrics;
         }
         string[] spotifyIds = [];
-        try { spotifyIds = await SpotifySearchIdsAsync(title, artist, duration); }
+        try { spotifyIds = await SpotifySearchIdsAsync(title, artist, duration, cancel); }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException)
-        { lookupError = e; }
+        { cancel.ThrowIfCancellationRequested(); lookupError = e; }
         if (await TryIds(spotifyIds) is { } spotify) return spotify;
         if (lookupError != null) throw new HttpRequestException("Spotify metadata lookup failed", lookupError);
         return null;
@@ -82,11 +82,11 @@ public static class SpicyLyrics
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException) { return []; }
     }
 
-    static async Task<string[]> ListenBrainzIdsAsync(string title, string artist)
+    static async Task<string[]> ListenBrainzIdsAsync(string title, string artist, CancellationToken cancel = default)
     {
         foreach (var (queryTitle, queryArtist) in Queries(title, artist))
         {
-            var ids = await Lookup(queryTitle, queryArtist);
+            var ids = await Lookup(queryTitle, queryArtist, cancel);
             if (ids.Length > 0) return ids;
         }
         return [];
@@ -109,12 +109,12 @@ public static class SpicyLyrics
         }
     }
 
-    static async Task<string[]> Lookup(string title, string artist)
+    static async Task<string[]> Lookup(string title, string artist, CancellationToken cancel = default)
     {
         var body = JsonSerializer.Serialize(new[] { new { artist_name = artist, release_name = "", track_name = title } });
-        using var res = await Http.PostAsync("https://labs.api.listenbrainz.org/spotify-id-from-metadata/json", new StringContent(body, Encoding.UTF8, "application/json"));
+        using var res = await Http.PostAsync("https://labs.api.listenbrainz.org/spotify-id-from-metadata/json", new StringContent(body, Encoding.UTF8, "application/json"), cancel);
         res.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(cancel));
         var hits = doc.RootElement;
         return hits.GetArrayLength() > 0 && hits[0].TryGetProperty("spotify_track_ids", out var ids)
             ? [.. ids.EnumerateArray().Select(i => i.GetString()).OfType<string>().Where(i => Regex.IsMatch(i, "^[A-Za-z0-9]{22}$")).Distinct().Take(8)] : [];
@@ -144,21 +144,21 @@ public static class SpicyLyrics
         return null;
     }
 
-    static async Task<string[]> SpotifySearchIdsAsync(string title, string artist, double duration)
+    static async Task<string[]> SpotifySearchIdsAsync(string title, string artist, double duration, CancellationToken cancel)
     {
-        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist) || await SpotifyTokenAsync() is not { } token) return [];
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist) || await SpotifyTokenAsync(cancel) is not { } token) return [];
         string? isrc = null;
-        try { isrc = await DeezerIsrcAsync(title, artist, duration); }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException) { } // optional exact-recording hint
+        try { isrc = await DeezerIsrcAsync(title, artist, duration, cancel); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException) { cancel.ThrowIfCancellationRequested(); } // optional exact-recording hint
         var queries = Queries(title, artist).Select(q => $"track:{q.Title} artist:{q.Artist}");
         if (isrc != null) queries = new[] { $"isrc:{isrc}" }.Concat(queries);
         foreach (var query in queries)
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.spotify.com/v1/search?type=track&limit=5&q=" + Uri.EscapeDataString(query));
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var res = await Http.SendAsync(req);
+            using var res = await Http.SendAsync(req, cancel);
             res.EnsureSuccessStatusCode();
-            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(cancel));
             var items = doc.RootElement.GetProperty("tracks").GetProperty("items").EnumerateArray().ToList();
             double Off(JsonElement t) => duration > 0 && t.TryGetProperty("duration_ms", out var d) ? Math.Abs(d.GetDouble() / 1000 - duration) : 0;
             // Search relevance alone is not enough: reject different titles/artists and incompatible versions.
@@ -171,10 +171,10 @@ public static class SpicyLyrics
         }
         return [];
     }
-    static async Task<string?> DeezerIsrcAsync(string title, string artist, double duration) => (await Deezer.FindAsync(title, artist, duration))?.Isrc;
+    static async Task<string?> DeezerIsrcAsync(string title, string artist, double duration, CancellationToken cancel) => (await Deezer.FindAsync(title, artist, duration, cancel))?.Isrc;
 
     /// <summary>Client-credentials token (no user login): enough for search.</summary>
-    static async Task<string?> SpotifyTokenAsync()
+    static async Task<string?> SpotifyTokenAsync(CancellationToken cancel = default)
     {
         if (_token != null && DateTime.UtcNow < _tokenUntil) return _token;
         var id = Settings.Str("lyrics.spotifyid").Trim();
@@ -185,9 +185,9 @@ public static class SpicyLyrics
             Content = new FormUrlEncodedContent([new("grant_type", "client_credentials")]),
         };
         req.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{id}:{secret}")));
-        using var res = await Http.SendAsync(req);
+        using var res = await Http.SendAsync(req, cancel);
         res.EnsureSuccessStatusCode();
-        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(cancel));
         var json = doc.RootElement;
         _token = json.GetProperty("access_token").GetString();
         _tokenUntil = DateTime.UtcNow.AddSeconds(json.GetProperty("expires_in").GetDouble() - 60);

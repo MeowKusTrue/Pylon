@@ -3,6 +3,24 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.5
+
+<!-- ru -->
+- Большие очереди используют меньше памяти: удалены копии всей очереди для каждой строки, контекстные меню создаются при открытии.
+- Поиск по исполнителям, альбомам и жанрам использует подготовленные группы без проверки каждого файла при вводе. Добавленные во время сканирования папки индексируются повторным проходом; миниатюры обновляются после изменения тегов.
+- Исправлены гонки видеопревью, устаревших запросов текстов, повторяющиеся субтитры и восстановление данных для путей с другим регистром букв.
+- Ограничены параллельные запросы текстов и проксирования, добавлена отмена ненужной работы. Загрузки инструментов имеют тайм-аут бездействия и отмену; история фоновых задач освобождается после завершения.
+- Собственный движок ограничивает буфер пакетов, освобождает кадр при ошибке показа и обновляет последнюю картинку при изменении размера после конца файла.
+- Боковые панели пересчитывают ширину один раз за переход. Убраны анимации размытия далёких строк, таймер прогресса останавливается в трее и паузе, нажатие кнопок стало мягче.
+
+<!-- en -->
+- Large queues use less memory: removed per-row queue copies and create context menus only when opened.
+- Artist, album and genre searches reuse prepared groups without checking every file while typing. Folder additions during indexing trigger another pass; changed metadata invalidates thumbnails.
+- Fixed preview-player races, stale lyrics requests, repeated subtitle cues, and restored state for differently cased Windows paths.
+- Bounded lyrics and proxy concurrency with cancellation of obsolete work. Tool downloads support cancellation and inactivity timeouts; completed background history releases retained work.
+- The optional engine bounds packet buffering, frees frames on presentation failures, and redraws the final picture after resizing.
+- Side panels resize once per transition. Distant lyric blur no longer runs springs, the progress timer stops while hidden or paused, and button presses are subtler.
+
 ## 2.1.4
 
 <!-- ru -->

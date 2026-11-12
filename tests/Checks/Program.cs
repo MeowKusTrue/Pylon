@@ -674,6 +674,150 @@ Check("isolated data profiles cannot alter the Windows shell", !ShellRegistratio
     finally { Environment.SetEnvironmentVariable("PYLON_DATA", data); Environment.SetEnvironmentVariable("PYLON_VELOPACK_TEST", probe); }
 }
 
+// Audit follow-up: preserve state across JSON reload and accept valid compact JSON in the startup fast path.
+{
+    const string path = @"C:\Music\Track.mp3";
+    Library.Data.LyricFiles[path] = "picked.lrc";
+    Library.Data.LyricOffsets[path] = 1.5;
+    Library.Data.IntroEnds[path] = 1234;
+    Library.Data.Bookmarks[path] = [new Bookmark { Time = 9876 }];
+    Library.Save();
+    Library.Load();
+    var lower = path.ToLowerInvariant();
+    Check("all persisted path maps ignore Windows path casing", Library.Data.LyricFiles[lower] == "picked.lrc"
+        && Library.Data.LyricOffsets[lower] == 1.5 && Library.Data.IntroEnds[lower] == 1234 && Library.Data.Bookmarks[lower][0].Time == 9876);
+    Check("single instance settings accept compact and formatted JSON", SingleInstance.SingleInstanceDisabled("{\"library.single\":\"false\"}", false)
+        && SingleInstance.SingleInstanceDisabled("{\"library.singlefm\" : \"false\"}", true)
+        && !SingleInstance.SingleInstanceDisabled("{broken", false) && !SingleInstance.SingleInstanceDisabled("{}", true));
+}
+{
+    var malformed = Lyrics.ParseLrc("[offset:2147483648]\n[2147483648:00]bad\n[00:01]<999999999999:00>bad<00:02>good", "fixture");
+    Check("malformed LRC numbers do not abort loading", malformed?.Lines.Length == 1 && malformed.Lines[0].Start == 1
+        && malformed.Lines[0].Words.All(w => double.IsFinite(w.Start) && double.IsFinite(w.End)));
+    Check("large LRC minutes do not overflow integer multiplication", Lyrics.ParseLrc("[40000000:01]long", "fixture")?.Lines[0].Start == 2_400_000_001);
+    Check("own engine byte budget has a fixed ceiling", !VideoEngine.PacketBufferFull(32L * 1024 * 1024 - 1)
+        && VideoEngine.PacketBufferFull(32L * 1024 * 1024) && VideoEngine.PacketBufferFull(0, 4096));
+}
+{
+    using var vlc = new LibVLC("--quiet", "--no-video", "--no-audio");
+    using var player = new Player(vlc);
+    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+    var add = typeof(Player).GetMethod("AddCue", flags)!;
+    for (var i = 0; i < 5; i++)
+    {
+        add.Invoke(player, [0, 1.0, 2.0, "A"]);
+        add.Invoke(player, [0, 1.0, 2.0, "B"]);
+    }
+    var cues = (Dictionary<int, List<SubText.Cue>>)typeof(Player).GetField("_cues", flags)!.GetValue(player)!;
+    Check("seeking does not duplicate simultaneous subtitle cues", cues[0].Count == 2);
+}
+{
+    var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var jobs = Enumerable.Range(0, 40).Select(i => BackgroundJobs.Start("batch " + i, async (_, ct) =>
+    { await gate.Task.WaitAsync(ct); throw new IOException("retry fixture"); })).ToArray();
+    gate.SetResult();
+    await Task.WhenAll(jobs.Select(j => j.Completion));
+    Check("finished batch releases background history beyond its limit", BackgroundJobs.All.Count <= 30);
+    var removed = jobs.First(j => !BackgroundJobs.All.Contains(j));
+    var completion = removed.Completion;
+    removed.Retry();
+    Check("discarded background jobs release their retry closure", ReferenceEquals(completion, removed.Completion));
+}
+{
+    var server = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    server.Start();
+    var port = ((System.Net.IPEndPoint)server.LocalEndpoint).Port;
+    using var stopServer = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    var bodyStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var serving = Task.Run(async () =>
+    {
+        using var client = await server.AcceptTcpClientAsync(stopServer.Token);
+        await using var stream = client.GetStream();
+        var buf = new byte[4096];
+        await stream.ReadAsync(buf, stopServer.Token);
+        await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\nx"u8.ToArray(), stopServer.Token);
+        bodyStarted.TrySetResult();
+        try { await Task.Delay(Timeout.Infinite, stopServer.Token); } catch (OperationCanceledException) { }
+    });
+    try
+    {
+        using var http = new System.Net.Http.HttpClient();
+        using var cancel = new CancellationTokenSource();
+        var downloading = Ffmpeg.DownloadAsync(http, $"http://127.0.0.1:{port}/tool", Path.Combine(Library.Dir, "partial-tool.zip"), null, cancel.Token);
+        await bodyStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancel.Cancel();
+        var cancelled = false;
+        try { await downloading.WaitAsync(TimeSpan.FromSeconds(2)); } catch (OperationCanceledException) { cancelled = true; }
+        Check("tool download can be cancelled during a stalled response body", cancelled);
+    }
+    finally { stopServer.Cancel(); server.Stop(); await serving; }
+    using var cancelledLookup = new CancellationTokenSource();
+    cancelledLookup.Cancel();
+    var stopped = false;
+    try { await Lyrics.FindDetailedAsync("fixture.mp3", "Fixture", "Artist", null, 1, cancel: cancelledLookup.Token); }
+    catch (OperationCanceledException) { stopped = true; }
+    Check("superseded lyrics lookup stops before any provider request", stopped);
+}
+
+{
+    var proxy = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    proxy.Start();
+    var port = ((System.Net.IPEndPoint)proxy.LocalEndpoint).Port;
+    var oldProxy = Settings.Str("net.proxy");
+    var oldMode = Settings.Str("net.proxymode");
+    using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+    var upstream = Task.Run(async () =>
+    {
+        using var client = await proxy.AcceptTcpClientAsync(stop.Token);
+        await using var stream = client.GetStream();
+        var block = new byte[4096];
+        await stream.ReadAsync(block, stop.Token);
+        await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nConnection: close\r\n\r\nx"u8.ToArray(), stop.Token);
+        try { await Task.Delay(Timeout.Infinite, stop.Token); } catch (OperationCanceledException) { }
+    });
+    try
+    {
+        Settings.Set("net.proxymode", "Manual");
+        Settings.Set("net.proxy", $"http://127.0.0.1:{port}");
+        using var http = new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler { UseProxy = false });
+        using var response = await http.GetAsync(StreamRelay.Wrap("http://fixture.invalid/media", null, null),
+            System.Net.Http.HttpCompletionOption.ResponseHeadersRead, stop.Token);
+        var reading = response.Content.ReadAsByteArrayAsync(stop.Token);
+        StreamRelay.Reset();
+        var stopped = false;
+        try { await reading.WaitAsync(TimeSpan.FromSeconds(2)); }
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or IOException or OperationCanceledException) { stopped = true; }
+        Check("stopping playback closes stalled relay response bodies", stopped);
+    }
+    finally
+    {
+        StreamRelay.Reset(); Settings.Set("net.proxy", oldProxy); Settings.Set("net.proxymode", oldMode);
+        stop.Cancel(); proxy.Stop(); await upstream;
+    }
+    var requests = (SemaphoreSlim)typeof(Lyrics).GetField("Requests", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.GetValue(null)!;
+    await requests.WaitAsync(); await requests.WaitAsync();
+    try
+    {
+        using var cancel = new CancellationTokenSource(100);
+        var stopped = false;
+        try { await Lyrics.FindDetailedAsync("fixture.mp3", "Fixture", "Artist", null, 1, cancel: cancel.Token); }
+        catch (OperationCanceledException) { stopped = true; }
+        Check("queued lyrics work can be cancelled without taking a provider slot", stopped && requests.CurrentCount == 0);
+    }
+    finally { requests.Release(2); }
+}
+
+{
+    var path = Path.Combine(Library.Dir, "lyrics-cache-fixture.lrc");
+    File.WriteAllText(path, "old complete lyrics");
+    var write = typeof(Lyrics).GetMethod("WriteCacheAsync", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+    using var cancel = new CancellationTokenSource();
+    cancel.Cancel();
+    try { await (Task)write.Invoke(null, [path, "partial replacement", cancel.Token])!; } catch (OperationCanceledException) { }
+    Check("cancelled lyrics cache replacement preserves the complete document", File.ReadAllText(path) == "old complete lyrics"
+        && !Directory.EnumerateFiles(Library.Dir, "lyrics-cache-fixture.lrc.*.tmp").Any());
+}
+
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");
 return failed == 0 ? 0 : 1;
 

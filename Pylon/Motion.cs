@@ -299,7 +299,7 @@ public static class Motion
             Animate(s, ScaleTransform.ScaleYProperty, to, spring);
         }
         EventManager.RegisterClassHandler(typeof(ButtonBase), UIElement.PreviewMouseLeftButtonDownEvent,
-            new MouseButtonEventHandler((s, _) => { if (Pressable(s)) Scale((UIElement)s, 0.9, Spring.Press); }));
+            new MouseButtonEventHandler((s, _) => { if (Pressable(s)) Scale((UIElement)s, 0.97, Spring.Press); }));
         EventManager.RegisterClassHandler(typeof(ButtonBase), UIElement.LostMouseCaptureEvent,
             new MouseEventHandler((s, _) => { if (Pressable(s)) Scale((UIElement)s, 1, Spring.Release); }));
     }

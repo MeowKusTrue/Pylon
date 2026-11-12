@@ -30,6 +30,7 @@ public sealed class BackgroundJob
         _cancel = new();
         Start();
     }
+    internal void Release() { _work = null; _cancel.Dispose(); }
     internal void Start()
     {
         State = JobState.Running;
@@ -65,14 +66,22 @@ public static class BackgroundJobs
 #endif
     static readonly List<BackgroundJob> Jobs = [];
     public static event Action? Changed;
-    public static IReadOnlyList<BackgroundJob> All => Jobs;
-    public static void CancelAll() { foreach (var job in Jobs) job.Cancel(); }
-    internal static void Notify() => Changed?.Invoke();
+    public static IReadOnlyList<BackgroundJob> All { get { lock (Jobs) return Jobs.ToArray(); } }
+    public static void CancelAll() { foreach (var job in All) job.Cancel(); }
+    internal static void Notify()
+    {
+        lock (Jobs)
+            while (Jobs.Count > 30 && Jobs.FirstOrDefault(j => j.State != JobState.Running) is { } old)
+            {
+                Jobs.Remove(old);
+                old.Release();
+            }
+        Changed?.Invoke();
+    }
     public static BackgroundJob Start(string name, Func<BackgroundJob, CancellationToken, Task<string?>> work)
     {
         var job = new BackgroundJob(name, work);
-        Jobs.Add(job);
-        while (Jobs.Count > 30 && Jobs.FirstOrDefault(j => j.State != JobState.Running) is { } old) Jobs.Remove(old);
+        lock (Jobs) Jobs.Add(job);
         job.Start();
         return job;
     }

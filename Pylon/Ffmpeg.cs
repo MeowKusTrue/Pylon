@@ -63,7 +63,7 @@ public static class Ffmpeg
     public static bool Available => File.Exists(Exe);
 
     /// <summary>Downloads the zip (about 200 MB) and keeps only ffmpeg.exe; false on failure.</summary>
-    public static async Task<bool> InstallAsync(IProgress<double>? progress)
+    public static async Task<bool> InstallAsync(IProgress<double>? progress, CancellationToken cancel = default)
     {
         if (Available) return true;
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PYLON_FFMPEG"))) return false;
@@ -72,16 +72,18 @@ public static class Ffmpeg
         {
             Directory.CreateDirectory(Path.GetDirectoryName(DownloadExe)!);
             using var http = NewHttp();
-            await DownloadAsync(http, Builds + "ffmpeg-master-latest-win64-gpl.zip", zip, progress);
+            await DownloadAsync(http, Builds + "ffmpeg-master-latest-win64-gpl.zip", zip, progress, cancel);
             using (var archive = ZipFile.OpenRead(zip))
             {
                 var entry = archive.Entries.First(e => e.FullName.EndsWith("/bin/ffmpeg.exe", StringComparison.OrdinalIgnoreCase));
                 entry.ExtractToFile(DownloadExe, overwrite: true);
             }
+            cancel.ThrowIfCancellationRequested();
             return Available;
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException or InvalidDataException or InvalidOperationException)
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException or InvalidDataException or InvalidOperationException)
         {
+            cancel.ThrowIfCancellationRequested();
             return false;
         }
         finally { try { File.Delete(zip); } catch (IOException) { } }
@@ -93,20 +95,25 @@ public static class Ffmpeg
 
     static HttpClient NewHttp() => new() { Timeout = TimeSpan.FromMinutes(20), DefaultRequestHeaders = { { "User-Agent", "Pylon" } } };
 
-    static async Task DownloadAsync(HttpClient http, string url, string file, IProgress<double>? progress)
+    public static async Task DownloadAsync(HttpClient http, string url, string file, IProgress<double>? progress, CancellationToken cancel = default)
     {
-        using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        deadline.CancelAfter(TimeSpan.FromMinutes(20));
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        idle.CancelAfter(TimeSpan.FromSeconds(30));
+        using var res = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, idle.Token);
         res.EnsureSuccessStatusCode();
         var total = res.Content.Headers.ContentLength ?? 0;
-        await using var src = await res.Content.ReadAsStreamAsync();
+        await using var src = await res.Content.ReadAsStreamAsync(idle.Token);
         await using var dst = File.Create(file);
         var buf = new byte[1 << 16];
         long done = 0;
         int n;
-        while ((n = await src.ReadAsync(buf)) > 0)
+        while ((n = await src.ReadAsync(buf, idle.Token)) > 0)
         {
-            await dst.WriteAsync(buf.AsMemory(0, n));
+            await dst.WriteAsync(buf.AsMemory(0, n), idle.Token);
             done += n;
+            idle.CancelAfter(TimeSpan.FromSeconds(30));
             if (total > 0) progress?.Report((double)done / total);
         }
     }
@@ -115,7 +122,7 @@ public static class Ffmpeg
     /// The video engine's libraries (about 80 MB, LGPL): only its DLLs and the licence from the archive, checked against the
     /// release's checksums (they load into this process), put in place whole or not at all. False on any failure.
     /// </summary>
-    public static async Task<bool> InstallEngineLibsAsync(IProgress<double>? progress)
+    public static async Task<bool> InstallEngineLibsAsync(IProgress<double>? progress, CancellationToken cancel = default)
     {
         var dir = VideoEngine.DllDir;
         var (zip, fresh) = (dir + ".zip", dir + ".new");
@@ -123,24 +130,28 @@ public static class Ffmpeg
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
             using var http = NewHttp();
-            await DownloadAsync(http, Builds + EngineLibs, zip, progress);
-            var sums = await http.GetStringAsync(Builds + "checksums.sha256");
+            await DownloadAsync(http, Builds + EngineLibs, zip, progress, cancel);
+            var sums = await http.GetStringAsync(Builds + "checksums.sha256", cancel);
             await using (var file = File.OpenRead(zip))
-                if (!sums.Contains($"{Convert.ToHexStringLower(await SHA256.HashDataAsync(file))}  {EngineLibs}", StringComparison.Ordinal)) return false;
+                if (!sums.Contains($"{Convert.ToHexStringLower(await SHA256.HashDataAsync(file, cancel))}  {EngineLibs}", StringComparison.Ordinal)) return false;
             if (Directory.Exists(fresh)) Directory.Delete(fresh, recursive: true);
             Directory.CreateDirectory(fresh);
             using (var archive = ZipFile.OpenRead(zip))
             {
                 foreach (var dll in VideoEngine.DllNames)
+                {
+                    cancel.ThrowIfCancellationRequested();
                     archive.Entries.First(e => e.FullName.EndsWith("/bin/" + dll, StringComparison.OrdinalIgnoreCase)).ExtractToFile(Path.Combine(fresh, dll));
+                }
                 archive.Entries.First(e => e.FullName.EndsWith("/LICENSE.txt", StringComparison.OrdinalIgnoreCase)).ExtractToFile(Path.Combine(fresh, "LICENSE.txt"));
             }
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
             Directory.Move(fresh, dir);
             return true;
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or TaskCanceledException or InvalidDataException or InvalidOperationException)
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException or InvalidDataException or InvalidOperationException)
         {
+            cancel.ThrowIfCancellationRequested();
             return false;
         }
         finally

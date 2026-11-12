@@ -646,7 +646,12 @@ public class LyricsView : Grid
                 var r = line.Hover || cur < 0 || d == 0 || Light ? 0 : Math.Min(BlurStep * d, BlurStep * 5.465) * 1.6;
                 // an attached effect renders the line off-screen every frame even at radius 0: only lines that are blurred
                 // (or still un-blurring) carry it, and far lines are faint anyway
-                if (d > 8) line.Root.Effect = null;
+                if (d > 8)
+                {
+                    line.Root.Effect = null;
+                    Motion.Set(line.Blur, BlurEffect.RadiusProperty, r);
+                    continue;
+                }
                 else if (r > 0 || line.Blur.Radius > 0.05) line.Root.Effect = line.Blur;
                 if (Math.Abs(line.Blur.Radius - r) > 0.05)
                     Motion.Animate(line.Blur, BlurEffect.RadiusProperty, r, Spring.Smooth, done: r == 0 ? () => { if (line.Blur.Radius < 0.05) line.Root.Effect = null; } : null);

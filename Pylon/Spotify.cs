@@ -209,7 +209,7 @@ public static class Deezer
 
     public record Hit(string? Isrc, string? Cover, string? Album, double Seconds);
 
-    public static async Task<Hit?> FindAsync(string title, string artist, double seconds)
+    public static async Task<Hit?> FindAsync(string title, string artist, double seconds, CancellationToken cancel = default)
     {
         var main = artist.Split(',')[0].Trim();
         // the strict form (artist:"…" track:"…") finds nothing for names with an apostrophe ("Plain White T's"): plain words too
@@ -217,7 +217,7 @@ public static class Deezer
         {
             try
             {
-                using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://api.deezer.com/search?limit=10&q=" + Uri.EscapeDataString(q)));
+                using var doc = JsonDocument.Parse(await Http.GetStringAsync("https://api.deezer.com/search?limit=10&q=" + Uri.EscapeDataString(q), cancel));
                 if (!doc.RootElement.TryGetProperty("data", out var data)) continue;
                 var best = data.EnumerateArray()
                     .Where(e => e.TryGetProperty("artist", out var a) && Covers.Same(a.TryGetProperty("name", out var an) ? an.GetString() : null, main))

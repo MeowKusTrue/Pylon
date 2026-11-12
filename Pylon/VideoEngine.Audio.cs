@@ -352,6 +352,7 @@ public sealed unsafe partial class VideoEngine
                 continue;
             }
             var packet = (AVPacket*)item;
+            Interlocked.Add(ref _packetBytes, -packet->size);
             if (!_awaitFlush) ffmpeg.avcodec_send_packet(_audioCodec, packet); // a broken packet: its sound is missing, the next gap check covers it
             ffmpeg.av_packet_free(&packet);
         }

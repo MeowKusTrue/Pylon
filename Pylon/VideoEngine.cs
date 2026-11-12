@@ -66,6 +66,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
     readonly IntPtr _hwnd;
     readonly CancellationTokenSource _stop = new();
     readonly BlockingCollection<IntPtr> _packets = [];
+    long _packetBytes, _packetStall;
+    public static bool PacketBufferFull(long bytes, int packets = 0) => bytes >= 32L * 1024 * 1024 || packets >= 4096;
     readonly BlockingCollection<IntPtr> _frames = new(FrameQueue);
     readonly List<Thread> _threads = [];
     readonly AVCodecContext_get_format _getFormat; // kept: FFmpeg calls it from native code
@@ -404,7 +406,17 @@ public sealed unsafe partial class VideoEngine : IDisposable
                 continue;
             }
 
-            // waits only when both streams have plenty: stopping at one full queue would starve the other in a badly interleaved file
+            // Allow uneven interleaving, but never buffer the rest of a file with an exhausted stream.
+            if (PacketBufferFull(Interlocked.Read(ref _packetBytes), _packets.Count + _audioPackets.Count))
+            {
+                if (_packetStall == 0 || _paused) _packetStall = Stopwatch.GetTimestamp();
+                if (Stopwatch.GetTimestamp() - _packetStall > Stopwatch.Frequency * 5)
+                    throw new InvalidOperationException("Packet buffering exceeded the interleaving limit.");
+                Thread.Sleep(2);
+                continue;
+            }
+            _packetStall = 0;
+            // Soft limits keep ordinary files well below the byte budget.
             if (ended || (_packets.Count >= 64 && (_audioStream == null || _audioPackets.Count >= 128)))
             {
                 Thread.Sleep(2);
@@ -412,8 +424,8 @@ public sealed unsafe partial class VideoEngine : IDisposable
             }
             var packet = ffmpeg.av_packet_alloc();
             var read = ffmpeg.av_read_frame(_format, packet);
-            if (read >= 0 && packet->stream_index == _stream->index) _packets.Add((IntPtr)packet);
-            else if (read >= 0 && _audioStream != null && packet->stream_index == _audioStream->index) _audioPackets.Add((IntPtr)packet);
+            if (read >= 0 && packet->stream_index == _stream->index) QueuePacket(_packets, packet);
+            else if (read >= 0 && _audioStream != null && packet->stream_index == _audioStream->index) QueuePacket(_audioPackets, packet);
             else
             {
                 if (read >= 0) DecodeSubtitle(packet);
@@ -428,12 +440,19 @@ public sealed unsafe partial class VideoEngine : IDisposable
         }
     });
 
-    static void ClearPackets(BlockingCollection<IntPtr> queue)
+    void QueuePacket(BlockingCollection<IntPtr> queue, AVPacket* packet)
+    {
+        Interlocked.Add(ref _packetBytes, packet->size);
+        queue.Add((IntPtr)packet);
+    }
+
+    void ClearPackets(BlockingCollection<IntPtr> queue)
     {
         while (queue.TryTake(out var item))
         {
             if (IsMark(item)) continue;
             var packet = (AVPacket*)item;
+            Interlocked.Add(ref _packetBytes, -packet->size);
             ffmpeg.av_packet_free(&packet);
         }
     }
@@ -464,6 +483,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
                     continue;
                 }
                 var packet = (AVPacket*)item;
+                Interlocked.Add(ref _packetBytes, -packet->size);
                 if (Decoded == 0) _kept.Add((IntPtr)ffmpeg.av_packet_clone(packet));
                 _codec->skip_frame = _behind ? AVDiscard.AVDISCARD_NONREF : AVDiscard.AVDISCARD_DEFAULT; // can't keep up (4x of 60 fps): frames nothing refers to go undecoded
                 var sent = ffmpeg.avcodec_send_packet(_codec, packet);
@@ -596,7 +616,11 @@ public sealed unsafe partial class VideoEngine : IDisposable
         while (true)
         {
             IntPtr item;
-            while (!_frames.TryTake(out item, 20, _stop.Token)) ServeSnapshot(); // nothing comes after the end of a file
+            while (!_frames.TryTake(out item, 20, _stop.Token))
+            {
+                ServeSnapshot();
+                RedrawIfResized();
+            }
             if (IsMark(item)) // the end of the file
             {
                 var ending = (int)(item >> 2);
@@ -610,72 +634,77 @@ public sealed unsafe partial class VideoEngine : IDisposable
                 continue;
             }
             var frame = (AVFrame*)item;
-            var serial = (int)(nint)frame->opaque;
-            if (serial != _serial)
+            try
             {
-                ffmpeg.av_frame_free(&frame);
-                continue;
-            }
-            var pts = frame->best_effort_timestamp == ffmpeg.AV_NOPTS_VALUE ? previous + frameUs : PtsUs(frame);
-            var fresh = serial != shownSerial; // the first picture after opening or a seek shows at once
-            if (fresh)
-            {
-                shownSerial = serial;
-                Rebase(pts);
-                lock (_clockGate)
-                    if (serial == _serial)
-                    {
-                        _firstPts = pts;
-                        _firstSerial = serial;
-                    }
-            }
-            else
-            {
-                if (pts > previous) frameUs = pts - previous;
-                var wait = pts - NowUs;
-                _behind = wait < (_behind ? -20_000 : -100_000);
-                // the timestamps jump (joined recordings) or a long stall; forward allows for a screen recording's still seconds
-                if (!_paused && (wait > 10_000_000 || wait < -2_000_000)) { Rebase(pts); wait = 0; }
-                if (wait > 0 || _paused)
+                var serial = (int)(nint)frame->opaque;
+                if (serial != _serial)
                 {
-                    if (!WaitUntil(pts, serial))
+                    ffmpeg.av_frame_free(&frame);
+                    continue;
+                }
+                var pts = frame->best_effort_timestamp == ffmpeg.AV_NOPTS_VALUE ? previous + frameUs : PtsUs(frame);
+                var fresh = serial != shownSerial; // the first picture after opening or a seek shows at once
+                if (fresh)
+                {
+                    shownSerial = serial;
+                    Rebase(pts);
+                    lock (_clockGate)
+                        if (serial == _serial)
+                        {
+                            _firstPts = pts;
+                            _firstSerial = serial;
+                        }
+                }
+                else
+                {
+                    if (pts > previous) frameUs = pts - previous;
+                    var wait = pts - NowUs;
+                    _behind = wait < (_behind ? -20_000 : -100_000);
+                    // the timestamps jump (joined recordings) or a long stall; forward allows for a screen recording's still seconds
+                    if (!_paused && (wait > 10_000_000 || wait < -2_000_000)) { Rebase(pts); wait = 0; }
+                    if (wait > 0 || _paused)
+                    {
+                        if (!WaitUntil(pts, serial))
+                        {
+                            ffmpeg.av_frame_free(&frame);
+                            continue;
+                        }
+                    }
+                    else if (-wait > Math.Max(frameUs, 20_000) && _frames.Count > 0)
                     {
                         ffmpeg.av_frame_free(&frame);
+                        Dropped++;
+                        previous = pts;
                         continue;
                     }
                 }
-                else if (-wait > Math.Max(frameUs, 20_000) && _frames.Count > 0)
+                previous = pts;
+                var late = Math.Max(0, NowUs - pts);
+                Draw(frame);
+                var first = Presented == 0;
+                _swap?.Present(1, PresentFlags.None).CheckError();
+                Presented++;
+                var old = _shown; // kept: a resized window redraws it while paused
+                _shown = frame;
+                frame = null; // ownership moved to the retained picture
+                ffmpeg.av_frame_free(&old);
+                if (!fresh)
                 {
-                    ffmpeg.av_frame_free(&frame);
-                    Dropped++;
-                    previous = pts;
+                    _lateSumUs += late;
+                    _lateMaxUs = Math.Max(_lateMaxUs, late);
                     continue;
                 }
+                if (!_audioStarted.IsSet) Rebase(pts); // the picture took its time to set up: the timeline starts when it's shown, or with sound
+                if (first)
+                {
+                    FirstFrameMs = (Stopwatch.GetTimestamp() - _openTicks) * 1000.0 / Stopwatch.Frequency;
+                    Perf.Mark("engine: first picture");
+                    FirstFrame?.Invoke();
+                }
+                else SeekMs = (Stopwatch.GetTimestamp() - Volatile.Read(ref _seekTicks)) * 1000.0 / Stopwatch.Frequency;
+                if (HasSound && !_wantPaused) HoldForSound(pts, serial);
             }
-            previous = pts;
-            var late = Math.Max(0, NowUs - pts);
-            Draw(frame);
-            var first = Presented == 0;
-            _swap?.Present(1, PresentFlags.None).CheckError();
-            Presented++;
-            var old = _shown; // kept: a resized window redraws it while paused
-            _shown = frame;
-            ffmpeg.av_frame_free(&old);
-            if (!fresh)
-            {
-                _lateSumUs += late;
-                _lateMaxUs = Math.Max(_lateMaxUs, late);
-                continue;
-            }
-            if (!_audioStarted.IsSet) Rebase(pts); // the picture took its time to set up: the timeline starts when it's shown, or with sound
-            if (first)
-            {
-                FirstFrameMs = (Stopwatch.GetTimestamp() - _openTicks) * 1000.0 / Stopwatch.Frequency;
-                Perf.Mark("engine: first picture");
-                FirstFrame?.Invoke();
-            }
-            else SeekMs = (Stopwatch.GetTimestamp() - Volatile.Read(ref _seekTicks)) * 1000.0 / Stopwatch.Frequency;
-            if (HasSound && !_wantPaused) HoldForSound(pts, serial);
+            finally { ffmpeg.av_frame_free(&frame); }
         }
     });
 

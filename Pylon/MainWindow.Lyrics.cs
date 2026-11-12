@@ -25,6 +25,32 @@ public partial class MainWindow
     (string Title, string? Artist, string? Album, double Duration) _track;
     string _tags = "";
     long _clockMs, _clockStamp;
+    long _lyricsRequest;
+    CancellationTokenSource? _lyricsCancel, _prefetchCancel;
+    string? _prefetchPath;
+    Task<Lyrics.Result>? _prefetch;
+
+    CancellationToken BeginLyricsRequest()
+    {
+        _lyricsRequest++;
+        _lyricsCancel?.Cancel();
+        _lyricsCancel?.Dispose();
+        _lyricsCancel = new();
+        return _lyricsCancel.Token;
+    }
+
+    void CancelLyricsWork(bool prefetch = true)
+    {
+        _lyricsRequest++;
+        _lyricsCancel?.Cancel();
+        _lyricsCancel?.Dispose();
+        _lyricsCancel = null;
+        if (prefetch)
+        {
+            _prefetchCancel?.Cancel(); _prefetchCancel?.Dispose(); _prefetchCancel = null;
+            _prefetch = null; _prefetchPath = null;
+        }
+    }
 
     void Lyrics_Click(object sender, RoutedEventArgs e) => Settings.Set("ui.lyrics", !Settings.Bool("ui.lyrics"));
 
@@ -66,31 +92,43 @@ public partial class MainWindow
 
     async void LoadLyrics(string path)
     {
-        _lyricsFor = path;
-        LyricsPane.Clock ??= () => PlaybackClock() + LyricsOffset;
-        if (LyricsPane.Tag == null)
+        var cancel = BeginLyricsRequest();
+        var request = _lyricsRequest;
+        var track = _track;
+        var duration = Library.Data.Meta.GetValueOrDefault(path) is { DurationMs: > 0 } m ? m.DurationMs / 1000.0 : track.Duration;
+        try
         {
-            LyricsPane.Tag = true;
-            LyricsPane.Seek += s => SeekTo((long)(s * 1000));
+            _lyricsFor = path;
+            LyricsPane.Clock ??= () => PlaybackClock() + LyricsOffset;
+            if (LyricsPane.Tag == null)
+            {
+                LyricsPane.Tag = true;
+                LyricsPane.Seek += s => SeekTo((long)(s * 1000));
+            }
+            LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
+            var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
+            Lyrics.Result? result = null;
+            if (_prefetchPath == path && _prefetch is { } early)
+            {
+                try { result = await early.WaitAsync(cancel); }
+                catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { }
+                if (ReferenceEquals(_prefetch, early)) { _prefetch = null; _prefetchPath = null; }
+            }
+            cancel.ThrowIfCancellationRequested();
+            if (request != _lyricsRequest || CurrentPath != path) return;
+            if (result?.Document == null)
+                result = await Lyrics.FindDetailedAsync(path, track.Title, track.Artist, track.Album, duration, tags, cancel);
+            if (request != _lyricsRequest || CurrentPath != path || cancel.IsCancellationRequested) return;
+            if (result.Document != null) LyricsPane.Show(result.Document);
+            else
+            {
+                LyricsPane.ShowMessage(L.T(result.ServiceFailed ? "Lyrics services could not be reached. Check your connection and try again."
+                    : "No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
+                LyricsPane.MessageActions(() => LoadLyrics(path), FindLyrics);
+            }
         }
-        LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
-        var tags = Library.Data.Meta.GetValueOrDefault(path)?.SpotifyId is { } spotifyId ? _tags + "\nspotify:track:" + spotifyId : _tags;
-        var result = _lyricsAhead.Remove(path, out var early) && await early is { Document: not null } found ? found
-            // a song from the web: the original's length (Spotify's), not the found recording's (a clip runs longer); the
-            // same key the lookahead used
-            : await Lyrics.FindDetailedAsync(path, _track.Title, _track.Artist, _track.Album,
-                Library.Data.Meta.GetValueOrDefault(path) is { DurationMs: > 0 } m ? m.DurationMs / 1000.0 : _track.Duration, tags);
-        if (CurrentPath != path) return;
-        if (result.Document != null) LyricsPane.Show(result.Document);
-        else
-        {
-            LyricsPane.ShowMessage(L.T(result.ServiceFailed ? "Lyrics services could not be reached. Check your connection and try again."
-                : "No lyrics for this track.\nPut a .ttml or .lrc file with the same name next to it."));
-            LyricsPane.MessageActions(() => { _lyricsAhead.Remove(path); LoadLyrics(path); }, FindLyrics);
-        }
+        catch (OperationCanceledException) { }
     }
-
-    readonly Dictionary<string, Task<Lyrics.Result>> _lyricsAhead = [];
 
     /// <summary>
     /// The next song's lyrics are looked up while this one plays (by its library tags), so they are there the moment it
@@ -98,11 +136,15 @@ public partial class MainWindow
     /// </summary>
     void LyricsAhead()
     {
-        if (NextIndex(+1) is not (>= 0 and var n) || n >= _queue.Count || _queue[n] is var next && _lyricsAhead.ContainsKey(next)) return;
+        if (NextIndex(+1) is not (>= 0 and var n) || n >= _queue.Count || _queue[n] is var next && _prefetchPath == next) return;
         if (Library.Data.Meta.GetValueOrDefault(next) is not { Title: { Length: > 0 } title } m) return; // untagged: looked up when it plays
         var seconds = m.DurationMs > 0 ? m.DurationMs / 1000.0 : (Library.HistoryOf(next)?.Length ?? 0) / 1000.0;
-        if (_lyricsAhead.Count > 6) _lyricsAhead.Clear();
-        _lyricsAhead[next] = Lyrics.FindDetailedAsync(next, title, m.Artist, m.Album, seconds, m.SpotifyId is { } id ? "\nspotify:track:" + id : "");
+        _prefetchCancel?.Cancel();
+        _prefetchCancel?.Dispose();
+        _prefetchCancel = new();
+        _prefetchPath = next;
+        _prefetch = Lyrics.FindDetailedAsync(next, title, m.Artist, m.Album, seconds,
+            m.SpotifyId is { } id ? "\nspotify:track:" + id : "", _prefetchCancel.Token);
     }
 
     /// <summary>Seconds this track's lyrics are moved ahead (Lyrics → Timing); negative = later.</summary>
@@ -122,19 +164,28 @@ public partial class MainWindow
         if (CurrentPath is not { } path) return;
         var guess = string.IsNullOrWhiteSpace(_track.Artist) ? _track.Title : $"{_track.Artist} - {_track.Title}";
         if (DialogWindow.AskName(this, "Find Lyrics", "Artist - Title", "Search Spicy Lyrics and LRCLIB under another name.", "e.g., Daft Punk - Get Lucky", guess) is not { } q) return;
+        if (CurrentPath != path) return;
+        var track = _track;
         var dash = q.IndexOf(" - ", StringComparison.Ordinal);
         var (artist, title) = dash > 0 ? (q[..dash].Trim(), q[(dash + 3)..].Trim()) : ("", q.Trim());
         LyricsPane.ShowMessage(L.T("Looking for lyrics…"));
         if (!Settings.Bool("ui.lyrics")) Settings.Set("ui.lyrics", true);
-        var result = await Lyrics.SearchDetailedAsync(_track.Title, _track.Artist, _track.Album, _track.Duration, artist, title);
-        var doc = result.Document;
-        if (CurrentPath != path) return;
-        if (doc != null) { Library.Data.LyricFiles.Remove(path); Library.Touch(); LyricsPane.Show(doc); }
-        else
+        var cancel = BeginLyricsRequest();
+        _prefetchCancel?.Cancel();
+        var request = _lyricsRequest;
+        try
         {
-            LyricsPane.ShowMessage(result.ServiceFailed ? L.T("Lyrics services could not be reached. Check your connection and try again.") : L.F("Nothing found for “{0}”.", q));
-            LyricsPane.MessageActions(FindLyrics, FindLyrics);
+            var result = await Lyrics.SearchDetailedAsync(track.Title, track.Artist, track.Album, track.Duration, artist, title, cancel);
+            var doc = result.Document;
+            if (request != _lyricsRequest || CurrentPath != path || cancel.IsCancellationRequested) return;
+            if (doc != null) { Library.Data.LyricFiles.Remove(path); Library.Touch(); LyricsPane.Show(doc); }
+            else
+            {
+                LyricsPane.ShowMessage(result.ServiceFailed ? L.T("Lyrics services could not be reached. Check your connection and try again.") : L.F("Nothing found for “{0}”.", q));
+                LyricsPane.MessageActions(FindLyrics, FindLyrics);
+            }
         }
+        catch (OperationCanceledException) { }
     }
 
     void OpenLyricsFile()
@@ -142,6 +193,8 @@ public partial class MainWindow
         if (CurrentPath is not { } path) return;
         var dlg = new OpenFileDialog { Filter = L.T("Lyrics") + " (*.lrc;*.ttml)|*.lrc;*.ttml" };
         if (dlg.ShowDialog(this) != true) return;
+        if (CurrentPath != path) return;
+        CancelLyricsWork();
         Library.Data.LyricFiles[path] = dlg.FileName;
         Library.Touch();
         _lyricsFor = null;

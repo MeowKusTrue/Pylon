@@ -239,7 +239,21 @@ public partial class DialogWindow
         if (!OfferTool(dlg, "ffmpeg", "Convert with ffmpeg",
                 "Converting needs ffmpeg, a free open-source tool. Pylon can download it now (about 200 MB from github.com/BtbN/FFmpeg-Builds).")) return false;
         dlg.SaveBtn.IsEnabled = false;
-        var ok = await Ffmpeg.InstallAsync(new Progress<double>(p => { status.Text = L.F("ffmpeg {0}%", (int)(p * 100)); bar.ScaleX = p; }));
+        var download = BackgroundJobs.Start("ffmpeg", async (job, cancel) =>
+        {
+            var ok = await Ffmpeg.InstallAsync(new Progress<double>(p =>
+            {
+                job.Report(p);
+                status.Text = L.F("ffmpeg {0}%", (int)(p * 100)); bar.ScaleX = p;
+            }), cancel);
+            if (!ok) throw new IOException(L.T("Couldn't download ffmpeg"));
+            return Ffmpeg.Exe;
+        });
+        EventHandler closed = (_, _) => download.Cancel();
+        dlg.Closed += closed;
+        await download.Completion;
+        dlg.Closed -= closed;
+        var ok = download.State == JobState.Completed && dlg.IsVisible;
         bar.ScaleX = 0;
         status.Text = ok ? "" : L.T("Couldn't download ffmpeg");
         dlg.SaveBtn.IsEnabled = true;

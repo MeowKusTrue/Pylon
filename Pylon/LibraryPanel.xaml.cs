@@ -89,7 +89,7 @@ public partial class LibraryPanel : UserControl
         add.Click += (_, _) => Player.ShowOpenMenu(add);
         Rail.Children.Add(add);
         RenderPins();
-        Library.Changed += () => { RenderPins(); if (IsVisible) Render(); };
+        Library.Changed += () => { _groupVersion++; _groups.Clear(); _groupLoading.Clear(); RenderPins(); if (IsVisible) Render(); };
         Library.FoldersScanned += () => Dispatcher.BeginInvoke(() => { if (IsVisible && _pos >= 0 && _nav[_pos].Folder != null) Render(); });
         IsVisibleChanged += (_, _) => { if (IsVisible) { RenderPins(); Render(); } }; // the library may load after this panel is built
     }
@@ -309,16 +309,42 @@ public partial class LibraryPanel : UserControl
         Library.Data.MusicFolders.Select(f => FolderRow(f, f, Section.Music)).ToList());
 
     /// <summary>Albums / Artists / Genres, from the tag index.</summary>
-    Page Group(string title, Func<TrackMeta, string?> key) => new(Section.Music, [new(L.T("Music"), Music), new(L.T(title), null)], () =>
-        Library.Data.Meta.Where(m => File.Exists(m.Key))
-            .GroupBy(m => key(m.Value) is { Length: > 0 } k ? k : L.T("Unknown"))
-            .Select(g => IconRow(g.Key, title == "Artists" ? "user" : title == "Genres" ? "tag" : "vinyl-record", () =>
-            {
-                var files = g.Select(x => x.Key).Order(StringComparer.OrdinalIgnoreCase).ToList();
-                Navigate(new Page(Section.Music, [new(L.T("Music"), Music), new(L.T(title), () => Group(title, key)), new(g.Key, null)],
-                    () => files.Select((f, i) => MediaRow(f, files, i)).ToList()));
-            }, menu: () => FilesMenu(g.Select(x => x.Key).Order(StringComparer.OrdinalIgnoreCase).ToList())))
-            .ToList());
+    readonly Dictionary<string, List<Row>> _groups = [];
+    readonly HashSet<string> _groupLoading = [];
+    int _groupVersion;
+
+    Page Group(string title, Func<TrackMeta, string?> key)
+    {
+        _groupVersion++;
+        _groups.Clear();
+        _groupLoading.Clear();
+        return new(Section.Music,
+        [new(L.T("Music"), Music), new(L.T(title), null)], () =>
+        {
+            if (_groups.TryGetValue(title, out var rows)) return rows;
+            if (_groupLoading.Add(title)) BuildGroups(title, key);
+            return [];
+        });
+    }
+
+    async void BuildGroups(string title, Func<TrackMeta, string?> key)
+    {
+        var version = _groupVersion;
+        var snapshot = Library.Data.Meta.Select(m => (Path: m.Key, Name: key(m.Value))).ToArray();
+        var groups = await Task.Run(() => snapshot.Where(m => File.Exists(m.Path))
+            .GroupBy(m => m.Name ?? "").Select(g => (Name: g.Key,
+                Files: g.Select(m => m.Path).Order(StringComparer.OrdinalIgnoreCase).ToList())).ToArray());
+        if (version != _groupVersion) return;
+        _groupLoading.Remove(title);
+        _groups[title] = groups.Select(g =>
+        {
+            var name = g.Name.Length > 0 ? g.Name : L.T("Unknown");
+            return IconRow(name, title == "Artists" ? "user" : title == "Genres" ? "tag" : "vinyl-record", () =>
+                Navigate(new Page(Section.Music, [new(L.T("Music"), Music), new(L.T(title), () => Group(title, key)), new(name, null)],
+                    () => g.Files.Select((f, i) => MediaRow(f, g.Files, i)).ToList())), menu: () => FilesMenu(g.Files));
+        }).ToList();
+        if (IsVisible) Render();
+    }
 
     Page Folder(string dir, string root, Section section)
     {
@@ -513,23 +539,23 @@ public partial class LibraryPanel : UserControl
     }, More: () => [Item("Play All", "play", () => Player.PlayList(files(), 0)), Item("Save as Playlist…", "playlist", () => CreatePlaylist(files()))]);
 
     Page PlaylistPage(Playlist p) => new(Section.Playlists, [new(L.T("Playlists"), Playlists), new(p.Name, null)], () =>
-        p.Items.Select((f, i) => MediaRow(f, p.Items, i, extra: [new Separator(), Item("Remove from Playlist", "minus-circle", () => { p.Items.RemoveAt(i); Library.Touch(); })])).ToList(),
+        p.Items.Select((f, i) => MediaRow(f, p.Items, i, extra: () => [new Separator(), Item("Remove from Playlist", "minus-circle", () => { p.Items.RemoveAt(i); Library.Touch(); })])).ToList(),
         More: () => PlaylistMenu(p));
 
     Page History() => new(Section.History, Crumbs1("History"), () =>
         Library.Data.History.OrderByDescending(h => h.Value.LastPlayed)
-            .Select(h => MediaRow(h.Key, [h.Key], 0, extra: [new Separator(), Item("Remove from History", "trash", () => { Library.Data.History.Remove(h.Key); Library.Touch(); })]))
+            .Select(h => MediaRow(h.Key, [h.Key], 0, extra: () => [new Separator(), Item("Remove from History", "trash", () => { Library.Data.History.Remove(h.Key); Library.Touch(); })]))
             .ToList(),
         More: () => [Item("Clear History", "trash", () => { Library.Data.History.Clear(); Library.Touch(); })]);
 
     Page Queue() => new(Section.Queue, Crumbs1("Now Playing"), () =>
-        Player.Queue.Select((f, i) => MediaRow(f, Player.Queue.ToList(), i, queueIndex: i,
-            extra: [new Separator(), Item("Remove from Queue", "minus-circle", () => { Player.RemoveFromQueue(i); Render(); })])).ToList(),
+        Player.Queue.Select((f, i) => MediaRow(f, Array.Empty<string>(), i, queueIndex: i,
+            extra: () => [new Separator(), Item("Remove from Queue", "minus-circle", () => { Player.RemoveFromQueue(i); Render(); })])).ToList(),
         More: () => [Item("Save as Playlist…", "playlist", () => CreatePlaylist(Player.Queue)), Item("Clear Queue", "trash", () => { Player.ClearQueue(); Render(); })]);
 
     // ───────── rows ─────────
 
-    Row MediaRow(string path, IList<string> context, int index, int queueIndex = -1, IEnumerable<object>? extra = null)
+    Row MediaRow(string path, IList<string> context, int index, int queueIndex = -1, Func<IEnumerable<object>>? extra = null)
     {
         var h = Library.HistoryOf(path);
         var title = Library.TitleOf(path);
@@ -538,7 +564,7 @@ public partial class LibraryPanel : UserControl
         {
             Title = title, Path = path, Progress = h?.Progress ?? 0, Dim = h != null && !active, Active = active, QueuePos = queueIndex,
             Click = () => { if (queueIndex >= 0) Player.PlayQueueAt(queueIndex); else Player.PlayList(context.ToList(), index); },
-            Menu = () => [.. FilesMenu([path], single: true), .. extra ?? []],
+            Menu = () => [.. FilesMenu([path], single: true), .. extra?.Invoke() ?? []],
         };
     }
 

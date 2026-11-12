@@ -26,6 +26,10 @@ public static class Lyrics
 {
     static readonly string CacheDir = Path.Combine(Library.Dir, "lyrics");
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10), DefaultRequestHeaders = { { "User-Agent", "Pylon (https://github.com/MeowKusTrue/Pylon)" } } };
+    static readonly SemaphoreSlim Requests = new(2);
+#if DEBUG
+    internal static Func<string, string, CancellationToken, Task<LyricsDoc?>>? DebugLookup;
+#endif
 
     /// <param name="tags">All of the file's text tags joined, searched for a Spotify link.</param>
     public record Result(LyricsDoc? Document, bool ServiceFailed);
@@ -33,24 +37,30 @@ public static class Lyrics
     public static async Task<LyricsDoc?> FindAsync(string path, string title, string? artist, string? album, double duration, string tags = "") =>
         (await FindDetailedAsync(path, title, artist, album, duration, tags)).Document;
 
-    public static async Task<Result> FindDetailedAsync(string path, string title, string? artist, string? album, double duration, string tags = "")
+    public static async Task<Result> FindDetailedAsync(string path, string title, string? artist, string? album, double duration, string tags = "", CancellationToken cancel = default)
     {
+        cancel.ThrowIfCancellationRequested();
         var failed = false;
-        try { return new(await FindCoreAsync(path, title, artist, album, duration, tags, () => failed = true), failed); }
+        await Requests.WaitAsync(cancel);
+        try { return new(await FindCoreAsync(path, title, artist, album, duration, tags, () => failed = true, cancel), failed); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(null, true); }
+        finally { Requests.Release(); }
     }
 
-    static async Task<LyricsDoc?> FindCoreAsync(string path, string title, string? artist, string? album, double duration, string tags, Action failure)
+    static async Task<LyricsDoc?> FindCoreAsync(string path, string title, string? artist, string? album, double duration, string tags, Action failure, CancellationToken cancel)
     {
+#if DEBUG
+        if (DebugLookup is { } lookup) return await lookup(path, title, cancel);
+#endif
         if (Library.Data.LyricFiles.GetValueOrDefault(path) is { } picked && File.Exists(picked)
-            && Parse(await File.ReadAllTextAsync(picked), Path.GetFileName(picked)) is { } chosen) return chosen;
+            && Parse(await File.ReadAllTextAsync(picked, cancel), Path.GetFileName(picked)) is { } chosen) return chosen;
         if (!path.Contains("://"))
         {
             // sidecar files win: TTML from spicy-translate / Apple, LRC from anywhere
             foreach (var ext in new[] { ".ttml", ".lrc" })
             {
                 var side = Path.ChangeExtension(path, ext);
-                if (File.Exists(side) && Parse(await File.ReadAllTextAsync(side), Path.GetFileName(side)) is { } doc) return doc;
+                if (File.Exists(side) && Parse(await File.ReadAllTextAsync(side, cancel), Path.GetFileName(side)) is { } doc) return doc;
             }
         }
         if (string.IsNullOrWhiteSpace(title)) return null;
@@ -61,7 +71,7 @@ public static class Lyrics
         // a cache cut short (killed mid-write) threw here, in an async void, and closed the player whenever the song came up:
         // now it's fetched again and overwritten below
         if (File.Exists(spicyCache))
-            try { if (SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache)) is { } fromSpicy) return fromSpicy; }
+            try { if (SpicyLyrics.Parse(await File.ReadAllTextAsync(spicyCache, cancel)) is { } fromSpicy) return fromSpicy; }
             catch (Exception e) when (e is JsonException or IOException or KeyNotFoundException or InvalidOperationException) { }
         // word-synced Spicy Lyrics come first when there's a key, even over lyrics LRCLIB gave earlier
         // a miss is asked again after a week: Spicy and ListenBrainz keep growing
@@ -70,29 +80,41 @@ public static class Lyrics
             try
             {
                 Directory.CreateDirectory(CacheDir);
-                if (await SpicyLyrics.FetchAsync(path, title, artist ?? "", duration, tags) is { } json && SpicyLyrics.Parse(json) is { } doc)
+                if (await SpicyLyrics.FetchAsync(path, title, artist ?? "", duration, tags, cancel) is { } json && SpicyLyrics.Parse(json) is { } doc)
                 {
-                    await File.WriteAllTextAsync(spicyCache, json);
+                    await WriteCacheAsync(spicyCache, json, cancel);
                     return doc;
                 }
-                await File.WriteAllTextAsync(spicyMiss, "");
+                await WriteCacheAsync(spicyMiss, "", cancel);
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or KeyNotFoundException or InvalidOperationException) { failure(); } // offline etc.: LRCLIB below, retry next time
-        if (File.Exists(cached)) return Parse(await File.ReadAllTextAsync(cached), "LRCLIB");
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or KeyNotFoundException or InvalidOperationException) { cancel.ThrowIfCancellationRequested(); failure(); } // offline etc.: LRCLIB below, retry next time
+        if (File.Exists(cached)) return Parse(await File.ReadAllTextAsync(cached, cancel), "LRCLIB");
         if (!Settings.Bool("lyrics.online") || string.IsNullOrWhiteSpace(artist)) return null;
         try
         {
-            var lrc = await FromLrclib(title, artist!, album, duration);
+            var lrc = await FromLrclib(title, artist!, album, duration, cancel);
             if (lrc == null) return null;
             Directory.CreateDirectory(CacheDir);
-            await File.WriteAllTextAsync(cached, lrc);
+            await WriteCacheAsync(cached, lrc, cancel);
             return Parse(lrc, "LRCLIB");
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException) { failure(); return null; }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException) { cancel.ThrowIfCancellationRequested(); failure(); return null; }
     }
 
     static string Key(string title, string? artist, string? album, double duration) =>
         Convert.ToHexString(SHA1.HashData(Encoding.UTF8.GetBytes($"{artist}|{title}|{album}|{Math.Round(duration)}".ToLowerInvariant())))[..20];
+
+    static async Task WriteCacheAsync(string path, string text, CancellationToken cancel)
+    {
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(temporary, text, cancel);
+            cancel.ThrowIfCancellationRequested();
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { try { File.Delete(temporary); } catch (IOException) { } }
+    }
 
     /// <summary>
     /// "Find lyrics…": looks the song up under the artist and title the user typed (Spicy Lyrics, then LRCLIB) and keeps the
@@ -101,14 +123,16 @@ public static class Lyrics
     public static async Task<LyricsDoc?> SearchAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle)
         => (await SearchDetailedAsync(title, artist, album, duration, queryArtist, queryTitle)).Document;
 
-    public static async Task<Result> SearchDetailedAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle)
+    public static async Task<Result> SearchDetailedAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle, CancellationToken cancel = default)
     {
+        cancel.ThrowIfCancellationRequested();
         var failed = false;
-        var doc = await SearchCoreAsync(title, artist, album, duration, queryArtist, queryTitle, () => failed = true);
-        return new(doc, failed);
+        await Requests.WaitAsync(cancel);
+        try { return new(await SearchCoreAsync(title, artist, album, duration, queryArtist, queryTitle, () => failed = true, cancel), failed); }
+        finally { Requests.Release(); }
     }
 
-    static async Task<LyricsDoc?> SearchCoreAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle, Action failure)
+    static async Task<LyricsDoc?> SearchCoreAsync(string title, string? artist, string? album, double duration, string queryArtist, string queryTitle, Action failure, CancellationToken cancel)
     {
         var key = Key(title, artist, album, duration);
         try
@@ -117,32 +141,32 @@ public static class Lyrics
             var spicyFailed = false;
             try
             {
-                if (SpicyLyrics.Enabled && await SpicyLyrics.FetchAsync("", queryTitle, queryArtist, duration, "") is { } json && SpicyLyrics.Parse(json) is { } spicy)
+                if (SpicyLyrics.Enabled && await SpicyLyrics.FetchAsync("", queryTitle, queryArtist, duration, "", cancel) is { } json && SpicyLyrics.Parse(json) is { } spicy)
                 {
-                    await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy.json"), json);
+                    await WriteCacheAsync(Path.Combine(CacheDir, key + ".spicy.json"), json, cancel);
                     return spicy;
                 }
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { spicyFailed = true; failure(); }
-            if (await FromLrclib(queryTitle, queryArtist, null, duration) is not { } lrc) return null;
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { cancel.ThrowIfCancellationRequested(); spicyFailed = true; failure(); }
+            if (await FromLrclib(queryTitle, queryArtist, null, duration, cancel) is not { } lrc) return null;
             File.Delete(Path.Combine(CacheDir, key + ".spicy.json")); // the old pick was wrong
-            if (!spicyFailed) await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".spicy4.none"), "");
-            await File.WriteAllTextAsync(Path.Combine(CacheDir, key + ".lrc"), lrc);
+            if (!spicyFailed) await WriteCacheAsync(Path.Combine(CacheDir, key + ".spicy4.none"), "", cancel);
+            await WriteCacheAsync(Path.Combine(CacheDir, key + ".lrc"), lrc, cancel);
             return Parse(lrc, "LRCLIB");
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or UnauthorizedAccessException or KeyNotFoundException or InvalidOperationException) { failure(); return null; }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or IOException or UnauthorizedAccessException or KeyNotFoundException or InvalidOperationException) { cancel.ThrowIfCancellationRequested(); failure(); return null; }
     }
 
     /// <summary>Exact match first (LRCLIB tolerates ±2 s), then search: the synced version closest in length wins.</summary>
-    static async Task<string?> FromLrclib(string title, string artist, string? album, double duration)
+    static async Task<string?> FromLrclib(string title, string artist, string? album, double duration, CancellationToken cancel)
     {
         static string Q(params (string k, string? v)[] p) => string.Join("&", p.Where(x => !string.IsNullOrEmpty(x.v)).Select(x => $"{x.k}={Uri.EscapeDataString(x.v!)}"));
-        using (var r = await Http.GetAsync("https://lrclib.net/api/get?" + Q(("track_name", title), ("artist_name", artist), ("album_name", album), ("duration", duration > 0 ? Math.Round(duration).ToString(CultureInfo.InvariantCulture) : null))))
-            if (r.IsSuccessStatusCode && JsonDocument.Parse(await r.Content.ReadAsStringAsync()).RootElement is var hit && Text(hit, "syncedLyrics") is { } synced)
+        using (var r = await Http.GetAsync("https://lrclib.net/api/get?" + Q(("track_name", title), ("artist_name", artist), ("album_name", album), ("duration", duration > 0 ? Math.Round(duration).ToString(CultureInfo.InvariantCulture) : null)), cancel))
+            if (r.IsSuccessStatusCode && JsonDocument.Parse(await r.Content.ReadAsStringAsync(cancel)).RootElement is var hit && Text(hit, "syncedLyrics") is { } synced)
                 return synced;
-        using var s = await Http.GetAsync("https://lrclib.net/api/search?" + Q(("track_name", title), ("artist_name", artist)));
+        using var s = await Http.GetAsync("https://lrclib.net/api/search?" + Q(("track_name", title), ("artist_name", artist)), cancel);
         s.EnsureSuccessStatusCode();
-        var list = JsonDocument.Parse(await s.Content.ReadAsStringAsync()).RootElement.EnumerateArray().ToList();
+        var list = JsonDocument.Parse(await s.Content.ReadAsStringAsync(cancel)).RootElement.EnumerateArray().ToList();
         double Off(JsonElement e) => e.TryGetProperty("duration", out var d) && d.ValueKind == JsonValueKind.Number ? Math.Abs(d.GetDouble() - duration) : 999;
         var best = list.Where(e => Text(e, "syncedLyrics") != null).OrderBy(Off).FirstOrDefault();
         if (best.ValueKind != JsonValueKind.Undefined && (duration <= 0 || Off(best) <= 5)) return Text(best, "syncedLyrics");
@@ -240,11 +264,13 @@ public static class Lyrics
     static readonly Regex WordTag = new(@"<(\d+):(\d+(?:[.:]\d+)?)>", RegexOptions.Compiled);
     static readonly Regex OffsetTag = new(@"^\[offset:\s*([+-]?\d+)\]", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
-    static double Clock(Match m) => int.Parse(m.Groups[1].Value) * 60 + double.Parse(m.Groups[2].Value.Replace(':', '.'), CultureInfo.InvariantCulture);
+    static double Clock(Match m) => int.TryParse(m.Groups[1].Value, out var minutes)
+        && double.TryParse(m.Groups[2].Value.Replace(':', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+        && double.IsFinite(seconds) && seconds < 60 ? minutes * 60.0 + seconds : double.NaN;
 
     public static LyricsDoc? ParseLrc(string text, string source)
     {
-        var offset = OffsetTag.Match(text) is { Success: true } o ? int.Parse(o.Groups[1].Value) / 1000.0 : 0;
+        var offset = OffsetTag.Match(text) is { Success: true } o && int.TryParse(o.Groups[1].Value, out var milliseconds) ? milliseconds / 1000.0 : 0;
         var raw = new List<(double Start, string Body)>();
         var plain = new List<string>();
         foreach (var line in text.Replace("\r", "").Split('\n'))
@@ -256,7 +282,8 @@ public static class Lyrics
                 continue;
             }
             var body = line[(tags[^1].Index + tags[^1].Length)..];
-            foreach (Match tag in tags) raw.Add((Clock(tag) - offset, body));
+            foreach (Match tag in tags)
+                if (Clock(tag) is var time && double.IsFinite(time)) raw.Add((time - offset, body));
         }
         if (raw.Count == 0)
             return plain.Count == 0 ? null : new LyricsDoc([.. plain.Select(p => new LyricLine(0, 0, p, [], false, []))], false, source);
@@ -294,6 +321,8 @@ public static class Lyrics
             if (piece.Trim().Length == 0) continue;
             var start = Clock(tags[i]) - offset;
             var end = i + 1 < tags.Count ? Clock(tags[i + 1]) - offset : lineEnd;
+            if (!double.IsFinite(start)) continue;
+            if (!double.IsFinite(end)) end = lineEnd;
             words.Add(new Syllable(start, Math.Max(start + 0.05, end), piece.Trim(), !piece.EndsWith(' ') && i + 1 < tags.Count && !body[to..].StartsWith(' ')));
         }
         return [.. words];

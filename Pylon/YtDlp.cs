@@ -538,10 +538,23 @@ public static class YtMusic
 /// </summary>
 public static class StreamRelay
 {
+    static CancellationTokenSource _session = new();
+    static readonly SemaphoreSlim Connections = new(8);
     static System.Net.Sockets.TcpListener? _listener;
     static HttpClient? _http;
     static string? _proxyOf;
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Url, string? UserAgent, string? Referer)> Map = new();
+
+    public static void Reset()
+    {
+        lock (Map)
+        {
+            _session.Cancel();
+            _session.Dispose();
+            _session = new();
+            Map.Clear();
+        }
+    }
 
     /// <summary>The address libVLC should open: the original one without a proxy, else Pylon's local copy of it.</summary>
     public static string Wrap(string url, string? userAgent, string? referer)
@@ -576,36 +589,66 @@ public static class StreamRelay
             System.Net.Sockets.TcpClient client;
             try { client = await listener.AcceptTcpClientAsync(); }
             catch (Exception e) when (e is ObjectDisposedException or System.Net.Sockets.SocketException) { return; }
-            _ = Task.Run(() => Answer(client));
+            if (!Connections.Wait(0)) { client.Dispose(); continue; }
+            CancellationToken cancel;
+            lock (Map) cancel = _session.Token;
+            _ = Task.Run(async () =>
+            {
+                try { await Answer(client, cancel); }
+                finally { Connections.Release(); }
+            });
         }
     }
 
-    static async Task Answer(System.Net.Sockets.TcpClient client)
+    static async Task Answer(System.Net.Sockets.TcpClient client, CancellationToken cancel)
     {
         using (client)
         using (var net = client.GetStream())
         {
             try
             {
-                using var reader = new StreamReader(net, System.Text.Encoding.ASCII, false, 4096, leaveOpen: true);
-                var request = (await reader.ReadLineAsync())?.Split(' ');
+                using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+                idle.CancelAfter(TimeSpan.FromSeconds(5));
+                var headers = new System.Text.StringBuilder();
+                var block = new byte[4096];
+                while (!headers.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    var n = await net.ReadAsync(block, idle.Token);
+                    if (n == 0 || headers.Length + n > 16384) return;
+                    headers.Append(System.Text.Encoding.ASCII.GetString(block, 0, n));
+                }
+                var lines = headers.ToString().Split("\r\n");
+                var request = lines[0].Split(' ');
                 string? range = null;
-                for (string? h; (h = await reader.ReadLineAsync()) is { Length: > 0 };)
+                foreach (var h in lines.Skip(1))
                     if (h.StartsWith("Range:", StringComparison.OrdinalIgnoreCase)) range = h[6..].Trim();
                 if (request is not [var method, var path, ..] || !Map.TryGetValue(path.TrimStart('/'), out var target)) { await Reply(net, "404 Not Found", null); return; }
                 using var ask = new HttpRequestMessage(method == "HEAD" ? HttpMethod.Head : HttpMethod.Get, target.Url);
                 if (range != null) ask.Headers.TryAddWithoutValidation("Range", range);
                 if (target.UserAgent != null) ask.Headers.TryAddWithoutValidation("User-Agent", target.UserAgent);
                 if (target.Referer != null) ask.Headers.TryAddWithoutValidation("Referer", target.Referer);
-                using var res = await _http!.SendAsync(ask, HttpCompletionOption.ResponseHeadersRead);
+                idle.CancelAfter(TimeSpan.FromSeconds(30));
+                HttpClient http;
+                lock (Map) http = _http!;
+                using var res = await http.SendAsync(ask, HttpCompletionOption.ResponseHeadersRead, idle.Token);
                 var head = new System.Text.StringBuilder($"HTTP/1.1 {(int)res.StatusCode} {res.ReasonPhrase}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n");
                 foreach (var name in new[] { "Content-Type", "Content-Length", "Content-Range" })
                     if (res.Content.Headers.TryGetValues(name, out var values)) head.Append($"{name}: {string.Join(",", values)}\r\n");
                 head.Append("\r\n");
-                await net.WriteAsync(System.Text.Encoding.ASCII.GetBytes(head.ToString()));
-                if (method != "HEAD") await (await res.Content.ReadAsStreamAsync()).CopyToAsync(net);
+                await net.WriteAsync(System.Text.Encoding.ASCII.GetBytes(head.ToString()), idle.Token);
+                if (method != "HEAD")
+                {
+                    await using var body = await res.Content.ReadAsStreamAsync(idle.Token);
+                    var buffer = new byte[65536];
+                    int n;
+                    while ((n = await body.ReadAsync(buffer, idle.Token)) > 0)
+                    {
+                        await net.WriteAsync(buffer.AsMemory(0, n), idle.Token);
+                        idle.CancelAfter(TimeSpan.FromSeconds(30));
+                    }
+                }
             }
-            catch (Exception e) when (e is IOException or HttpRequestException or System.Net.Sockets.SocketException or TaskCanceledException or ObjectDisposedException) { } // libVLC hung up (a seek) or the site did
+            catch (Exception e) when (e is IOException or HttpRequestException or System.Net.Sockets.SocketException or OperationCanceledException or ObjectDisposedException) { } // libVLC hung up (a seek) or the site did
         }
     }
 

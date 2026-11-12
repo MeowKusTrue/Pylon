@@ -152,7 +152,8 @@ public partial class MainWindow : Window
         SetupThumbButtons();
         // 30 updates a second move the bar smoothly; a Rendering hook ran at the monitor's rate (144+ Hz) for the whole session
         // and kept WPF redrawing the waveform bar all the time, which cost more than a core
-        new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher).Start();
+        _seekPulse = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher) { IsEnabled = false };
+        Motion.AsleepChanged += SyncSeekPulse;
         ErrorLog.Show = text => Osd(text, 6);
         RemotePane.AvailabilityChanged += ApplyLayout;
         RemotePane.Closed += CloseOtherPlayer;
@@ -236,6 +237,10 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _tick.Stop();
+            _seekPulse.Stop();
+            Motion.AsleepChanged -= SyncSeekPulse;
+            CancelLyricsWork();
+            StreamRelay.Reset();
             _outputWatch?.Dispose();
             BackgroundJobs.CancelAll();
             _duck.Stop();
@@ -740,6 +745,8 @@ public partial class MainWindow : Window
 
     public void ClearQueue()
     {
+        CancelLyricsWork();
+        StreamRelay.Reset();
         SaveProgress();
         _mp.Stop();
         _queue.Clear();
@@ -783,6 +790,8 @@ public partial class MainWindow : Window
         }
         if (!_fadeStarting) EndCrossfade();
         var request = ++_playRequest;
+        CancelLyricsWork(prefetch: false);
+        StreamRelay.Reset();
         _queueResume = -1;
         _openingMedia = true;
         CancelOpeningBtn.Visibility = Visibility.Visible;
@@ -1493,6 +1502,7 @@ public partial class MainWindow : Window
 
     void Refresh()
     {
+        SyncSeekPulse();
         MaybeCrossfade();
         if (_hosting) UpdatePartyPill(); // the number of viewers
         UpdateDiscord();
@@ -1576,6 +1586,8 @@ public partial class MainWindow : Window
 
     public void Stop()
     {
+        CancelLyricsWork();
+        StreamRelay.Reset();
         var opening = _openingMedia;
         _stoppedRequest = ++_playRequest;
         FinishOpening();
@@ -1834,15 +1846,14 @@ public partial class MainWindow : Window
 
     void HideEffects()
     {
-        SlideHost(FxHost, 0);
-        Motion.Out(FxPanel, () => { FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 24, spring: Spring.Smooth, animate: Motion.ByPointer);
+        Motion.Out(FxPanel, () => { SlideHost(FxHost, 0); FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 24, spring: Spring.Smooth, animate: Motion.ByPointer);
     }
 
-    /// <summary>Opens or closes a side panel's column on a spring (instant from the keyboard, like the panel itself).</summary>
-    static void SlideHost(Border host, double width)
+    /// <summary>Resize once; bridge WPF content with render transforms. Native video resizes directly.</summary>
+    void SlideHost(Border host, double width)
     {
-        if (Motion.ByPointer) Motion.Animate(host, WidthProperty, width, Spring.Smooth);
-        else Motion.Set(host, WidthProperty, width);
+        if (host.Width == width) return;
+        Motion.Relayout(Video.IsVisible ? [] : [Stage], () => Motion.Set(host, WidthProperty, width), Motion.ByPointer);
     }
 
     void PanelHost_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyStageMargin();
@@ -2262,6 +2273,15 @@ public partial class MainWindow : Window
     /// Every frame the thumb advances on its own clock and is eased toward libVLC's reported time, so it never steps
     /// or jumps back by a few pixels; real jumps (seeking, a new track) are taken as they are.
     /// </summary>
+    readonly DispatcherTimer _seekPulse;
+    void SyncSeekPulse()
+    {
+        var run = !Motion.Asleep && _index >= 0 && _mp.IsPlaying;
+        if (_seekPulse.IsEnabled == run) return;
+        _seekPulse.IsEnabled = run;
+        _lastFrame = 0;
+    }
+
     void SmoothSeek(object? sender, EventArgs e)
     {
         if (Motion.Asleep) { _lastFrame = 0; return; }
@@ -2376,9 +2396,8 @@ public partial class MainWindow : Window
         if (show && section != null) Sidebar.Show(section.Value);
         SidebarBtn.IsChecked = show;
         ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
-        SlideHost(SidebarHost, show ? Sidebar.Width : 0);
-        if (show) ApplyLayout();
-        else Motion.Out(Sidebar, () => { Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -24, spring: Spring.Smooth, animate: Motion.ByPointer);
+        if (show) { SlideHost(SidebarHost, Sidebar.Width); ApplyLayout(); }
+        else Motion.Out(Sidebar, () => { SlideHost(SidebarHost, 0); Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -24, spring: Spring.Smooth, animate: Motion.ByPointer);
     }
 
     /// <summary>

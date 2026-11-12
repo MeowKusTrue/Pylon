@@ -53,6 +53,138 @@ public partial class MainWindow
                     await Task.Delay(1500);
                     break;
                 case "next": Next(); break;
+                case "audit20-lyrics":
+                    {
+                        if (CurrentPath is not { } path) throw new InvalidOperationException("An audio fixture is required.");
+                        var track = _track;
+                        var early = new TaskCompletionSource<Lyrics.Result>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var started = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var finish = new TaskCompletionSource<LyricsDoc?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var chosen = new LyricsDoc([new LyricLine(0, 1, "chosen", [], false, [])], true, "chosen");
+                        try
+                        {
+                            Lyrics.DebugLookup = (_, title, _) => { started.TrySetResult(title); return finish.Task; };
+                            _prefetchPath = path; _prefetch = early.Task;
+                            _track = ("Original", "Artist", null, 1);
+                            LoadLyrics(path);
+                            _track = ("Changed", "Artist", null, 1);
+                            early.SetResult(new(null, false));
+                            var captured = await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                            CancelLyricsWork();
+                            LyricsPane.Show(chosen);
+                            finish.SetResult(new LyricsDoc([new LyricLine(0, 1, "old", [], false, [])], true, "old"));
+                            await Task.Delay(200);
+                            var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                            var shown = (LyricsDoc?)typeof(LyricsView).GetField("_doc", flags)!.GetValue(LyricsPane);
+                            var kept = ReferenceEquals(shown, chosen);
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"lyrics passed={captured == "Original" && kept} captured={captured} manualChoiceKept={kept}\n");
+                        }
+                        finally { finish.TrySetResult(null); Lyrics.DebugLookup = null; _track = track; CancelLyricsWork(); }
+                        break;
+                    }
+                case "audit20-preview":
+                    {
+                        var files = arg.Split('|');
+                        var preview = new SeekPreviewer(Dispatcher);
+                        try
+                        {
+                            for (var attempt = 0; attempt < 8; attempt++)
+                            {
+                                preview.Open(files[attempt % 2], attempt % 2 == 0 ? 1 : 1.5, 1);
+                                preview.Request(0.5);
+                                await Task.Delay(80);
+                            }
+                            preview.Open(files[1], 1.5, 1);
+                            await preview.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+                            await Task.Delay(500);
+                            preview.Request(0.5);
+                            await Task.Delay(500);
+                            var pixels = new byte[preview.Bitmap.PixelWidth * preview.Bitmap.PixelHeight * 4];
+                            preview.Bitmap.CopyPixels(pixels, preview.Bitmap.PixelWidth * 4, 0);
+                            var white = pixels[0] > 200 && pixels[1] > 200 && pixels[2] > 200;
+                            preview.Dispose();
+                            await preview.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"preview passed={white && !preview.HasMedia} white={white} disposed={!preview.HasMedia}\n");
+                        }
+                        finally { preview.Dispose(); }
+                        break;
+                    }
+                case "audit20-library":
+                    {
+                        var root = Path.Combine(Library.Dir, "index-fixture");
+                        var first = Path.Combine(root, "first");
+                        var second = Path.Combine(root, "second");
+                        Directory.CreateDirectory(first); Directory.CreateDirectory(second);
+                        var a = Path.Combine(first, "first.wav");
+                        var b = Path.Combine(second, "second.wav");
+                        File.Copy(arg, a, true); File.Copy(arg, b, true);
+                        await Library.ThumbnailAsync(a);
+                        Library.Data.MusicFolders.Clear(); Library.Data.MusicFolders.Add(first);
+                        Library.IndexMusic(Dispatcher);
+                        Library.Data.MusicFolders.Add(second);
+                        Library.IndexMusic(Dispatcher);
+                        for (var attempt = 0; attempt < 150 && (!Library.Data.Meta.ContainsKey(a) || !Library.Data.Meta.ContainsKey(b)); attempt++) await Task.Delay(100);
+                        var indexed = Library.Data.Meta.ContainsKey(a) && Library.Data.Meta.ContainsKey(b);
+                        var flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+                        var thumbs = (System.Collections.Concurrent.ConcurrentDictionary<string, ImageSource?>)typeof(Library).GetField("Thumbs", flags)!.GetValue(null)!;
+                        var invalidated = !thumbs.ContainsKey(a);
+                        ToggleSidebar(LibraryPanel.Section.Music);
+                        Sidebar.DebugClick(L.T("Artists"));
+                        var groupFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var cache = (Dictionary<string, List<Row>>)typeof(LibraryPanel).GetField("_groups", groupFlags)!.GetValue(Sidebar)!;
+                        for (var attempt = 0; attempt < 100 && !cache.ContainsKey("Artists"); attempt++) await Task.Delay(50);
+                        var rows = cache.GetValueOrDefault("Artists");
+                        ((TextBox)Sidebar.FindName("SearchBox")).Text = "Un";
+                        var reused = rows != null && ReferenceEquals(rows, cache.GetValueOrDefault("Artists"));
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"library passed={indexed && invalidated && reused} indexed={indexed} thumbnailInvalidated={invalidated} groupsReused={reused}\n");
+                        break;
+                    }
+                case "audit20-ui":
+                    {
+                        async Task Settle(int ms)
+                        {
+                            var clock = Stopwatch.StartNew();
+                            while (clock.ElapsedMilliseconds < ms) { Motion.DebugFrame(); await Task.Delay(8); }
+                        }
+                        var pointer = Motion.DebugPointer;
+                        var enabled = Motion.DebugEnabled;
+                        try
+                        {
+                            Motion.DebugPointer = true; Motion.DebugEnabled = true;
+                            SyncSeekPulse();
+                            var playing = _mp.IsPlaying && _seekPulse.IsEnabled;
+                            Hide();
+                            var asleep = !_seekPulse.IsEnabled;
+                            Show(); SyncSeekPulse();
+                            var awake = _mp.IsPlaying && _seekPulse.IsEnabled;
+                            _mp.SetPause(true); await Task.Delay(150); SyncSeekPulse();
+                            var paused = !_seekPulse.IsEnabled;
+                            ClearQueue();
+                            _queue.AddRange(Enumerable.Range(0, 10000).Select(i => Path.Combine(Library.Dir, $"queue-{i}.wav")));
+                            var allocated = GC.GetAllocatedBytesForCurrentThread();
+                            var watch = Stopwatch.StartNew();
+                            ToggleSidebar(LibraryPanel.Section.Queue);
+                            var bytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
+                            var elapsed = watch.ElapsedMilliseconds;
+                            var count = ((System.Collections.ICollection)((ListBox)Sidebar.FindName("List")).ItemsSource).Count;
+                            var noWidthSpring = !Motion.DebugDrivers().Contains("Border.Width");
+                            ToggleSidebar(); await Settle(40); ToggleSidebar(); await Settle(700);
+                            var reversed = Sidebar.Visibility == Visibility.Visible && Math.Abs(SidebarHost.Width - Sidebar.Width) < 0.01;
+                            ToggleSidebar(); await Settle(700);
+                            var closed = Sidebar.Visibility == Visibility.Collapsed && SidebarHost.Width == 0;
+                            Motion.DebugPointer = false;
+                            ToggleSidebar();
+                            var keyboard = SidebarHost.Width == Sidebar.Width && Math.Abs(Stage.RenderTransform.Value.M11 - 1) < 0.001;
+                            Motion.DebugEnabled = false;
+                            ToggleSidebar();
+                            var reduced = SidebarHost.Width == 0 && Sidebar.Visibility == Visibility.Collapsed;
+                            var ok = playing && asleep && awake && paused && count == 10000 && bytes < 100_000_000 && noWidthSpring && reversed && closed && keyboard && reduced;
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"),
+                                $"audit20 passed={ok} playing={playing} asleep={asleep} awake={awake} paused={paused} rows={count} allocated={bytes} renderMs={elapsed} noWidthSpring={noWidthSpring} reversed={reversed} closed={closed} keyboard={keyboard} reduced={reduced}\n");
+                        }
+                        finally { Motion.DebugPointer = pointer; Motion.DebugEnabled = enabled; ClearQueue(); }
+                        break;
+                    }
                 case "reload-audio-state-test":
                     {
                         var value = Volume.Value;

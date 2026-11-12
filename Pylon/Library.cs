@@ -104,6 +104,10 @@ public static class Library
         Data.History = new(Data.History, StringComparer.OrdinalIgnoreCase);
         Data.Meta = new(Data.Meta, StringComparer.OrdinalIgnoreCase);
         Data.Subtitles = new(Data.Subtitles, StringComparer.OrdinalIgnoreCase);
+        Data.LyricFiles = new(Data.LyricFiles, StringComparer.OrdinalIgnoreCase);
+        Data.LyricOffsets = new(Data.LyricOffsets, StringComparer.OrdinalIgnoreCase);
+        Data.IntroEnds = new(Data.IntroEnds, StringComparer.OrdinalIgnoreCase);
+        Data.Bookmarks = new(Data.Bookmarks, StringComparer.OrdinalIgnoreCase);
         // 1.9.9 played songs from playlists as videos and wrote them down so: back among the music
         foreach (var (path, h) in Data.History) if (YtDlp.IsSong(path)) h.IsAudio = true;
     }
@@ -285,11 +289,12 @@ public static class Library
     // ───────── music metadata index ─────────
 
     static int _indexing;
+    static bool _indexAgain;
 
     /// <summary>Parses tags of every song in the music folders (once per file version), off the UI thread.</summary>
     public static void IndexMusic(Dispatcher ui)
     {
-        if (Interlocked.Exchange(ref _indexing, 1) == 1) return;
+        if (Interlocked.Exchange(ref _indexing, 1) == 1) { _indexAgain = true; return; }
         var folders = Data.MusicFolders.ToList();
         // Meta is a plain Dictionary the UI thread writes to: this thread only reads a copy of the stamps
         var stamps = Data.Meta.ToDictionary(m => m.Key, m => (m.Value.Stamp, m.Value.DurationMs));
@@ -316,14 +321,18 @@ public static class Library
                         Art = media.Meta(MetadataType.ArtworkURL),
                     };
                     DisposeLater(media);
-                    ui.Invoke(() => { Data.Meta[file] = meta; _songs = null; });
+                    ui.Invoke(() => { Data.Meta[file] = meta; _songs = null; ForgetThumb(file); });
                     if (++dirty % 50 == 0) ui.Invoke(Touch);
                 }
                 if (dirty > 0) ui.Invoke(Touch);
             }
             finally
             {
-                _indexing = 0;
+                await ui.InvokeAsync(() =>
+                {
+                    _indexing = 0;
+                    if (_indexAgain) { _indexAgain = false; IndexMusic(ui); }
+                });
                 await Task.Delay(5000); // outlive the deferred Media disposals
                 vlc.Dispose();
             }

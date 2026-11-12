@@ -25,13 +25,13 @@ public static class SingleInstance
     {
         _mutex = new Mutex(true, PipeName, out var first);
         if (first) return false;
-        // both are on by default, so only a saved "false" matters; a text search instead of Settings.Load (~90 ms of
+        // Both are on by default. Read just the saved flag without Settings.Load (~90 ms of
         // JSON and the whole settings schema in a process that lives 0.1 s)
         var dir = Environment.GetEnvironmentVariable("PYLON_DATA") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pylon");
         string json;
         try { json = File.ReadAllText(Path.Combine(dir, "settings.json")); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { json = ""; }
-        if (json.Contains($"\"{(args.Length > 0 ? "library.singlefm" : "library.single")}\": \"false\"")) return false;
+        if (SingleInstanceDisabled(json, args.Length > 0)) return false;
         try
         {
             using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
@@ -42,6 +42,19 @@ public static class SingleInstance
             return true;
         }
         catch (Exception e) when (e is TimeoutException or IOException or UnauthorizedAccessException) { return false; } // can't reach that copy: just start
+    }
+
+    public static bool SingleInstanceDisabled(string json, bool files)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && doc.RootElement.TryGetProperty(files ? "library.singlefm" : "library.single", out var value)
+                && (value.ValueKind == System.Text.Json.JsonValueKind.False
+                    || value.ValueKind == System.Text.Json.JsonValueKind.String && value.GetString() == "false");
+        }
+        catch (System.Text.Json.JsonException) { return false; }
     }
 
     /// <summary>Lets a fresh copy of the app start while this one is still closing (language change, updates).</summary>
