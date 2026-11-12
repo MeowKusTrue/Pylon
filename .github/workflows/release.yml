@@ -5,48 +5,76 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag, for example v2.1.4'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Check release tag and existing publication
+        id: publication
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected vX.Y.Z tag' }
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot check existing releases' }
+          $exists = @($json | ConvertFrom-Json) | Where-Object tag_name -eq $env:RELEASE_TAG
+          "exists=$([bool]$exists)".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+      - if: steps.publication.outputs.exists != 'true'
+        uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0 # release notes need the previous tag
 
-      - uses: actions/setup-dotnet@v4
+      - if: steps.publication.outputs.exists != 'true'
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
       - name: Install Inno Setup and Velopack
+        if: steps.publication.outputs.exists != 'true'
         run: |
           choco install innosetup -y --no-progress
           dotnet tool install -g vpk
 
       - name: Build
+        if: steps.publication.outputs.exists != 'true'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }} # lets build.ps1 fetch the previous release for the delta package
-        run: ./build.ps1 -Version ($env:GITHUB_REF_NAME -replace '^v', '')
+        run: ./build.ps1 -Version ($env:RELEASE_TAG -replace '^v', '')
 
       - name: Publish release
+        if: steps.publication.outputs.exists != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $version = $env:RELEASE_TAG -replace '^v', ''
           # Velopack: setup, portable zip, full + delta packages and the update feed (releases.win.json)
           vpk upload github -o dist\releases --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN `
-            --publish --tag $env:GITHUB_REF_NAME --releaseName "Pylon $version"
+            --publish --tag $env:RELEASE_TAG --releaseName "Pylon $version"
+          if ($LASTEXITCODE -ne 0) { throw 'Velopack upload failed' }
           # bridge for 1.0-1.2 (their updater looks for *-setup-win-x64.exe) and the changelog as the release notes
           $bridge = "dist\releases\Pylon-$version-setup-win-x64.exe"
-          if (Test-Path $bridge) { gh release upload $env:GITHUB_REF_NAME $bridge --clobber }
+          if (Test-Path $bridge) { gh release upload $env:RELEASE_TAG $bridge --clobber }
           # the release page starts with which file to take (many download from here); the app's own "what's new" stays plain
-          $setup = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/Pylon-win-Setup.exe"
+          $setup = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/Pylon-win-Setup.exe"
           $hint = "**Скачайте [Pylon-win-Setup.exe]($setup) и запустите — это всё.** Остальные файлы ниже нужны для обновлений, их скачивать не надо.`n`n" +
                   "**Download [Pylon-win-Setup.exe]($setup) and open it — that's all.** The other files below are for updates; you don't need them.`n`n---`n`n"
           Set-Content dist\release-page.md ($hint + (Get-Content dist\notes.md -Raw)) -Encoding utf8
-          gh release edit $env:GITHUB_REF_NAME --notes-file dist\release-page.md
+          gh release edit $env:RELEASE_TAG --notes-file dist\release-page.md
