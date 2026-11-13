@@ -792,9 +792,20 @@ public partial class MainWindow : Window
     {
         _openingMedia = false;
         CancelOpeningBtn.Visibility = Visibility.Collapsed;
+        StageCancelOpeningBtn.Visibility = Visibility.Collapsed;
     }
 
     void CancelOpening_Click(object sender, RoutedEventArgs e) => Stop();
+
+    async void ShowOpeningIfSlow(long request)
+    {
+        await Task.Delay(800);
+        if (request == _playRequest && _openingMedia && IsLoaded)
+        {
+            CancelOpeningBtn.Visibility = Visibility.Visible;
+            StageCancelOpeningBtn.Visibility = Visibility.Visible;
+        }
+    }
 
     async void PlayAt(int i, bool stopAtEnd = false, long startAt = -1, bool? autoplay = null)
     {
@@ -810,8 +821,9 @@ public partial class MainWindow : Window
         StreamRelay.Reset();
         _queueResume = -1;
         _openingMedia = true;
-        CancelOpeningBtn.Visibility = Visibility.Visible;
-        Osd(L.T("Opening media… Cancel with Esc."), 30);
+        CancelOpeningBtn.Visibility = Visibility.Collapsed;
+        StageCancelOpeningBtn.Visibility = Visibility.Collapsed;
+        ShowOpeningIfSlow(request);
         _index = i;
         _switch = Stopwatch.StartNew();
         await _pendingStop;

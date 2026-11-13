@@ -143,6 +143,9 @@
 
 
                 <!-- Around the video: its own frames, blurred (sized to the picture, the video sits on top) -->
+                <Button x:Name="StageCancelOpeningBtn" Style="{StaticResource SecondaryButton}" Content="{local:T 'Cancel opening'}"
+                        HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,60,0,0"
+                        Click="CancelOpening_Click" ToolTip="{local:T 'Cancel opening (Esc)'}" Visibility="Collapsed"/>
                 <Grid x:Name="VideoBackdrop" Visibility="Collapsed">
                     <Rectangle Fill="{DynamicResource StageBg}"/>
                     <local:Backdrop x:Name="Ambient" Opacity="0.6"/>
@@ -182,6 +185,9 @@
                         <Button x:Name="SkipBtn" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,28,28" Style="{StaticResource PrimaryButton}"
                                 Visibility="Collapsed" Click="Skip_Click" FontFamily="{StaticResource Inter}"/>
                         <ContentControl x:Name="OverlayControlsHost" VerticalAlignment="Bottom"/>
+                        <Button x:Name="CancelOpeningBtn" Style="{StaticResource SecondaryButton}" Content="{local:T 'Cancel opening'}"
+                                HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,60,0,0"
+                                Click="CancelOpening_Click" ToolTip="{local:T 'Cancel opening (Esc)'}" Visibility="Collapsed"/>
                     </Grid>
                 </vlc:VideoView>
             </Grid>
@@ -193,8 +199,6 @@
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button x:Name="PrevBtn" Style="{StaticResource IconButton}" Tag="skip-back-fill" Padding="3,2" Click="Prev_Click" ToolTip="{local:T 'Previous (P)'}"/>
                     <Button x:Name="StopBtn" Style="{StaticResource IconButton}" Tag="stop-fill" Padding="3,2" Margin="8,0,0,0" Click="Stop_Click" ToolTip="{local:T 'Stop (S)'}" Visibility="Collapsed"/>
-                    <Button x:Name="CancelOpeningBtn" Style="{StaticResource SecondaryButton}" Content="{local:T 'Cancel opening'}"
-                            Margin="8,0,0,0" Click="CancelOpening_Click" ToolTip="{local:T 'Cancel opening (Esc)'}" Visibility="Collapsed"/>
                     <Button x:Name="Back15" Style="{StaticResource IconButton}" Padding="3,2" Margin="8,0,0,0" Click="Back15_Click" Visibility="Collapsed">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">

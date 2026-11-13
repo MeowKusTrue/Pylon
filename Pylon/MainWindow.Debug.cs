@@ -36,6 +36,37 @@ public partial class MainWindow
             var (cmd, arg) = step.IndexOf(':') is var i and > 0 ? (step[..i], step[(i + 1)..]) : (step, "");
             switch (cmd)
             {
+                case "opening-ui":
+                    {
+                        FinishOpening();
+                        UpdateLayout();
+                        var before = PlayBtn.TranslatePoint(new Point(), ControlsBar);
+                        var request = ++_playRequest;
+                        _openingMedia = true;
+                        ShowOpeningIfSlow(request);
+                        var immediate = CancelOpeningBtn.Visibility == Visibility.Collapsed;
+                        FinishOpening();
+                        await Task.Delay(900);
+                        var fast = CancelOpeningBtn.Visibility == Visibility.Collapsed;
+                        request = ++_playRequest;
+                        _openingMedia = true;
+                        ShowOpeningIfSlow(request);
+                        await Task.Delay(900);
+                        UpdateLayout();
+                        var slow = CancelOpeningBtn.IsVisible || StageCancelOpeningBtn.IsVisible;
+                        var stable = before == PlayBtn.TranslatePoint(new Point(), ControlsBar);
+                        Snap(this, Path.ChangeExtension(outFile, ".slow.png"));
+                        FinishOpening();
+                        request = ++_playRequest;
+                        _openingMedia = true;
+                        ShowOpeningIfSlow(request);
+                        ++_playRequest;
+                        await Task.Delay(900);
+                        var stale = CancelOpeningBtn.Visibility == Visibility.Collapsed;
+                        FinishOpening();
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"opening-ui passed={immediate && fast && slow && stable && stale} immediate={immediate} fast={fast} slow={slow} stable={stable} stale={stale}\n");
+                        break;
+                    }
                 case "library": ToggleSidebar(Enum.Parse<LibraryPanel.Section>(arg)); break;
                 case "folder": if (Sidebar.Visibility != Visibility.Visible) ToggleSidebar(); Sidebar.ShowFolder(arg); break;
                 case "search": Sidebar.OpenSearch(); ((TextBox)Sidebar.FindName("SearchBox")).Text = arg; break;

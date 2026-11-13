@@ -3,6 +3,15 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.7
+
+<!-- ru -->
+- Кнопка отмены открытия больше не сдвигает управление: появляется поверх области воспроизведения только при ожидании дольше 800 мс и исчезает после открытия или отмены.
+- Убрана плашка «Открытие медиа…», которая оставалась после начала воспроизведения. Esc отменяет открытие сразу; старые запросы не показывают кнопку для нового файла.
+
+<!-- en -->
+- Cancel opening no longer shifts playback controls. It appears over the playback area only after an 800 ms wait and disappears when opening completes or is cancelled.
+- Removed the opening notification that lingered after playback started. Esc cancels immediately; stale requests cannot show the cancel button for a newer file.
 ## 2.1.6
 
 <!-- ru -->
