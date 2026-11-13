@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     static readonly bool SnapMode = Environment.GetEnvironmentVariable("PYLON_SNAP") != null;
 
     /// <summary>Started with Windows (--background): built and drawn once off-screen, then hidden until a file comes.</summary>
-    static readonly bool Background = Environment.GetCommandLineArgs().Skip(1).SequenceEqual(["--background"]);
+    static readonly bool Background = StartupOptions.Arguments.SequenceEqual(["--background"]);
 
     Player _mp = null!;
     readonly List<string> _queue = [];
@@ -84,7 +84,7 @@ public partial class MainWindow : Window
             ShowActivated = false;
             WindowStartupLocation = WindowStartupLocation.Manual;
             Left = -20000;
-            ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
+            if (!PerformanceProbe.Enabled) ContentRendered += async (_, _) => { await Task.Delay(3000); Perf.Mark("idle +3 s"); Close(); };
         }
         _volumeMaximum = ReadMaxVolume();
         if (Settings.Bool("playback.ownengine")) Task.Run(VideoEngine.Warm); // alongside the window, so the first file doesn't wait
@@ -134,7 +134,7 @@ public partial class MainWindow : Window
         _clickTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(GetDoubleClickTime()), DispatcherPriority.Normal, (_, _) => { _clickTimer!.Stop(); var wasPlaying = _mp.IsPlaying; TogglePlay(); FlashPlayState(!wasPlaying); }, Dispatcher) { IsEnabled = false };
         _resumeTimer = new DispatcherTimer(TimeSpan.FromSeconds(10), DispatcherPriority.Normal, (_, _) => { HideResume(); _resumeTimer!.Stop(); }, Dispatcher) { IsEnabled = false };
         _duck = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => DuckTick(), Dispatcher);
-        if (Settings.Bool("ui.tray") && Settings.Bool("ui.traymin") && !SnapMode && !Background && Environment.GetCommandLineArgs().Length <= 1)
+        if (Settings.Bool("ui.tray") && Settings.Bool("ui.traymin") && !SnapMode && !Background && StartupOptions.Arguments.Length == 0)
         {
             WindowState = WindowState.Minimized; // start in the tray: hidden once loaded
             ShowInTaskbar = false;
@@ -154,6 +154,7 @@ public partial class MainWindow : Window
         // and kept WPF redrawing the waveform bar all the time, which cost more than a core
         _seekPulse = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, SmoothSeek, Dispatcher) { IsEnabled = false };
         Motion.AsleepChanged += SyncSeekPulse;
+        PowerPolicy.Changed += PowerEffectsChanged;
         ErrorLog.Show = text => Osd(text, 6);
         RemotePane.AvailabilityChanged += ApplyLayout;
         RemotePane.Closed += CloseOtherPlayer;
@@ -178,7 +179,7 @@ public partial class MainWindow : Window
             Video.MediaPlayer = _mp;
             HookOverlayWindow();
             Topmost = Settings.Bool("ui.ontop");
-            Library.IndexMusic(Dispatcher);
+            if (!StartupOptions.SafeMode) Library.IndexMusic(Dispatcher);
             Dispatcher.BeginInvoke(() => ShellRegistration.Autostart(Settings.Bool("general.background")), DispatcherPriority.ApplicationIdle);
             new DispatcherTimer(TimeSpan.FromSeconds(20), DispatcherPriority.Background, async (t, _) => { ((DispatcherTimer)t!).Interval = TimeSpan.FromHours(6); await SyncSpotifyLists(); }, Dispatcher).Start();
             Hotkeys.RegisterGlobal(this);
@@ -187,14 +188,16 @@ public partial class MainWindow : Window
             UpdateControlButtons();
             if (!SnapMode) SingleInstance.Listen(this);
             Perf.Mark("startup work done");
-            var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
+            var args = StartupOptions.Arguments;
             if (args.Length > 0 && !Background) Open(args);
             else RestoreQueueSession();
+            if (PerformanceProbe.Enabled) { RunPerformanceProbe(); return; }
             if (Settings.Bool("ui.compact")) ToggleMiniplayer();
 #if DEBUG
             DebugSnapshot();
             if (SnapMode) return;
 #endif
+            if (StartupOptions.SafeMode) { Osd(L.T("Safe mode: preferences are not saved."), 8); return; }
             if (Background) return; // asked when the window first shows (Reveal)
             if (!Settings.Bool("app.onboarded")) Dispatcher.BeginInvoke(() => { new OnboardingWindow(this).ShowDialog(); StartupChecks(); }, DispatcherPriority.ApplicationIdle);
             else StartupChecks();
@@ -239,6 +242,7 @@ public partial class MainWindow : Window
             _tick.Stop();
             _seekPulse.Stop();
             Motion.AsleepChanged -= SyncSeekPulse;
+            PowerPolicy.Changed -= PowerEffectsChanged;
             CancelLyricsWork();
             StreamRelay.Reset();
             _outputWatch?.Dispose();
@@ -266,7 +270,7 @@ public partial class MainWindow : Window
     static List<string> EngineArgsNow()
     {
         var args = Settings.EngineArgs();
-        if (SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) args.Add("--aout=dummy"); // silent UI test runs
+        if ((SnapMode || PerformanceProbe.Enabled) && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null) args.Add("--aout=dummy");
         return args;
     }
 
@@ -330,7 +334,7 @@ public partial class MainWindow : Window
     Player NewPlayer()
     {
         var mp = new Player(Vlc);
-        AudioChain.Apply(mp, SnapMode && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
+        AudioChain.Apply(mp, (SnapMode || PerformanceProbe.Enabled) && Environment.GetEnvironmentVariable("PYLON_SNAP_AUDIO") == null ? "adummy" : null);
         // the output device is chosen before anything plays: switching it on a playing stream left libVLC's clock off by a
         // quarter second for good, so it dropped and resampled audio every 200 ms (crackling sound, a busy core)
         var device = Settings.Str("audio.device");
@@ -375,6 +379,7 @@ public partial class MainWindow : Window
             {
                 if (mp != _mp || generation != mp.OwnGeneration || request != _playRequest || _stoppedRequest == _playRequest || !mp.OnOwnEngine) return;
                 Perf.Mark("own engine refused: " + why);
+                _pipeline.Fallback = why;
                 Osd(L.F("Playing through libVLC: {0}", L.T(why)), 6);
                 _ownRefused = CurrentPath;
                 PlayAt(_index, startAt: Math.Max(0, mp.Time), autoplay: !mp.OwnPaused);
@@ -638,6 +643,7 @@ public partial class MainWindow : Window
         var log = _log;
         _logHandler = (_, e) =>
         {
+            _pipeline.Observe(e.Module ?? "", e.Message);
             if (e.Level >= LogLevel.Warning) _playbackDiagnostics.Add(e.Module ?? "VLC", e.Message);
             if (e.Level < min || log == null) return;
             var line = $"{DateTime.Now:HH:mm:ss.fff} [{e.Level}] {e.Module}: {e.Message}";
@@ -679,6 +685,7 @@ public partial class MainWindow : Window
     public void PlayList(IList<string> items, int start)
     {
         if (items.Count == 0) return;
+        RememberQueueEdit(new QueueSplice(0, _queue.ToArray(), items.ToArray()));
         SaveProgress();
         _radio = null; // another list: the radio stops topping up
         _queue.Clear();
@@ -689,8 +696,10 @@ public partial class MainWindow : Window
 
     public void Enqueue(IEnumerable<string> items)
     {
+        var added = items.ToArray();
+        RememberQueueEdit(new QueueSplice(_queue.Count, [], added));
         var wasEmpty = _index < 0;
-        _queue.AddRange(items);
+        _queue.AddRange(added);
         BuildShuffle();
         if (wasEmpty) PlayAt(0);
         else Osd(L.T("Added to queue"));
@@ -701,7 +710,9 @@ public partial class MainWindow : Window
     public void PlayNext(IEnumerable<string> items)
     {
         if (_index < 0) { Enqueue(items); return; }
-        _queue.InsertRange(_index + 1, items);
+        var added = items.ToArray();
+        RememberQueueEdit(new QueueSplice(_index + 1, [], added));
+        _queue.InsertRange(_index + 1, added);
         BuildShuffle();
         Osd(L.T("Plays next"));
         Sidebar.Render();
@@ -712,6 +723,7 @@ public partial class MainWindow : Window
     {
         if (from == to || from < 0 || to < 0 || from >= _queue.Count || to >= _queue.Count) return;
         var item = _queue[from];
+        RememberQueueEdit(new QueueSplice(from, [item], []), new QueueSplice(to, [], [item]));
         _queue.RemoveAt(from);
         _queue.Insert(to, item);
         if (_index == from) _index = to;
@@ -737,6 +749,7 @@ public partial class MainWindow : Window
     public void RemoveFromQueue(int i)
     {
         if (i < 0 || i >= _queue.Count) return;
+        RememberQueueEdit(new QueueSplice(i, [_queue[i]], []));
         _queue.RemoveAt(i);
         BuildShuffle();
         if (i < _index) _index--;
@@ -745,6 +758,8 @@ public partial class MainWindow : Window
 
     public void ClearQueue()
     {
+        ++_prebufferId; _prebuffering = false;
+        if (_queue.Count > 0) RememberQueueEdit(new QueueSplice(0, _queue.ToArray(), []));
         CancelLyricsWork();
         StreamRelay.Reset();
         SaveProgress();
@@ -790,6 +805,7 @@ public partial class MainWindow : Window
         }
         if (!_fadeStarting) EndCrossfade();
         var request = ++_playRequest;
+        _pipeline.Reset();
         CancelLyricsWork(prefetch: false);
         StreamRelay.Reset();
         _queueResume = -1;
@@ -1065,6 +1081,7 @@ public partial class MainWindow : Window
 
     void StartMedia(Media media, string src, bool isUrl, long startAt, bool autoplay, bool? audio = null)
     {
+        ++_prebufferId; _prebuffering = false;
         _errorAttempt++;
         _playbackDiagnostics.Clear();
         var ext = isUrl ? "" : Path.GetExtension(src);
@@ -1253,6 +1270,7 @@ public partial class MainWindow : Window
 
     void OnPlaying()
     {
+        Perf.Mark("playing");
         if (_stoppedRequest == _playRequest) return;
         FinishOpening();
         SkipLeadingSilence();
@@ -1265,6 +1283,7 @@ public partial class MainWindow : Window
             if (Math.Abs(Settings.Num("playback.speed") - 1) > 0.01) _mp.SetRate((float)Settings.Num("playback.speed"));
             ApplyVideoSettings();
             ApplyAudioSettings();
+            RestorePlaybackChoices();
             if (!_isAudio && Settings.Bool("video.fullscreen") && !_fullscreen && !_mini) ToggleFullscreen();
         }
         KeepAwake(!_isAudio && Settings.Bool("video.screensaver"));
@@ -1586,6 +1605,7 @@ public partial class MainWindow : Window
 
     public void Stop()
     {
+        ++_prebufferId; _prebuffering = false;
         CancelLyricsWork();
         StreamRelay.Reset();
         var opening = _openingMedia;
@@ -1696,6 +1716,7 @@ public partial class MainWindow : Window
     {
         rate = Math.Clamp(rate, 0.25f, 4f);
         _mp.SetRate(rate);
+        RememberPlaybackChoices();
         Osd(L.F("Speed {0}×", rate.ToString("0.##")));
     }
 
@@ -1707,6 +1728,7 @@ public partial class MainWindow : Window
 
     void ApplyVolume()
     {
+        Volume.AutomationMaximum = MaxVolume;
         var fade = _sleepAt is { } at ? Math.Clamp((at - DateTime.Now).TotalSeconds / 10, 0, 1) : 1;
         AudioChain.SetVolume(_mp, VolumeLevel * fade);
         _mp.SetOwnVolume(VolumeLevel * fade, _trackGain);
@@ -1717,6 +1739,7 @@ public partial class MainWindow : Window
     {
         var previous = _volumeMaximum;
         _volumeMaximum = ReadMaxVolume();
+        Volume.AutomationMaximum = _volumeMaximum;
         Volume.Value = AudioChain.ResizeVolumeSlider(Volume.Value, previous, _volumeMaximum);
         ApplyVolume();
     }
@@ -1746,7 +1769,7 @@ public partial class MainWindow : Window
         var tracks = _mp.AudioTrackDescription.Where(t => t.Id >= 0).ToList();
         if (tracks.Count == 0) return;
         var next = tracks[(tracks.FindIndex(t => t.Id == _mp.AudioTrack) + 1) % tracks.Count];
-        _mp.SetAudioTrack(next.Id);
+        ChooseAudioTrack(next.Id);
         Osd(L.F("Audio: {0}", AudioTrackName(next)));
     }
 
@@ -1755,12 +1778,22 @@ public partial class MainWindow : Window
         var tracks = _mp.SpuDescription.ToList();
         if (tracks.Count == 0) { Osd(L.T("No subtitles")); return; }
         var next = tracks[(tracks.FindIndex(t => t.Id == _mp.Spu) + 1) % tracks.Count];
-        _mp.SetSpu(next.Id);
+        ChooseSubtitleTrack(next.Id);
         Osd(L.F("Subtitles: {0}", next.Name));
     }
 
-    public void ShiftAudioDelay(double seconds) => Settings.Set("audio.delay", Math.Round(Settings.Num("audio.delay") + seconds, 2));
-    public void ShiftSubtitleDelay(double seconds) => Settings.Set("subs.delay", Math.Round(Settings.Num("subs.delay") + seconds, 1));
+    public void ShiftAudioDelay(double seconds)
+    {
+        _fileAudioDelay = Math.Clamp(Math.Round(_fileAudioDelay + seconds, 2), -10, 10);
+        _mp.SetAudioDelay((long)(_fileAudioDelay * 1_000_000)); RememberPlaybackChoices();
+        Osd(L.F("Audio delay {0} s", _fileAudioDelay.ToString("+0.00;-0.00;0")));
+    }
+    public void ShiftSubtitleDelay(double seconds)
+    {
+        _fileSubtitleDelay = Math.Clamp(Math.Round(_fileSubtitleDelay + seconds, 1), -600, 600);
+        _mp.SetSpuDelay((long)(_fileSubtitleDelay * 1_000_000)); RememberPlaybackChoices();
+        Osd(L.F("Subtitle delay {0} s", _fileSubtitleDelay.ToString("+0.0;-0.0;0")));
+    }
 
     public void CycleAspect() => CycleSetting("video.aspect");
     public void CycleCrop() => CycleSetting("video.crop");
@@ -1846,14 +1879,16 @@ public partial class MainWindow : Window
 
     void HideEffects()
     {
-        Motion.Out(FxPanel, () => { SlideHost(FxHost, 0); FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: 24, spring: Spring.Smooth, animate: Motion.ByPointer);
+        SlideHost(FxHost, 0);
+        Motion.Out(FxPanel, () => { Motion.Set(FxHost, WidthProperty, 0); FxPanel.Visibility = Visibility.Collapsed; ApplyLayout(); }, spring: Spring.Smooth, animate: Motion.ByPointer);
     }
 
-    /// <summary>Resize once; bridge WPF content with render transforms. Native video resizes directly.</summary>
+    /// <summary>Keep the panel at its full width inside a clipping host; glide the layout without scaling text or video.</summary>
     void SlideHost(Border host, double width)
     {
-        if (host.Width == width) return;
-        Motion.Relayout(Video.IsVisible ? [] : [Stage], () => Motion.Set(host, WidthProperty, width), Motion.ByPointer);
+        Motion.Reset(Stage);
+        if (Motion.ByPointer && Motion.Enabled) Motion.Animate(host, WidthProperty, width, Spring.Smooth);
+        else Motion.Set(host, WidthProperty, width);
     }
 
     void PanelHost_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyStageMargin();
@@ -1863,7 +1898,7 @@ public partial class MainWindow : Window
         if (_fullscreen) ToggleFullscreen();
         if (_mini) ToggleMiniplayer();
         FxPanel.ShowTab(video);
-        Motion.In(FxPanel, dx: 24, animate: Motion.ByPointer);
+        Motion.In(FxPanel, animate: Motion.ByPointer);
         SlideHost(FxHost, FxPanel.Width);
         ApplyLayout();
     }
@@ -2049,8 +2084,10 @@ public partial class MainWindow : Window
             case "audio.eq": ApplyEqualizer(edited: true); break;
             case "audio.maxvol": UpdateVolumeMaximum(); break;
             case "audio.device": if (!_recoveringOutput) ReloadEngine(); break;
-            case "audio.speakers" or "audio.delay": ApplyAudioSettings(); break;
-            case "subs.delay": _mp.SetSpuDelay((long)(Settings.Num(key) * 1_000_000)); Osd(L.F("Subtitle delay {0} s", Settings.Num(key).ToString("+0.0;-0.0;0"))); break;
+            case "audio.delay": _fileAudioDelay = Settings.Num(key); ApplyAudioSettings(); RememberPlaybackChoices(); break;
+            case "audio.speakers": ApplyAudioSettings(); break;
+            case "subs.delay": _fileSubtitleDelay = Settings.Num(key); _mp.SetSpuDelay((long)(_fileSubtitleDelay * 1_000_000)); RememberPlaybackChoices(); break;
+            case "ui.autoeconomy": PowerEffectsChanged(); break;
             case "net.preset": ApplyNetworkPreset(); break;
             case "net.file" or "net.disc" or "net.stream" or "net.live": if (!_netPresetApplying) Settings.Set("net.preset", "Custom"); break;
             case "perf.realtime" or "perf.priority": ApplyPriority(); break;
@@ -2100,8 +2137,8 @@ public partial class MainWindow : Window
             "Right" => AudioOutputChannel.Right, "Dolby Surround" => AudioOutputChannel.Dolbys, _ => (AudioOutputChannel?)null,
         };
         if (channel is { } c) _mp.SetChannel(c);
-        _mp.SetAudioDelay((long)(Settings.Num("audio.delay") * 1_000_000));
-        _mp.SetSpuDelay((long)(Settings.Num("subs.delay") * 1_000_000));
+        _mp.SetAudioDelay((long)(_fileAudioDelay * 1_000_000));
+        _mp.SetSpuDelay((long)(_fileSubtitleDelay * 1_000_000));
         ApplyEqualizer();
     }
 
@@ -2387,17 +2424,33 @@ public partial class MainWindow : Window
         if (frame != null && AmbientOn) Ambient.SetImage(frame);
     }
 
-    void ToggleSidebar(LibraryPanel.Section? section = null)
+    int _sidebarTransition;
+    bool _sidebarMeasured;
+    async void ToggleSidebar(LibraryPanel.Section? section = null)
     {
         if (!Settings.Bool("library.enabled")) return;
+        var transition = ++_sidebarTransition;
         var show = !Motion.IsShown(Sidebar) || (section != null && Sidebar.Current != section);
         if (show && (_fullscreen || _minimal || _mini)) { _minimal = false; if (_fullscreen) ToggleFullscreen(); if (_mini) ToggleMiniplayer(); }
-        if (show) Motion.In(Sidebar, dx: -24, animate: Motion.ByPointer);
         if (show && section != null) Sidebar.Show(section.Value);
+        if (show) Motion.In(Sidebar, animate: Motion.ByPointer);
         SidebarBtn.IsChecked = show;
         ListBtn.IsChecked = show && Sidebar.Current == LibraryPanel.Section.Queue;
-        if (show) { SlideHost(SidebarHost, Sidebar.Width); ApplyLayout(); }
-        else Motion.Out(Sidebar, () => { SlideHost(SidebarHost, 0); Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, dx: -24, spring: Spring.Smooth, animate: Motion.ByPointer);
+        if (show)
+        {
+            if (!_sidebarMeasured && Motion.ByPointer && Motion.Enabled)
+            {
+                await Dispatcher.InvokeAsync(() => Sidebar.UpdateLayout(), DispatcherPriority.Loaded);
+                _sidebarMeasured = true;
+                if (transition != _sidebarTransition) return;
+            }
+            SlideHost(SidebarHost, Sidebar.Width); ApplyLayout();
+        }
+        else
+        {
+            SlideHost(SidebarHost, 0);
+            Motion.Out(Sidebar, () => { Motion.Set(SidebarHost, WidthProperty, 0); Sidebar.Visibility = Visibility.Collapsed; ApplyLayout(); }, spring: Spring.Smooth, animate: Motion.ByPointer);
+        }
     }
 
     /// <summary>
@@ -2604,6 +2657,8 @@ public partial class MainWindow : Window
 
     void OnKey(object sender, KeyEventArgs e)
     {
+        if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key == Key.Z) return;
+        if (Keyboard.FocusedElement is AccessibleRange && Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End or Key.PageUp or Key.PageDown) return;
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
         if (Keyboard.FocusedElement is TextBox && !ctrl && e.Key != Key.Escape) return; // typing in search etc.
         switch (e.Key)
@@ -2893,6 +2948,12 @@ public partial class MainWindow : Window
 
     object[] MainMenu() =>
     [
+        Item("Search actions", "magnifying-glass", KeyOf("commands"), ShowCommandPalette),
+        Item("Undo queue change", "arrow-counter-clockwise", KeyOf("undoqueue"), UndoQueue, enabled: _queueHistory.Count > 0),
+        Sub("Library tools", "folder", [Item("Import playlist", null, null, ImportPlaylist),
+            Item("Export queue", null, null, () => ExportPlaylist(_queue)), Item("Find moved files", null, null, RelocateLibrary)]),
+        Item("Use current tracks for this folder", null, null, RememberSeriesTracks, enabled: CurrentPath is { } p && !p.Contains("://")),
+        Item("Playback diagnostics", null, null, ShowPlaybackPipeline),
         Item("Open File(s)", "file-duotone", KeyOf("open"), OpenFiles),
         Item("Open Folder", "folder-duotone", KeyOf("openfolder"), OpenFolder),
         Item("Open Network Stream", "broadcast-duotone", KeyOf("openstream"), OpenStream),
@@ -3479,7 +3540,7 @@ public partial class MainWindow : Window
         foreach (var t in _mp.AudioTrackDescription)
         {
             var id = t.Id;
-            items.Add(Item(AudioTrackName(t), null, null, () => _mp.SetAudioTrack(id), check: _mp.AudioTrack == id));
+            items.Add(Item(AudioTrackName(t), null, null, () => ChooseAudioTrack(id), check: _mp.AudioTrack == id));
         }
         if (items.Count == 0) items.Add(Item("No audio tracks", null, null, () => { }, enabled: false));
         items.Add(new Separator());
@@ -3495,7 +3556,7 @@ public partial class MainWindow : Window
         foreach (var t in _mp.SpuDescription)
         {
             var id = t.Id;
-            items.Add(Item(t.Name ?? L.F("Track {0}", id), null, null, () => _mp.SetSpu(id), check: _mp.Spu == id));
+            items.Add(Item(t.Name ?? L.F("Track {0}", id), null, null, () => ChooseSubtitleTrack(id), check: _mp.Spu == id));
         }
         if (items.Count > 0) items.Add(new Separator());
         items.Add(Item("Add Subtitles…", "file-duotone", null, AddSubtitles, enabled: _index >= 0 && CurrentPath?.Contains("://") == false));

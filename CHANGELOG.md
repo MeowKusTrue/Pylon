@@ -3,6 +3,23 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.6
+
+<!-- ru -->
+- Запоминание дорожек, скорости и задержек для файла; предпочтения дорожек для папки сериала.
+- Отмена изменений очереди, импорт/экспорт плейлистов и перенос путей библиотеки с предпросмотром.
+- Поиск действий и настроек, экономия эффектов на батарее, портативный профиль и безопасный запуск.
+- Клавиатурное управление громкостью/перемоткой, UI Automation, карточка тракта воспроизведения и изолированные замеры производительности.
+- Переделано раскрытие левой панели: подготовка первого открытия, плавное прерывание и закрытие без растягивания изображения.
+- Исправлен устаревший таймер буферизации, который мог запускать восстановленный на паузе файл.
+
+<!-- en -->
+- Remember per-file tracks, speed and delays, with explicit folder-level series track preferences.
+- Undo queue changes, import/export playlists, and preview library path relinking.
+- Search actions and settings; battery effect savings, portable profiles and safe startup.
+- Keyboard and UI Automation support for volume/seeking, playback pipeline diagnostics and isolated performance probes.
+- Reworked sidebar opening, first-use preparation, interruption and closing without stretching the picture.
+- Fixed a stale prebuffer timer resuming a file restored in a paused state.
 ## 2.1.5
 
 <!-- ru -->

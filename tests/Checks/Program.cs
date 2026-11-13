@@ -310,7 +310,7 @@ Check("devices across outputs", AudioChain.DeviceName("CABLE Input (VB-Audio Vir
 foreach (var layout in Hotkeys.Layouts.Keys)
 {
     Settings.Set("controls.defaults", layout);
-    var keys = Hotkeys.Actions.SelectMany(a => Hotkeys.Gesture(a.Id).Split('|')).ToList();
+    var keys = Hotkeys.Actions.SelectMany(a => Hotkeys.Gesture(a.Id).Split('|')).Where(k => k.Length > 0).ToList();
     var twice = keys.GroupBy(k => k).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
     Check($"shortcuts: {layout}", twice.Count == 0 && Hotkeys.Match("Space")?.Id == "play", string.Join(", ", twice));
 }
@@ -816,6 +816,123 @@ Check("isolated data profiles cannot alter the Windows shell", !ShellRegistratio
     try { await (Task)write.Invoke(null, [path, "partial replacement", cancel.Token])!; } catch (OperationCanceledException) { }
     Check("cancelled lyrics cache replacement preserves the complete document", File.ReadAllText(path) == "old complete lyrics"
         && !Directory.EnumerateFiles(Library.Dir, "lyrics-cache-fixture.lrc.*.tmp").Any());
+}
+
+{
+    TrackCandidate[] tracks = [new(2, "Full dialogue", "eng"), new(8, "Signs & Songs", "en"), new(9, "Dub", "rus")];
+    Check("track preferences match names and language aliases instead of stream numbers", PlaybackPreferences.Match(new("Full dialogue", "en"), tracks) == 2
+        && PlaybackPreferences.Match(new("Dub", "ru"), tracks) == 9 && PlaybackPreferences.Match(new("", "", true), tracks) == -1);
+    Check("ambiguous language choices do not silently select a track", PlaybackPreferences.Match(new("Unknown", "en"),
+        [new(0, "Dub A", "eng"), new(1, "Dub B", "en")]) == null);
+    Check("full subtitles do not match forced signs", PlaybackPreferences.Match(new("Dialogue", "en"), [new(8, "Signs & Songs", "en")]) == null);
+    Check("invalid playback preferences are rejected", !PlaybackPreferences.Valid(new(null, null, double.NaN))
+        && !PlaybackPreferences.Valid(new(new(null!, "en"), null)));
+    var file = @"C:\Movies\Movie.mkv";
+    Library.Data.Playback[file] = new(new("Dub", "ru"), new("Full", "en"), 1.25, 0.15, -0.4);
+    Library.Data.SeriesTracks[@"C:\Movies"] = new(new("Dub", "ru"), new("Full", "en"));
+    Library.Save(); Library.Load();
+    Check("file and series playback preferences survive reload and path casing", Library.Data.Playback[file.ToLowerInvariant()].Speed == 1.25
+        && Library.Data.Playback[file].SubtitleDelay == -0.4 && Library.Data.SeriesTracks[@"c:\movies"].Audio?.Name == "Dub");
+}
+{
+    var history = new QueueHistory();
+    var queue = new List<string> { "A", "A", "B" };
+    var edit = new QueueEdit([new(2, ["B"], [])], 1, 500);
+    history.Push(edit); queue.RemoveAt(2);
+    Check("queue undo restores deletion and duplicate selection", history.Undo(queue) == edit && queue.SequenceEqual(new[] { "A", "A", "B" })
+        && QueueHistory.RestoreIndex(1, edit) == 1);
+    edit = new([new(0, ["A"], []), new(2, [], ["A"])], 0, 500);
+    history.Push(edit); queue.RemoveAt(0); queue.Insert(2, "A"); history.Undo(queue);
+    Check("queue undo restores a move transaction", queue.SequenceEqual(new[] { "A", "A", "B" }));
+    history.Push(new([new(0, ["old"], ["unexpected"])], 0, 0));
+    var before = queue.ToArray();
+    Check("stale queue undo never partially changes the queue", history.Undo(queue) == null && queue.SequenceEqual(before));
+    for (var n = 0; n < 30; n++) history.Push(new([new(n, [], ["x"])], 0, 0));
+    Check("queue edit history stays bounded", history.Count == 20);
+}
+{
+    var dir = Directory.CreateDirectory(Path.Combine(Library.Dir, "playlist-files")).FullName;
+    var media = Path.Combine(dir, "Музыка 100%20 #.mp3");
+    var comment = Path.Combine(dir, "#song.mp3");
+    File.WriteAllText(media, "fixture"); File.WriteAllText(comment, "fixture");
+    string[] files = [media, comment, "https://example.com/song?q=one%20two#part"];
+    foreach (var ext in new[] { ".m3u8", ".xspf" })
+    {
+        var path = Path.Combine(dir, "list" + ext); PlaylistFiles.Write(path, files);
+        Check("playlist roundtrip keeps unicode percent signs hashes and URLs " + ext, PlaylistFiles.Read(path).SequenceEqual(files));
+    }
+    var moved = dir + "-moved"; Directory.CreateDirectory(moved);
+    File.Copy(Path.Combine(dir, "list.m3u8"), Path.Combine(moved, "list.m3u8"));
+    Check("relative playlists follow their own folder", PlaylistFiles.Read(Path.Combine(moved, "list.m3u8"))[0] == Path.Combine(moved, Path.GetFileName(media)));
+    var malicious = Path.Combine(dir, "external.xspf");
+    File.WriteAllText(malicious, "<!DOCTYPE playlist [<!ENTITY x SYSTEM 'file:///C:/private'>]><playlist><location>&x;</location></playlist>");
+    var blocked = false; try { PlaylistFiles.Read(malicious); } catch (System.Xml.XmlException) { blocked = true; }
+    Check("playlist XML cannot resolve external entities", blocked);
+}
+{
+    var old = Path.Combine(Library.Dir, "old-drive"); var next = Directory.CreateDirectory(Path.Combine(Library.Dir, "new-drive")).FullName;
+    var file = Path.Combine(old, "song.wav"); var target = Path.Combine(next, "song.wav"); File.WriteAllText(target, "fixture");
+    var data = new LibraryData(); data.MusicFolders.Add(old);
+    data.Playlists.Add(new Playlist { Name = "fixture", Items = [file] });
+    data.History[file] = new HistoryEntry { Time = 1234 }; data.Bookmarks[file] = [new Bookmark { Time = 456 }];
+    data.Playback[file] = new(null, null, 1.25); data.SeriesTracks[old] = new(new("Dub", "ru"), null);
+    var map = LibraryRelocation.Find(LibraryRelocation.KnownFiles(data), old, next, CancellationToken.None);
+    var result = LibraryRelocation.Apply(data, map, old, next);
+    Check("relink preserves playlists history bookmarks and file preferences", result.Playlists[0].Items[0] == target
+        && result.History[target].Time == 1234 && result.Bookmarks[target][0].Time == 456 && result.Playback[target].Speed == 1.25
+        && result.SeriesTracks.ContainsKey(next) && data.History.ContainsKey(file) && !data.History.ContainsKey(target));
+    Check("relocation respects folder boundaries", LibraryRelocation.Under(old + "-other\\song.wav", old, next) == null);
+    data.History[target] = new HistoryEntry(); var conflict = false;
+    try { LibraryRelocation.Apply(data, map, old, next); } catch (IOException) { conflict = true; }
+    Check("conflicting relocation leaves the source library unchanged", conflict && data.History.Count == 2);
+    Check("connected files are never automatically relinked", LibraryRelocation.Find([target], next, old, CancellationToken.None).Count == 0);
+}
+{
+    var portable = Directory.CreateDirectory(Path.Combine(Library.Dir, "portable-fixture")).FullName;
+    Check("portable mode is explicit", StartupOptions.PortableData(portable, false) == null && StartupOptions.PortableData(portable, true) == Path.Combine(portable, "data"));
+    File.WriteAllText(Path.Combine(portable, "portable.txt"), "");
+    Check("portable marker selects a local profile", StartupOptions.PortableData(portable, false) == Path.Combine(portable, "data"));
+    var pipeline = new PlaybackPipeline(); pipeline.Observe("avcodec", "available hardware decoder D3D11VA");
+    Check("diagnostics do not confuse available hardware with active decoding", pipeline.Decoder == "Not reported by the engine");
+    pipeline.Observe("avcodec", "Using D3D11VA (GPU)");
+    Check("diagnostics record positive decoder evidence", pipeline.Decoder == "D3D11VA");
+}
+{
+    Exception? failure = null; var accessible = false;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var seek = new SeekBar(); var changed = false; seek.Seek += _ => changed = true;
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(seek)!;
+            var range = (System.Windows.Automation.Provider.IRangeValueProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.RangeValue)!;
+            range.SetValue(25);
+            accessible = changed && seek.Value == 0.25 && range.Value == 25 && peer.GetName().Length > 0;
+        }
+        catch (Exception e) { failure = e; }
+    });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+    Check("custom seek control exposes a writable UI Automation range", accessible, failure?.Message ?? "");
+}
+{
+    Check("power policy distinguishes battery AC and unknown power status", PowerPolicy.BatteryActive(0) && !PowerPolicy.BatteryActive(1) && !PowerPolicy.BatteryActive(255));
+    var battery = typeof(PowerPolicy).GetField("<OnBattery>k__BackingField", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+    var oldBattery = battery.GetValue(null); var hardware = Settings.Str("perf.hw"); var auto = Settings.Str("ui.autoeconomy");
+    try
+    {
+        battery.SetValue(null, true); Settings.Set("ui.autoeconomy", true);
+        Check("battery effects preserve decoder settings", PowerPolicy.Economy && Motion.Lite && !SceneView.On && Settings.Str("perf.hw") == hardware);
+        Settings.Set("ui.autoeconomy", false);
+        Check("automatic economical effects can be disabled", !PowerPolicy.Economy);
+    }
+    finally { battery.SetValue(null, oldBattery); Settings.Set("ui.autoeconomy", auto); }
+    Settings.Save(); var path = Path.Combine(Library.Dir, "settings.json"); var before = File.ReadAllText(path);
+    StartupOptions.Initialize(["--safe-mode"]);
+    Settings.Set("general.theme", "Light"); Settings.Save();
+    Check("safe mode overrides effects without saving preferences or changing shell registration", StartupOptions.SafeMode
+        && Settings.Bool("perf.softwareui") && !Settings.Bool("playback.ownengine") && !Settings.Bool("playback.autoplay")
+        && !ShellRegistration.CanWriteShell && File.ReadAllText(path) == before);
+    StartupOptions.Initialize([]); Settings.Load();
 }
 
 Console.WriteLine(failed == 0 ? "all checks passed" : $"{failed} check(s) failed");

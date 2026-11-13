@@ -26,6 +26,7 @@ public static class Waveform
     /// <summary>0..255 per bin, or null when the file can't be decoded. Only the latest request is worked on.</summary>
     public static async Task<byte[]?> GetAsync(string path)
     {
+        if (PowerPolicy.Economy) return Cached(path);
         if (Memory.TryGetValue(path, out var known)) return known;
         _wanted = path;
         await Gate.WaitAsync();

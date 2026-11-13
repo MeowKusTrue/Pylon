@@ -39,6 +39,7 @@ public sealed class Player(LibVLC vlc) : MediaPlayer(vlc)
     public event Action<long, string>? OwnRefused;
 
     public bool OnOwnEngine => _engine != null;
+    public bool OwnHardwareDecoding => _engine?.HardwareDecoding == true;
 
     public bool OwnPaused => _engine?.Paused == true;
 

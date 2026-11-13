@@ -22,6 +22,13 @@ public static class Hotkeys
         new("queue", "Basic", "Show / hide queue", "Q", w => w.ToggleQueue()),
         new("miniplayer", "Basic", "Miniplayer", "Ctrl+M", w => w.ToggleMiniplayer()),
         new("search", "Basic", "Search the library", "Ctrl+K", w => w.FocusSearch()),
+        new("commands", "Basic", "Search actions", "Ctrl+Shift+P", w => w.ShowCommandPalette()),
+        new("undoqueue", "Playback", "Undo queue change", "Ctrl+Z", w => w.UndoQueue()),
+        new("importplaylist", "Media", "Import playlist", "Ctrl+Shift+O", w => w.ImportPlaylist()),
+        new("exportplaylist", "Media", "Export queue", "Ctrl+Shift+S", w => w.ExportPlaylist(w.Queue)),
+        new("relocate", "Media", "Find moved files", "", w => w.RelocateLibrary()),
+        new("seriestracks", "Playback", "Use current tracks for this folder", "", w => w.RememberSeriesTracks()),
+        new("pipeline", "App", "Playback diagnostics", "", w => w.ShowPlaybackPipeline()),
 
         new("play", "Playback", "Play / pause", "Space", w => w.TogglePlay()),
         new("stop", "Playback", "Stop playback", "S", w => w.Stop()),
@@ -90,7 +97,7 @@ public static class Hotkeys
         {
             ["play"] = "Space|K", ["back2"] = "J", ["fwd2"] = "L", ["back1"] = "Left", ["fwd1"] = "Right", ["back3"] = "Ctrl+Left", ["fwd3"] = "Ctrl+Right",
             ["audiodelaydown"] = "Shift+J", ["audiodelayup"] = "Shift+K", ["library"] = "Ctrl+L",
-            ["subtrack"] = "C", ["crop"] = "Shift+C", ["next"] = "Shift+N", ["prev"] = "Shift+P", ["nextchapter"] = "Ctrl+Shift+N", ["prevchapter"] = "Ctrl+Shift+P",
+            ["subtrack"] = "C", ["crop"] = "Shift+C", ["next"] = "Shift+N", ["prev"] = "Shift+P", ["nextchapter"] = "Ctrl+Shift+N", ["prevchapter"] = "Ctrl+Shift+P", ["commands"] = "Ctrl+Shift+K",
             ["faster"] = "Shift+OemPeriod", ["slower"] = "Shift+OemComma", ["frame"] = "OemPeriod",
         },
         ["MPC-HC-style"] = new()

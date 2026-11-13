@@ -24,7 +24,7 @@ public static class Recognize
     static readonly SemaphoreSlim Gate = new(1, 1);
 
     static string Fpcalc => Environment.GetEnvironmentVariable("PYLON_FPCALC")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "fpcalc.exe");
+        ?? Path.Combine(StartupOptions.ToolsDirectory, "fpcalc.exe");
 
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(20), DefaultRequestHeaders = { { "User-Agent", "Pylon (https://github.com/MeowKusTrue/Pylon)" } } };
     static readonly string CoverDir = Path.Combine(Library.Dir, "covers");

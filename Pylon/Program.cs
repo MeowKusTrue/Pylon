@@ -15,6 +15,10 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        try { StartupOptions.Initialize(args); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        { System.Windows.MessageBox.Show(e.Message, "Pylon portable profile"); return; }
+        args = StartupOptions.Arguments;
         if (args is ["--export-strings", var template]) { L.ExportTemplate(template); return; } // a starting point for a new language
         if (args is ["--add-to-music", var folder, .. var files]) // Explorer's "Add to Music": a copy per selected file, no window
         {
@@ -28,9 +32,14 @@ public static class Program
             return;
         }
         Perf.Mark("main");
+        if (StartupOptions.SafeMode && SingleInstance.IsRunning())
+        {
+            System.Windows.MessageBox.Show("Close the running Pylon before starting in safe mode.", "Pylon");
+            return;
+        }
         // a Pylon is already running (in the background, usually): hand it the files before Velopack and WPF even load
         // (~0.1 s instead of ~0.4 s); the autostart copy just leaves. Velopack's own hooks (--veloapp-…) go on below.
-        if (Environment.GetEnvironmentVariable("PYLON_SNAP") == null && !(args is [var first, ..] && first.StartsWith("--veloapp", StringComparison.Ordinal))
+        if (!StartupOptions.SafeMode && Environment.GetEnvironmentVariable("PYLON_SNAP") == null && !(args is [var first, ..] && first.StartsWith("--veloapp", StringComparison.Ordinal))
             && (args is ["--background"] ? SingleInstance.IsRunning() : SingleInstance.ForwardToRunning(args)))
         {
             Perf.Mark("forwarded");

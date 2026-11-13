@@ -44,7 +44,7 @@ public static class Motion
     }
 
     /// <summary>"Light mode": no blur, no moving backgrounds, lyrics at 30 updates a second (weak laptops, battery).</summary>
-    public static bool Lite => Settings.Bool("ui.lite");
+    public static bool Lite => Settings.Bool("ui.lite") || PowerPolicy.Economy;
 
     /// <summary>The change came from the mouse (or pen/touch). Hotkey-driven changes don't animate.</summary>
     public static bool ByPointer =>
@@ -251,7 +251,7 @@ public static class Motion
     /// <summary>Fades to transparent; <see cref="Set"/> the opacity to show it again.</summary>
     public static void FadeOut(UIElement el) => Animate(el, UIElement.OpacityProperty, 0, Spring.Smooth);
 
-    static void Reset(UIElement el)
+    public static void Reset(UIElement el)
     {
         Set(el, UIElement.OpacityProperty, 1);
         if (el.RenderTransform is TransformGroup { Children: [ScaleTransform s, TranslateTransform t] })

@@ -178,3 +178,11 @@ Thank you for any support, and just as much for bug reports and ideas.
 [GPL-3.0](LICENSE). libVLC and LibVLCSharp are LGPL-2.1.
 
 VLC and the VLC cone are trademarks of VideoLAN. Pylon is an independent project and is not affiliated with or endorsed by VideoLAN.
+
+## New features in the working version
+
+Ctrl+Shift+P searches actions and settings (Ctrl+Shift+K in the YouTube layout); Ctrl+Z undoes queue edits. Library tools import/export M3U8, M3U and XSPF and preview moved-file relinking. Per-file tracks, speed and delays are remembered; folder track preferences are saved explicitly.
+
+`--portable` creates `portable.txt` next to the executable: profiles live in `data`, downloaded tools in `data/tools`. The marker can also be created manually. `PYLON_DATA` takes precedence; existing profiles are not migrated automatically. Hold Shift at startup or use `--safe-mode` for temporary compatibility settings without saving settings. Close the regular instance using the same profile first.
+
+Battery savings reduce decorative effects. Playback diagnostics show available pipeline evidence. Run an isolated probe with `./tools/Measure-Performance.ps1 -Exe <path-to-Pylon.exe> -OutFile performance.json`. See the [implementation and validation report](docs/features-2026-11-13.md).

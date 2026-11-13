@@ -36,6 +36,7 @@ public partial class SettingsWindow : Window
         Render();
         Activate();
     }
+    public void Search(string text) { SearchBox.Text = text; SearchBox.Focus(); }
 
     void BuildNav()
     {

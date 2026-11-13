@@ -70,6 +70,8 @@ public class LibraryData
     public Dictionary<string, TrackMeta> Meta { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> Subtitles { get; set; } = new(StringComparer.OrdinalIgnoreCase); // video -> extra subtitle files
     public Dictionary<string, List<Bookmark>> Bookmarks { get; set; } = new(StringComparer.OrdinalIgnoreCase); // media -> marked moments
+    public Dictionary<string, PlaybackPreference> Playback { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, PlaybackPreference> SeriesTracks { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public class Bookmark
@@ -87,6 +89,15 @@ public static class Library
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
     public static LibraryData Data { get; private set; } = new();
+    static long _epoch;
+    public static void ReplaceData(LibraryData data)
+    {
+        Data = data;
+        _epoch++;
+        if (_indexing != 0) _indexAgain = true;
+        ForgetFolders();
+        Touch();
+    }
 
     /// <summary>Raised on the UI thread after any change (folders, playlists, history, metadata).</summary>
     public static event Action? Changed;
@@ -108,6 +119,8 @@ public static class Library
         Data.LyricOffsets = new(Data.LyricOffsets, StringComparer.OrdinalIgnoreCase);
         Data.IntroEnds = new(Data.IntroEnds, StringComparer.OrdinalIgnoreCase);
         Data.Bookmarks = new(Data.Bookmarks, StringComparer.OrdinalIgnoreCase);
+        Data.Playback = new(Data.Playback, StringComparer.OrdinalIgnoreCase);
+        Data.SeriesTracks = new(Data.SeriesTracks, StringComparer.OrdinalIgnoreCase);
         // 1.9.9 played songs from playlists as videos and wrote them down so: back among the music
         foreach (var (path, h) in Data.History) if (YtDlp.IsSong(path)) h.IsAudio = true;
     }
@@ -118,7 +131,10 @@ public static class Library
         if (loaded.VideoFolders == null || loaded.MusicFolders == null || loaded.Pinned == null || loaded.LyricFiles == null
             || loaded.LyricOffsets == null || loaded.IntroEnds == null || loaded.Streams == null || loaded.Podcasts == null
             || loaded.Playlists == null || loaded.Disliked == null || loaded.History == null || loaded.Meta == null
-            || loaded.Subtitles == null || loaded.Bookmarks == null || loaded.Playlists.Any(p => p == null || p.Items == null)
+            || loaded.Subtitles == null || loaded.Bookmarks == null || loaded.Playback == null || loaded.SeriesTracks == null
+            || loaded.Playback.Values.Any(p => p == null || !PlaybackPreferences.Valid(p))
+            || loaded.SeriesTracks.Values.Any(p => p == null || !PlaybackPreferences.Valid(p))
+            || loaded.Playlists.Any(p => p == null || p.Items == null)
             || loaded.History.Values.Any(v => v == null) || loaded.Meta.Values.Any(v => v == null))
             throw new JsonException("Invalid library data.");
         return loaded;
@@ -296,6 +312,7 @@ public static class Library
     {
         if (Interlocked.Exchange(ref _indexing, 1) == 1) { _indexAgain = true; return; }
         var folders = Data.MusicFolders.ToList();
+        var epoch = _epoch;
         // Meta is a plain Dictionary the UI thread writes to: this thread only reads a copy of the stamps
         var stamps = Data.Meta.ToDictionary(m => m.Key, m => (m.Value.Stamp, m.Value.DurationMs));
         Task.Run(async () =>
@@ -321,7 +338,7 @@ public static class Library
                         Art = media.Meta(MetadataType.ArtworkURL),
                     };
                     DisposeLater(media);
-                    ui.Invoke(() => { Data.Meta[file] = meta; _songs = null; ForgetThumb(file); });
+                    ui.Invoke(() => { if (epoch == _epoch) { Data.Meta[file] = meta; _songs = null; ForgetThumb(file); } });
                     if (++dirty % 50 == 0) ui.Invoke(Touch);
                 }
                 if (dirty > 0) ui.Invoke(Touch);

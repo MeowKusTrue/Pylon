@@ -75,19 +75,21 @@ public class Icon : Image
 }
 
 /// <summary>Seek bar: video style (filled track + 8px thumb) or music style (waveform bars + 4px thumb).</summary>
-public class SeekBar : FrameworkElement
+public class SeekBar : AccessibleRange
 {
     static Brush B(string key) => (Brush)Application.Current.FindResource(key); // theme brush, looked up per frame
     static readonly Brush Hint = Frozen("#22808080");
 
     public static readonly DependencyProperty ValueProperty = DependencyProperty.Register(nameof(Value), typeof(double), typeof(SeekBar),
-        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender, AccessibleChanged));
     public static readonly DependencyProperty WaveformProperty = DependencyProperty.Register(nameof(Waveform), typeof(bool), typeof(SeekBar),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public double Value { get => (double)GetValue(ValueProperty); set => SetValue(ValueProperty, value); }
     public bool Waveform { get => (bool)GetValue(WaveformProperty); set => SetValue(WaveformProperty, value); }
     public bool IsDragging => IsMouseCaptured;
+    protected override double RangeValue => Value;
+    protected override void ChangeRange(double value) { Value = value; Seek?.Invoke(value); }
 
     /// <summary>Raised while the user clicks/drags, with the new position 0..1.</summary>
     public event Action<double>? Seek;
@@ -135,6 +137,7 @@ public class SeekBar : FrameworkElement
 
     public SeekBar()
     {
+        System.Windows.Automation.AutomationProperties.SetName(this, L.T("Playback position"));
         Height = 28;
         Cursor = Cursors.Hand;
         SetWaveSeed("");
@@ -151,6 +154,7 @@ public class SeekBar : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         double w = ActualWidth, h = ActualHeight;
+        DrawKeyboardFocus(dc);
         Brush Track = B("BgB2"), Fill = B("AccentBright"), Thumb = B("Accent"), Played = B("AccentDim"), Unplayed = B("FgA4"), FgHover = B("FgA3");
         dc.DrawRoundedRectangle(Track, null, new Rect(0, 0, w, h), 6, 6);
         var v = Math.Clamp(Value, 0, 1);
@@ -223,7 +227,7 @@ public class SeekBar : FrameworkElement
 }
 
 /// <summary>Wedge volume control from the mockup: green→orange→red gradient, 0..1 maps to 0..125%.</summary>
-public class VolumeBar : FrameworkElement
+public class VolumeBar : AccessibleRange
 {
     static readonly Geometry Bg = Geometry.Parse("M3.59756 19.0454C1.55468 18.8388 0 17.119 0 15.0657V12.2975C0 10.2442 1.55467 8.52441 3.59756 8.31783L85.6982 0.0155207C87.4654 -0.163183 89 1.2241 89 3.0003V24.363C89 26.1392 87.4654 27.5264 85.6982 27.3477L3.59756 19.0454Z");
     static readonly Geometry Wedge = Geometry.Parse("M1.79183 15.9675C0.773415 15.8609 0 15.0023 0 13.9783V10.5816C0 9.55761 0.773416 8.69903 1.79183 8.59245L83.7918 0.0110748C84.9723 -0.112463 86 0.813294 86 2.00021V22.5597C86 23.7467 84.9723 24.6724 83.7918 24.5489L1.79183 15.9675Z");
@@ -236,16 +240,20 @@ public class VolumeBar : FrameworkElement
     }, new Point(-2.5 / 86, 0), new Point(87.5 / 86, 0));
 
     public static readonly DependencyProperty ValueProperty = DependencyProperty.Register(nameof(Value), typeof(double), typeof(VolumeBar),
-        new FrameworkPropertyMetadata(0.8, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(0.8, FrameworkPropertyMetadataOptions.AffectsRender, AccessibleChanged));
     public static readonly DependencyProperty MutedProperty = DependencyProperty.Register(nameof(Muted), typeof(bool), typeof(VolumeBar),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public double Value { get => (double)GetValue(ValueProperty); set => SetValue(ValueProperty, value); }
     public bool Muted { get => (bool)GetValue(MutedProperty); set => SetValue(MutedProperty, value); }
     public event Action<double>? Changed;
+    protected override double RangeValue => Value;
+    protected override void ChangeRange(double value) { Value = value; Changed?.Invoke(value); }
 
     public VolumeBar()
     {
+        AutomationMaximum = 125;
+        System.Windows.Automation.AutomationProperties.SetName(this, L.T("Volume"));
         Width = 88;
         Height = 28;
         Cursor = Cursors.Hand;
@@ -256,6 +264,7 @@ public class VolumeBar : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize)); // hit-testable
+        DrawKeyboardFocus(dc);
         dc.PushTransform(new TranslateTransform(-0.5, 0.32));
         dc.DrawGeometry((Brush)Application.Current.FindResource("BgB2"), null, Bg);
         dc.Pop();

@@ -20,3 +20,12 @@ jobs:
       - run: dotnet run --project tests/Checks -c Release
         env:
           PYLON_DATA: ${{ runner.temp }}\pylon-checks
+      - name: Measure performance on an isolated profile
+        run: ./tools/Measure-Performance.ps1 -Exe Pylon/bin/Release/net10.0-windows10.0.19041.0/win-x64/Pylon.exe -OutFile performance.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance
+          path: |
+            performance.json
+            performance.json.startup.log

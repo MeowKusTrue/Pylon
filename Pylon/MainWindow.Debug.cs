@@ -53,6 +53,109 @@ public partial class MainWindow
                     await Task.Delay(1500);
                     break;
                 case "next": Next(); break;
+                case "safe-portable":
+                    {
+                        var old = Settings.Str("general.theme"); Settings.Set("general.theme", "Light"); Settings.Save();
+                        var portable = StartupOptions.Portable && StartupOptions.ToolsDirectory == Path.Combine(Library.Dir, "tools");
+                        var safe = StartupOptions.SafeMode && !Settings.Bool("playback.autoplay") && Settings.Bool("perf.softwareui") && !Settings.Bool("playback.ownengine") && !_mp.IsPlaying;
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"safe-portable passed={portable && safe && !ShellRegistration.CanWriteShell} portable={portable} safe={safe} shellBlocked={!ShellRegistration.CanWriteShell}\n");
+                        Settings.Set("general.theme", old);
+                        break;
+                    }
+                case "panel-beauty":
+                    {
+                        var pointer = Motion.DebugPointer; var effects = Motion.DebugEnabled;
+                        async Task Settle(int ms)
+                        {
+                            var watch = Stopwatch.StartNew();
+                            while (watch.ElapsedMilliseconds < ms) { await Task.Delay(8); Motion.DebugFrame(); }
+                        }
+                        try
+                        {
+                            Motion.DebugPointer = true; Motion.DebugEnabled = true;
+                            Motion.Out(Sidebar, () => Sidebar.Visibility = Visibility.Collapsed, animate: false);
+                            Motion.Set(SidebarHost, WidthProperty, 0); _sidebarMeasured = false;
+                            Motion.Reset(Stage);
+                            var widths = new List<double>(); var times = new List<double>(); var stable = true;
+                            var timer = Stopwatch.StartNew(); ToggleSidebar(LibraryPanel.Section.Music);
+                            var shots = 0;
+                            while (timer.ElapsedMilliseconds < 750)
+                            {
+                                await Task.Delay(8); Motion.DebugFrame();
+                                widths.Add(SidebarHost.Width); times.Add(timer.Elapsed.TotalMilliseconds);
+                                stable &= Math.Abs(Stage.RenderTransform.Value.M11 - 1) < 0.0001 && Math.Abs(Stage.RenderTransform.Value.M22 - 1) < 0.0001;
+                                if (shots < 3 && timer.ElapsedMilliseconds >= new[] { 60, 150, 300 }[shots])
+                                { Snap(this, Path.ChangeExtension(outFile, $".panel{shots}.png")); shots++; }
+                            }
+                            var smooth = widths.Zip(widths.Skip(1), (a, b) => b >= a - 0.05).All(v => v)
+                                && widths.Any(w => w > 5 && w < Sidebar.Width - 5);
+                            var opened = Math.Abs(SidebarHost.Width - Sidebar.Width) < 1;
+                            ToggleSidebar(); await Settle(80); var before = SidebarHost.Width; ToggleSidebar();
+                            var reversed = Math.Abs(before - SidebarHost.Width) < 0.001;
+                            await Settle(700); ToggleSidebar(); await Settle(700);
+                            var closed = Sidebar.Visibility == Visibility.Collapsed && SidebarHost.Width == 0;
+                            Motion.DebugPointer = false; ToggleSidebar();
+                            var keyboard = SidebarHost.Width == Sidebar.Width;
+                            Motion.DebugEnabled = false; ToggleSidebar();
+                            var reduced = SidebarHost.Width == 0 && Sidebar.Visibility == Visibility.Collapsed;
+                            File.WriteAllText(Path.ChangeExtension(outFile, ".panel.json"), System.Text.Json.JsonSerializer.Serialize(new { widths, times }));
+                            File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"panel passed={stable && smooth && opened && reversed && closed && keyboard && reduced} stable={stable} smooth={smooth} firstOpened={opened} reversed={reversed} closed={closed} keyboard={keyboard} reduced={reduced} video={Video.IsVisible} decodedVideo={_mp.Media?.Statistics.DecodedVideo}\n");
+                        }
+                        finally { Motion.DebugPointer = pointer; Motion.DebugEnabled = effects; }
+                        break;
+                    }
+                case "features12":
+                    {
+                        if (CurrentPath is not { } path) throw new InvalidOperationException("Audio fixture required.");
+                        SetRate(1.25f); ShiftAudioDelay(0.15); ShiftSubtitleDelay(0.4);
+                        RememberSeriesTracks(); PlayList([path], 0);
+                        for (var attempt = 0; attempt < 100 && _openingMedia; attempt++) await Task.Delay(30);
+                        await Task.Delay(100);
+                        var remembered = Math.Abs(_mp.Rate - 1.25) < 0.001 && Math.Abs(_fileAudioDelay - 0.15) < 0.001 && Math.Abs(_fileSubtitleDelay - 0.4) < 0.001;
+                        var series = Library.Data.SeriesTracks.ContainsKey(System.IO.Path.GetDirectoryName(path)!);
+                        Enqueue([path, path]); RemoveFromQueue(2); UndoQueue();
+                        var undone = _queue.Count == 3 && _index == 0;
+                        ClearQueue(); UndoQueue();
+                        for (var attempt = 0; attempt < 100 && _openingMedia; attempt++) await Task.Delay(30);
+                        await Task.Delay(100);
+                        var restoredPaused = _queue.Count == 3 && !_mp.IsPlaying;
+                        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(Volume)!;
+                        var range = (System.Windows.Automation.Provider.IRangeValueProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.RangeValue)!;
+                        var old = Volume.Value; range.SetValue(25); var accessible = Math.Abs(VolumePercent - 25) <= 1; Volume.Value = old; ApplyVolume();
+                        var completed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            try
+                            {
+                                await Task.Delay(120);
+                                var dialog = Application.Current.Windows.OfType<DialogWindow>().First();
+                                var body = (StackPanel)dialog.Body.Content;
+                                ((TextBox)body.Children[0]).Text = L.T("Show playback position and time");
+                                await Task.Delay(50); var count = ((ListBox)body.Children[1]).Items.Count;
+                                Snap(dialog, Path.ChangeExtension(outFile, ".commands.png"));
+                                dialog.SaveBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                completed.TrySetResult(count > 0 && !dialog.IsVisible);
+                            }
+                            catch (Exception e) { completed.TrySetException(e); }
+                        });
+                        ShowCommandPalette(); var commands = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _ = Dispatcher.BeginInvoke(async () =>
+                        {
+                            try
+                            {
+                                await Task.Delay(400); var dialog = Application.Current.Windows.OfType<DialogWindow>().First();
+                                var text = ((TextBox)((StackPanel)dialog.Body.Content).Children[0]).Text;
+                                Snap(dialog, Path.ChangeExtension(outFile, ".pipeline.png"));
+                                dialog.CancelBtn.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+                                completed.TrySetResult(text.Contains("libVLC") && text.Contains("HDR"));
+                            }
+                            catch (Exception e) { completed.TrySetException(e); }
+                        });
+                        ShowPlaybackPipeline(); var pipeline = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"features12 passed={remembered && series && undone && restoredPaused && accessible && commands && pipeline} remembered={remembered} series={series} undo={undone} restoredPaused={restoredPaused} accessible={accessible} commands={commands} pipeline={pipeline}\n");
+                        break;
+                    }
                 case "audit20-lyrics":
                     {
                         if (CurrentPath is not { } path) throw new InvalidOperationException("An audio fixture is required.");
@@ -167,7 +270,7 @@ public partial class MainWindow
                             var bytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
                             var elapsed = watch.ElapsedMilliseconds;
                             var count = ((System.Collections.ICollection)((ListBox)Sidebar.FindName("List")).ItemsSource).Count;
-                            var noWidthSpring = !Motion.DebugDrivers().Contains("Border.Width");
+                            var undistortedStage = Math.Abs(Stage.RenderTransform.Value.M11 - 1) < 0.001;
                             ToggleSidebar(); await Settle(40); ToggleSidebar(); await Settle(700);
                             var reversed = Sidebar.Visibility == Visibility.Visible && Math.Abs(SidebarHost.Width - Sidebar.Width) < 0.01;
                             ToggleSidebar(); await Settle(700);
@@ -178,9 +281,9 @@ public partial class MainWindow
                             Motion.DebugEnabled = false;
                             ToggleSidebar();
                             var reduced = SidebarHost.Width == 0 && Sidebar.Visibility == Visibility.Collapsed;
-                            var ok = playing && asleep && awake && paused && count == 10000 && bytes < 100_000_000 && noWidthSpring && reversed && closed && keyboard && reduced;
+                            var ok = playing && asleep && awake && paused && count == 10000 && bytes < 100_000_000 && undistortedStage && reversed && closed && keyboard && reduced;
                             File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"),
-                                $"audit20 passed={ok} playing={playing} asleep={asleep} awake={awake} paused={paused} rows={count} allocated={bytes} renderMs={elapsed} noWidthSpring={noWidthSpring} reversed={reversed} closed={closed} keyboard={keyboard} reduced={reduced}\n");
+                                $"audit20 passed={ok} playing={playing} asleep={asleep} awake={awake} paused={paused} rows={count} allocated={bytes} renderMs={elapsed} undistortedStage={undistortedStage} reversed={reversed} closed={closed} keyboard={keyboard} reduced={reduced} video={Video.IsVisible} decodedVideo={_mp.Media?.Statistics.DecodedVideo}\n");
                         }
                         finally { Motion.DebugPointer = pointer; Motion.DebugEnabled = enabled; ClearQueue(); }
                         break;

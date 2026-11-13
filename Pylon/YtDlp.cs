@@ -14,7 +14,7 @@ public static class YtDlp
 {
     /// <summary>PYLON_YTDLP points at another yt-dlp (tests).</summary>
     public static string Exe => Environment.GetEnvironmentVariable("PYLON_YTDLP")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "yt-dlp.exe");
+        ?? Path.Combine(StartupOptions.ToolsDirectory, "yt-dlp.exe");
 
     public static bool Available => File.Exists(Exe);
 

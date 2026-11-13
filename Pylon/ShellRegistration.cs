@@ -14,7 +14,7 @@ public static partial class ShellRegistration
 {
     const string Classes = @"Software\Classes";
     const string Capabilities = @"Software\Pylon\Capabilities";
-    public static bool CanWriteShell => Environment.GetEnvironmentVariable("PYLON_DATA") == null
+    public static bool CanWriteShell => !StartupOptions.SafeMode && Environment.GetEnvironmentVariable("PYLON_DATA") == null
         && Environment.GetEnvironmentVariable("PYLON_VELOPACK_TEST") == null;
 
     /// <summary>Velopack's launcher next to "current\": its path doesn't change from one update to the next.</summary>

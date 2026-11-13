@@ -58,7 +58,7 @@ public partial class MainWindow
     void ShowSecondSubtitle()
     {
         if (_second == null || Motion.Asleep) return;
-        var t = PlaybackClock() - Settings.Num("subs.delay"); // the subtitle delay moves both subtitles
+        var t = PlaybackClock() - _fileSubtitleDelay; // the subtitle delay moves both subtitles
         // the cue at t: usually the same or the next one, so walk from the last one instead of searching every time
         if (_secondAt >= _second.Count || _second[_secondAt].Start > t) _secondAt = Math.Max(0, _second.FindLastIndex(c => c.Start <= t));
         while (_secondAt + 1 < _second.Count && _second[_secondAt + 1].Start <= t) _secondAt++;
@@ -83,7 +83,7 @@ public partial class MainWindow
                 return;
             }
             if (Motion.Asleep) return;
-            var text = _mp.SubtitleAt(_mp.Time / 1000.0 - Settings.Num("subs.delay"));
+            var text = _mp.SubtitleAt(_mp.Time / 1000.0 - _fileSubtitleDelay);
             MainSub.Margin = new Thickness(0, 0, 0, Video.ActualHeight * (0.04 + (Settings.Str("subs.position") switch { "Higher" => 0.055, "Much higher" => 0.13, _ => 0 })));
             MainSub.Show(text, Video.ActualHeight);
         }, Dispatcher);

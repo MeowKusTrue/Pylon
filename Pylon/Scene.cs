@@ -31,7 +31,7 @@ public class SceneView : FrameworkElement
     public Color Main => _a;
 
     public static string Style => Settings.Str("ui.scene");
-    public static bool On => Style is "Bio" or "Wave" or "Bloom" or "Ripple" or "Radial" or "Aurora" or "Horizon";
+    public static bool On => !PowerPolicy.Economy && Style is "Bio" or "Wave" or "Bloom" or "Ripple" or "Radial" or "Aurora" or "Horizon";
 
     public SceneView()
     {

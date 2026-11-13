@@ -70,6 +70,7 @@ public static class Settings
     public static void Save()
     {
         SaveTimer.Stop();
+        if (StartupOptions.SafeMode) return;
         // through a temp file: a full disk or a crash mid-write must not leave a cut-off settings.json (that reset everything)
         var tmp = FilePath + ".tmp";
         try
@@ -86,7 +87,7 @@ public static class Settings
         }
     }
 
-    public static string Str(string key) => _values.TryGetValue(key, out var v) ? v : Find(key)?.Default ?? "";
+    public static string Str(string key) => StartupOptions.Override(key) ?? (_values.TryGetValue(key, out var v) ? v : Find(key)?.Default ?? "");
     public static bool Bool(string key) => Str(key) == "true";
     public static double Num(string key) => double.TryParse(Str(key), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : 0;
     public static int Int(string key) => (int)Math.Round(Num(key));
@@ -432,7 +433,8 @@ public static class Settings
                 C("general.theme", "Theme", "Dark", ThemeManager.Themes),
                 new Opt { Kind = OptKind.Accent, Key = "general.accent", Label = "Accent color", Default = AccentColors[0] },
                 Seg("ui.corners", "Corner rounding", "Moderate", "Off", "Slight", "Moderate", "Strong"),
-                T("ui.lite", "Light mode", false, "For weak laptops and battery life: no blur on lyrics, no moving background, calmer animation.")),
+                T("ui.lite", "Light mode", false, "For weak laptops and battery life: no blur on lyrics, no moving background, calmer animation."),
+                T("ui.autoeconomy", "Use economical effects on battery", true, "Reduces decorative effects and defers waveform analysis without changing video quality.")),
             Sec("When Music Plays",
                 T("ui.cover", "Show cover art in the window when playing audio", true),
                 Seg("ui.musicbg", "Behind the music", "Blurred cover", "Theme color", "Cover color", "Blurred cover"),

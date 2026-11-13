@@ -14,7 +14,7 @@ namespace Pylon;
 /// </summary>
 public static class Ffmpeg
 {
-    static string DownloadExe => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "ffmpeg.exe");
+    static string DownloadExe => Path.Combine(StartupOptions.ToolsDirectory, "ffmpeg.exe");
 
     /// <summary>An explicit override wins; otherwise use an existing installation before downloading.</summary>
     public static string Exe

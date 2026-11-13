@@ -25,7 +25,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
 {
     /// <summary>PYLON_FFMPEG_DLLS points at another set of FFmpeg 8 DLLs.</summary>
     public static string DllDir => Environment.GetEnvironmentVariable("PYLON_FFMPEG_DLLS")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Pylon", "tools", "ffmpeg");
+        ?? Path.Combine(StartupOptions.ToolsDirectory, "ffmpeg");
 
     /// <summary>Not shipped: Ffmpeg.InstallEngineLibsAsync brings them when the setting is turned on.</summary>
     public static IEnumerable<string> DllNames => new[] { "avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter" }.Select(lib => $"{lib}-{ffmpeg.LibraryVersionMap[lib]}.dll");
@@ -79,6 +79,7 @@ public sealed unsafe partial class VideoEngine : IDisposable
     SwsContext* _sws;
     AVStream* _stream;
     bool _hw, _strict, _openAttempted;
+    public bool HardwareDecoding => _hw;
     long _openTicks;
 
     ID3D11Device _device = null!;

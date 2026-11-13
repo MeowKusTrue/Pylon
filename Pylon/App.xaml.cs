@@ -17,7 +17,7 @@ public partial class App : Application
             return;
         }
         Perf.Mark("startup");
-        if (e.Args.Length > 0) GpuWarmup.Start(); // opened with a file: the driver starts while the window is built
+        if (!StartupOptions.SafeMode && StartupOptions.Arguments.Length > 0) GpuWarmup.Start();
         ErrorLog.Install(this);
         SmoothScroll.Install();
         Motion.HookMenus();
@@ -70,6 +70,8 @@ public partial class App : Application
         Settings.Changed += key => { if (key is "perf.softwareui" or "*") InterfaceRendering.Apply(); };
         InterfaceRendering.NoteStartup();
         L.Init();
+        PowerPolicy.Initialize();
+        Accessibility.Install();
         Perf.Mark("settings + strings");
         SessionEnding += (_, _) => (MainWindow as Pylon.MainWindow)?.Quit();
         Pylon.MainWindow.PrewarmEngine();

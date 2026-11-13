@@ -509,6 +509,7 @@ public partial class LibraryPanel : UserControl
     Page Playlists() => new(Section.Playlists, Crumbs1("Playlists"), () =>
     [
         ActionRow("Create playlist", () => CreatePlaylist()),
+        ActionRow("Import playlist", () => Player.ImportPlaylist()),
         .. Smart.Select(s => IconRow(L.T(s.Title), s.Glyph, () => Navigate(SmartPage(s.Title, s.Files)), sortable: false, menu: () => FilesMenu(s.Files()))),
         .. Library.Data.Playlists.Select(PlaylistRow),
     ]);
@@ -637,6 +638,7 @@ public partial class LibraryPanel : UserControl
 
     IEnumerable<object> PlaylistMenu(Playlist p) =>
     [
+        Item("Export playlist", "floppy-disk", () => Player.ExportPlaylist(p.Items)),
         Item("Play", "play", () => Player.PlayList(p.Items.ToList(), 0)),
         Item("Add to Queue", "queue", () => Player.Enqueue(p.Items)),
         .. Player.IsDownloading(p) ? new object[] { Item("Stop Downloading", "x", () => { p.Offline = false; Library.Touch(); }) }
