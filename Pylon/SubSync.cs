@@ -124,7 +124,7 @@ public static class SubSync
             using var media = new Media(_vlc, video, FromType.FromPath);
             media.AddOption($":start-time={start.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             media.AddOption($":stop-time={(start + length).ToString(System.Globalization.CultureInfo.InvariantCulture)}");
-            media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={Rate}}}:std{{access=file,mux=wav,dst='{wav.Replace("'", "")}'}}");
+            media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={Rate}}}:std{{access=file,mux=wav,dst='{Waveform.SoutPath(wav)}'}}");
             media.AddOption(":sout-keep");
             using var player = new MediaPlayer(media);
             var done = new ManualResetEventSlim();

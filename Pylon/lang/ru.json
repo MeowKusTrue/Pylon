@@ -1459,5 +1459,7 @@
   "Undo queue change": "Отменить изменение очереди",
   "Enter an absolute folder path.": "Введите полный путь к папке.",
   "Files to relink: {0}": "Будет заменено ссылок: {0}",
-  "Files changed during preview. Scan the folder again.": "Файлы изменились во время предпросмотра. Повторите поиск."
+  "Files changed during preview. Scan the folder again.": "Файлы изменились во время предпросмотра. Повторите поиск.",
+  "Faster video engine (experimental)": "Быстрый видеодвижок (экспериментально)",
+  "Local videos open several times faster. Downloads FFmpeg's libraries (about 80 MB); can be turned off in Settings.": "Локальные видео открываются в несколько раз быстрее. Скачает библиотеки FFmpeg (около 80 МБ); выключается в настройках."
 }

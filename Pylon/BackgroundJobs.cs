@@ -11,6 +11,8 @@ public sealed class BackgroundJob
     public string Detail { get; private set; } = "";
     public string? Output { get; set; }
     public double Progress { get; private set; }
+    /// <summary>Speed and time left while it runs, for the tasks window.</summary>
+    public Meter Meter { get; private set; } = new();
     public JobState State { get; private set; }
     public Task Completion { get; private set; } = Task.CompletedTask;
 
@@ -36,6 +38,7 @@ public sealed class BackgroundJob
         State = JobState.Running;
         Progress = 0;
         Detail = "";
+        Meter = new();
         Completion = Execute();
         BackgroundJobs.Notify();
     }

@@ -98,17 +98,20 @@ public partial class MainWindow
         if (_whisper != null) { _whisper.Cancel(); _whisper = null; Osd(L.T("Stopped"), 2); return; }
         if (CurrentPath is not { } video || video.Contains("://")) return;
         if (DialogWindow.WhisperOptions(this) is not { } o) return;
-        _whisper = new CancellationTokenSource();
-        var cancel = _whisper.Token;
+        var run = _whisper = new CancellationTokenSource();
+        var cancel = run.Token;
         var last = DateTime.MinValue;
+        var (stage, meter) = ("", new Meter());
         var progress = new Progress<(string Stage, double P)>(s =>
         {
-            if ((DateTime.Now - last).TotalSeconds < 1 && s.P < 1) return;
+            if (s.Stage != stage) (stage, meter) = (s.Stage, new Meter()); // the model download, the sound, the recognition: each its own speed
+            if ((DateTime.Now - last).TotalSeconds < 0.25 && s.P < 1) return;
             last = DateTime.Now;
-            Osd($"{s.Stage} {(int)(s.P * 100)}%", 3);
+            OsdProgress($"{s.Stage} {(int)(s.P * 100)}%", s.P, meter, 3);
         });
-        var srt = await Whisper.RunAsync(video, _mp.Length / 1000.0, o, progress, cancel);
-        _whisper = null;
+        string? srt;
+        try { srt = await Whisper.RunAsync(video, _mp.Length / 1000.0, o, progress, cancel); }
+        finally { if (_whisper == run) _whisper = null; } // a stopped run must not clear the next one's
         if (cancel.IsCancellationRequested) return;
         if (srt == null) { Osd(L.F("Subtitles from speech failed: {0}", Whisper.Error ?? "?"), 6); return; }
         var list = Library.Data.Subtitles.TryGetValue(video, out var l) ? l : Library.Data.Subtitles[video] = [];
@@ -126,7 +129,8 @@ public partial class MainWindow
             if (!DialogWindow.OfferTool(this, "ffmpeg", "Second subtitle from the video",
                     "Taking a subtitle out of the video needs ffmpeg, a free open-source tool. Pylon can download it now (about 200 MB from github.com/BtbN/FFmpeg-Builds).")) return;
             Osd(L.T("Downloading ffmpeg…"), 60);
-            if (!await Ffmpeg.InstallAsync(new Progress<double>(p => Osd(L.F("ffmpeg {0}%", (int)(p * 100)), 60)))) { Osd(L.T("Couldn't download ffmpeg"), 3); return; }
+            var ffMeter = new Meter();
+            if (!await Ffmpeg.InstallAsync(new Progress<double>(p => OsdProgress(L.F("ffmpeg {0}%", (int)(p * 100)), p, ffMeter, 60)))) { Osd(L.T("Couldn't download ffmpeg"), 3); return; }
         }
         Osd(L.T("Reading the subtitle track…"), 30);
         var text = await Task.Run(() =>
@@ -138,7 +142,9 @@ public partial class MainWindow
                 using var p = Process.Start(psi)!;
                 var stdout = p.StandardOutput.ReadToEndAsync();
                 _ = p.StandardError.ReadToEndAsync();
-                return p.WaitForExit(120_000) ? stdout.Result : null;
+                if (p.WaitForExit(120_000)) return stdout.Result;
+                try { p.Kill(true); } catch (InvalidOperationException) { } // stuck on a broken file: don't leave it running
+                return null;
             }
             catch (System.ComponentModel.Win32Exception) { return null; }
         });

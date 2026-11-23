@@ -78,7 +78,8 @@ public static class Whisper
             finally { try { File.Delete(wav); } catch (IOException) { } }
         }
         catch (OperationCanceledException) { Error = null; return null; }
-        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+        catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException or JsonException
+            or System.ComponentModel.Win32Exception or InvalidOperationException or VLCException) // a blocked whisper.exe, a dead libVLC
         {
             Error = e.Message;
             return null;
@@ -124,6 +125,7 @@ public static class Whisper
             {
                 await dst.WriteAsync(buf.AsMemory(0, n), cancel);
                 done += n;
+                Transfer.Add(n);
                 if (total > 0) progress.Report((stage, (double)done / total));
             }
         }
@@ -138,7 +140,7 @@ public static class Whisper
     {
         _vlc ??= new LibVLC("--quiet", "--no-video", "--no-sout-video", "--no-spu");
         using var media = new Media(_vlc, video, FromType.FromPath);
-        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate=16000}}:std{{access=file,mux=wav,dst='{wav.Replace("'", "")}'}}");
+        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate=16000}}:std{{access=file,mux=wav,dst='{Waveform.SoutPath(wav)}'}}");
         media.AddOption(":sout-keep");
         using var player = new MediaPlayer(media);
         var done = new ManualResetEventSlim();

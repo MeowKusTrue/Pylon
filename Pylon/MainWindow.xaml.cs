@@ -1007,7 +1007,8 @@ public partial class MainWindow : Window
     async Task<bool> OfferYtDlp()
     {
         if (!DialogWindow.OfferYtDlp(this)) { _ytDlpDeclined = true; return false; }
-        var ok = await YtDlp.InstallAsync(new Progress<double>(p => Osd(L.F("Downloading yt-dlp… {0}%", (int)(p * 100)), 5)));
+        var meter = new Meter();
+        var ok = await YtDlp.InstallAsync(new Progress<double>(p => OsdProgress(L.F("Downloading yt-dlp… {0}%", (int)(p * 100)), p, meter, 5)));
         if (!ok) Osd(L.T("Couldn't download yt-dlp from GitHub. Check the connection (or VPN) and try again."), 6);
         return ok;
     }
@@ -1134,7 +1135,7 @@ public partial class MainWindow : Window
         ResumeText.Text = L.F("You’ve watched till {0} already.", Fmt(_resumeAt));
         if (_resumeAt > 0) { _resumeTimer.Stop(); _resumeTimer.Start(); }
 
-        if (startAt > 0) media.AddOption($":start-time={startAt / 1000.0:0.###}".Replace(',', '.'));
+        if (startAt > 0) media.AddOption(FormattableString.Invariant($":start-time={startAt / 1000.0:0.###}"));
         // waveOut starts playing with almost nothing buffered: with the computer busy it ran dry for 5-10 ms in the first
         // 0.15 s now and then (in 1-2 starts of 3, in libVLC on its own too). Music starts paused for a moment and has a
         // buffer by then (3 starts in 4 clean; the rest past 0.1 s)
@@ -1247,17 +1248,21 @@ public partial class MainWindow : Window
 
     bool _engineLibsBusy;
 
+    /// <summary>The download was already agreed to (the welcome window): don't ask again.</summary>
+    public static bool EngineAgreed;
+
     async Task InstallEngineLibs()
     {
         {
-            if (!SnapMode && !DialogWindow.OfferTool(this, "FFmpeg", "Pylon's own video engine",
+            if (!SnapMode && !EngineAgreed && !DialogWindow.OfferTool(this, "FFmpeg", "Pylon's own video engine",
                     "The engine needs FFmpeg's libraries, free and open-source. Pylon can download them now (about 80 MB from github.com/BtbN/FFmpeg-Builds); they're only used for this engine."))
             {
                 Settings.Set("playback.ownengine", "false");
                 return;
             }
             Osd(L.T("Downloading FFmpeg…"), 120);
-            if (!await Ffmpeg.InstallEngineLibsAsync(new Progress<double>(p => Osd(L.F("FFmpeg {0}%", (int)(p * 100)), 120))))
+            var libsMeter = new Meter();
+            if (!await Ffmpeg.InstallEngineLibsAsync(new Progress<double>(p => OsdProgress(L.F("FFmpeg {0}%", (int)(p * 100)), p, libsMeter, 120))))
             {
                 Osd(L.T("Couldn't download FFmpeg"), 3);
                 Settings.Set("playback.ownengine", "false");
@@ -1404,14 +1409,17 @@ public partial class MainWindow : Window
     /// </summary>
     void SetArtwork(string? url)
     {
-        if (url == null || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase)) { SetArtwork(url == null ? null : LoadFull(url)); return; }
+        if (url == null) { SetArtwork((BitmapSource?)null); return; }
+        var web = url.StartsWith("http", StringComparison.OrdinalIgnoreCase);
         var path = CurrentPath;
-        SetArtwork((BitmapSource?)null); // not the previous song's cover meanwhile
+        if (web) SetArtwork((BitmapSource?)null); // not the previous song's cover meanwhile; a file's comes a moment later
         _ = Load();
 
         async Task Load()
         {
-            if (await Task.Run(() => Library.LoadImage(url, 900)) is BitmapSource bmp && CurrentPath == path) SetArtwork(bmp);
+            // a 900 px decode took the UI thread for tens of milliseconds on every track change
+            var art = await Task.Run(() => web ? Library.LoadImage(url, 900) : LoadFull(url)) as BitmapSource;
+            if (CurrentPath == path && (art != null || !web)) SetArtwork(art);
         }
     }
 
@@ -2314,8 +2322,10 @@ public partial class MainWindow : Window
     void ShowPosition(double v)
     {
         v = Math.Clamp(v, 0, 1);
-        if (!Seek.IsDragging) Seek.Value = v;
-        if (!MiniSeek.IsDragging) MiniSeek.Value = v;
+        // a new value redraws the bar's whole waveform: only when the thumb moves by half a pixel (a 2 h film moves one in 7 s)
+        static bool Moves(SeekBar bar, double v) => !bar.IsDragging && (bar.ActualWidth <= 0 || Math.Abs(bar.Value - v) * bar.ActualWidth >= 0.5 || v is 0 or 1);
+        if (Moves(Seek, v)) Seek.Value = v;
+        if (Moves(MiniSeek, v)) MiniSeek.Value = v;
     }
 
     /// <summary>
@@ -2326,6 +2336,9 @@ public partial class MainWindow : Window
     void SyncSeekPulse()
     {
         var run = !Motion.Asleep && _index >= 0 && _mp.IsPlaying;
+        // hidden or in the tray nothing shows the times: the clock work (scrobbling, Discord, the end of a track) needs only 1 s
+        var tick = TimeSpan.FromMilliseconds(Motion.Asleep ? 1000 : 200);
+        if (_tick.Interval != tick) _tick.Interval = tick;
         if (_seekPulse.IsEnabled == run) return;
         _seekPulse.IsEnabled = run;
         _lastFrame = 0;
@@ -2408,6 +2421,26 @@ public partial class MainWindow : Window
     void Video_SizeChanged(object sender, SizeChangedEventArgs e) { UpdateCornerMask(); ApplyVideoZoom(); }
     void Stage_SizeChanged(object sender, SizeChangedEventArgs e) => FitVideo();
 
+    byte[]? _ambientLast;
+
+    /// <summary>
+    /// Whether a snapshot looks like the last one shown (on average under 3 % apart, over every 4th pixel): then the
+    /// backdrop isn't cross-faded to it, since every fade redraws the whole window for over a second.
+    /// </summary>
+    bool SameScene(BitmapSource bmp)
+    {
+        var bgra = new FormatConvertedBitmap(bmp, PixelFormats.Bgra32, null, 0);
+        var px = new byte[bgra.PixelWidth * bgra.PixelHeight * 4];
+        bgra.CopyPixels(px, bgra.PixelWidth * 4, 0);
+        var last = _ambientLast;
+        if (last == null || last.Length != px.Length) { _ambientLast = px; return false; }
+        long diff = 0, n = 0;
+        for (var i = 0; i < px.Length; i += 16, n += 3) diff += Math.Abs(px[i] - last[i]) + Math.Abs(px[i + 1] - last[i + 1]) + Math.Abs(px[i + 2] - last[i + 2]);
+        if (n > 0 && diff < n * 8) return true;
+        _ambientLast = px;
+        return false;
+    }
+
     /// <summary>A tiny snapshot of the current frame becomes the blurred backdrop (taken off the UI thread).</summary>
     async void GrabAmbient()
     {
@@ -2428,7 +2461,7 @@ public partial class MainWindow : Window
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
                 bmp.EndInit();
                 bmp.Freeze();
-                return bmp;
+                return SameScene(bmp) ? null : bmp;
             }
             catch (Exception e) when (e is IOException or NotSupportedException or ObjectDisposedException or UnauthorizedAccessException) { return null; }
         });
@@ -3304,13 +3337,21 @@ public partial class MainWindow : Window
         var kind = AudioExt.Contains(Path.GetExtension(p)) ? AudioExt : VideoExt;
         try
         {
-            var files = Directory.EnumerateFiles(folder).Where(f => kind.Contains(Path.GetExtension(f))).ToList();
-            files.Sort(StrCmpLogicalW);
+            // the skip button asks 5 times a second near a video's end: one listing serves 15 s (a share or a big folder stuttered)
+            if (_folderList is not { } cached || cached.Folder != folder || cached.Kind != kind || Environment.TickCount64 - cached.At > 15_000)
+            {
+                var list = Directory.EnumerateFiles(folder).Where(f => kind.Contains(Path.GetExtension(f))).ToList();
+                list.Sort(StrCmpLogicalW);
+                _folderList = cached = (folder, kind, list, Environment.TickCount64);
+            }
+            var files = cached.Files;
             var i = files.FindIndex(f => string.Equals(f, p, StringComparison.OrdinalIgnoreCase)) + dir;
             return i >= 0 && i < files.Count && files[i] != p ? files[i] : null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
+
+    (string Folder, HashSet<string> Kind, List<string> Files, long At)? _folderList;
 
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)] static extern int StrCmpLogicalW(string a, string b);
 
@@ -3359,7 +3400,9 @@ public partial class MainWindow : Window
         if (CurrentPath is not { } path || path.Contains("://")) return;
         Osd(L.T("Making a contact sheet…"), 30);
         var dir = Settings.Str("video.snapdir") is { Length: > 0 } d ? d : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-        var file = await Frames.ContactSheetAsync(path, dir);
+        string? file;
+        try { file = await Frames.ContactSheetAsync(path, dir); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { file = null; } // the pictures folder on a gone drive
         if (file == null) { Osd(L.T("Couldn't read frames from this video"), 3); return; }
         Osd(L.T("Contact sheet saved"), 3);
         Process.Start("explorer.exe", $"/select,\"{file}\"");
@@ -3593,8 +3636,9 @@ public partial class MainWindow : Window
         _syncing?.Cancel();
         _syncing = new CancellationTokenSource();
         Osd(L.T("Listening to the dialogue…"), 60);
+        var syncMeter = new Meter();
         SubSync.Result? r;
-        try { r = await SubSync.FindAsync(video, subs, _mp.Length / 1000.0, new Progress<double>(p => Osd(L.F("Listening to the dialogue… {0}%", (int)(p * 100)), 60)), _syncing.Token); }
+        try { r = await SubSync.FindAsync(video, subs, _mp.Length / 1000.0, new Progress<double>(p => OsdProgress(L.F("Listening to the dialogue… {0}%", (int)(p * 100)), p, syncMeter, 60)), _syncing.Token); }
         catch (OperationCanceledException) { return; }
         if (CurrentPath != video) return;
         if (r == null) { Osd(L.T("Couldn't match these subtitles to the speech"), 4); return; }
@@ -3688,10 +3732,19 @@ public partial class MainWindow : Window
         cm.IsOpen = true;
     }
 
-    void Osd(string text, double seconds = 0)
+    void Osd(string text, double seconds = 0) => Osd(text, seconds, null, null);
+
+    /// <summary>A long operation in the corner: its name, a bar, and the speed and time left as <paramref name="meter"/> measures them.</summary>
+    void OsdProgress(string text, double p, Meter meter, double seconds = 30) => Osd(text, seconds, Math.Clamp(p, 0, 1), meter.Line(p));
+
+    void Osd(string text, double seconds, double? progress, string? detail)
     {
         if (!Settings.Bool("osd.enable")) return;
         OsdText.Text = StageOsdText.Text = text;
+        OsdBar.Visibility = StageOsdBar.Visibility = progress == null ? Visibility.Collapsed : Visibility.Visible;
+        OsdBar.Value = StageOsdBar.Value = progress ?? 0;
+        OsdDetail.Text = StageOsdDetail.Text = detail ?? "";
+        OsdDetail.Visibility = StageOsdDetail.Visibility = string.IsNullOrEmpty(detail) ? Visibility.Collapsed : Visibility.Visible;
         var osd = Video.IsVisible ? OsdBorder : StageOsd; // the overlay window only exists over video
         Motion.Set(osd == OsdBorder ? StageOsd : OsdBorder, OpacityProperty, 0);
         if (osd.Opacity < 0.05) Motion.Pop(osd, dy: -6, scale: 0.94, origin: new Point(1, 0)); // appears from its corner

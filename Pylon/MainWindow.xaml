@@ -138,7 +138,11 @@
                 <!-- OSD for everything that isn't video (music, idle); over video the one in the overlay window is used -->
                 <Border x:Name="StageOsd" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6" Panel.ZIndex="5"
                         CornerRadius="6" Background="{DynamicResource MenuBg}" Opacity="0" IsHitTestVisible="False">
-                    <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
+                    <StackPanel>
+                        <TextBlock x:Name="StageOsdText" FontSize="16" Foreground="{DynamicResource FgA1}"/>
+                        <ProgressBar x:Name="StageOsdBar" Style="{StaticResource ThinProgressBar}" Minimum="0" Maximum="1" Margin="0,8,0,0" MinWidth="260" Visibility="Collapsed"/>
+                        <TextBlock x:Name="StageOsdDetail" FontSize="12" Foreground="{DynamicResource FgA3}" Margin="0,5,0,1" Visibility="Collapsed"/>
+                    </StackPanel>
                 </Border>
 
 
@@ -170,7 +174,11 @@
                 </Border>
                         <Border x:Name="OsdBorder" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="24" Padding="12,6"
                                 CornerRadius="6" Background="{DynamicResource MenuBg}" Opacity="0" IsHitTestVisible="False">
-                            <TextBlock x:Name="OsdText" FontSize="16" Foreground="{DynamicResource FgA1}" FontFamily="{StaticResource Inter}"/>
+                            <StackPanel>
+                                <TextBlock x:Name="OsdText" FontSize="16" Foreground="{DynamicResource FgA1}" FontFamily="{StaticResource Inter}"/>
+                                <ProgressBar x:Name="OsdBar" Style="{StaticResource ThinProgressBar}" Minimum="0" Maximum="1" Margin="0,8,0,0" MinWidth="260" Visibility="Collapsed"/>
+                                <TextBlock x:Name="OsdDetail" FontSize="12" Foreground="{DynamicResource FgA3}" FontFamily="{StaticResource Inter}" Margin="0,5,0,1" Visibility="Collapsed"/>
+                            </StackPanel>
                         </Border>
                         <!-- "You've watched till … already. Continue Watching" (hidden frame in the mockup) -->
                         <Border x:Name="ResumeBanner" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,24" Padding="20,10,10,10"

@@ -30,8 +30,11 @@ public sealed class MediaSession
         _smtc.PlaybackPositionChangeRequested += (_, e) => Seek?.Invoke(e.RequestedPlaybackPosition);
     }
 
+    int _track;
+
     public async void SetTrack(bool audio, string title, string? artist, string? album, string? artworkUrl)
     {
+        var mine = ++_track;
         var u = _smtc.DisplayUpdater;
         u.ClearAll();
         u.Type = audio ? MediaPlaybackType.Music : MediaPlaybackType.Video;
@@ -50,7 +53,11 @@ public sealed class MediaSession
         {
             // libVLC hands artwork out as file:///… (its art cache or the file next to the track)
             if (artworkUrl != null && Uri.TryCreate(artworkUrl, UriKind.Absolute, out var uri) && uri.IsFile && File.Exists(uri.LocalPath))
-                u.Thumbnail = RandomAccessStreamReference.CreateFromFile(await StorageFile.GetFileFromPathAsync(uri.LocalPath));
+            {
+                var file = await StorageFile.GetFileFromPathAsync(uri.LocalPath);
+                if (mine != _track) return; // a newer track is already shown: its cover isn't this one
+                u.Thumbnail = RandomAccessStreamReference.CreateFromFile(file);
+            }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { } // no cover then
         u.Update();

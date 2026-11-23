@@ -83,6 +83,46 @@ public partial class MainWindow
                     ShowSeekPreview(2 + double.Parse(arg, System.Globalization.CultureInfo.InvariantCulture) * (Seek.ActualWidth - 4));
                     await Task.Delay(1500);
                     break;
+                case "tickrate": // how many 16 / 33 ms DispatcherTimer ticks and Rendering frames arrive in 2 s
+                    {
+                        int fast = 0, slow = 0, frames = 0;
+                        var t16 = new DispatcherTimer(TimeSpan.FromMilliseconds(16), DispatcherPriority.Render, (_, _) => fast++, Dispatcher);
+                        var t33 = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Render, (_, _) => slow++, Dispatcher);
+                        EventHandler count = (_, _) => frames++;
+                        CompositionTarget.Rendering += count;
+                        await Task.Delay(2000);
+                        t16.Stop(); t33.Stop(); CompositionTarget.Rendering -= count;
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"tickrate 16ms={fast / 2.0}/s 33ms={slow / 2.0}/s rendering={frames / 2.0}/s{Environment.NewLine}");
+                        break;
+                    }
+                case "ambientstop": _ambientTimer?.Stop(); Ambient.Live = false; break; // the blurred frame stays, nothing new comes
+                case "ambienthide": _ambientTimer?.Stop(); Ambient.Live = false; Ambient.Visibility = Visibility.Collapsed; break;
+                case "cpu": // process CPU over 4 s
+                    {
+                        var me = Process.GetCurrentProcess();
+                        me.Refresh(); var a = me.TotalProcessorTime; await Task.Delay(4000); me.Refresh();
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"cpu{(arg.Length > 0 ? " " + arg : "")}={(me.TotalProcessorTime - a).TotalMilliseconds / 40:0.0}%{Environment.NewLine}");
+                        break;
+                    }
+                case "cpucost": // process CPU over 4 s: nothing extra, then an empty Rendering hook
+                    {
+                        var me = Process.GetCurrentProcess();
+                        async Task<double> Cpu() { me.Refresh(); var a = me.TotalProcessorTime; await Task.Delay(4000); me.Refresh(); return (me.TotalProcessorTime - a).TotalMilliseconds / 4000 * 100; }
+                        var idle = await Cpu();
+                        EventHandler nothing = (_, _) => { };
+                        CompositionTarget.Rendering += nothing;
+                        var hooked = await Cpu();
+                        CompositionTarget.Rendering -= nothing;
+                        var after = await Cpu();
+                        File.AppendAllText(Path.ChangeExtension(outFile, ".state.txt"), $"cpu% (of one core) idle={idle:0.0} rendering-hook={hooked:0.0} after={after:0.0}{Environment.NewLine}");
+                        break;
+                    }
+                case "osdprogress": // a download in the corner: bar, speed, time left
+                    {
+                        var meter = new Meter();
+                        for (var k = 0; k <= 12; k++) { Transfer.Add(2_500_000); OsdProgress(L.F("Downloading yt-dlp… {0}%", k * 4), k * 0.04, meter, 10); await Task.Delay(200); }
+                        break;
+                    }
                 case "next": Next(); break;
                 case "safe-portable":
                     {

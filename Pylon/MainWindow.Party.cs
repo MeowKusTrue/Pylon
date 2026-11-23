@@ -122,7 +122,7 @@ public partial class MainWindow
         if (_hosting) StopHosting();
         _partyTimer?.Stop();
         _party = url.Trim().EndsWith('/') ? url.Trim() : url.Trim() + "/";
-        _partyHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        _partyHttp ??= new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(3) }; // one per app: every join made a new one
         (_partyMissing, _seenNote, _waiting) = (null, -1, false);
         _partyTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(800), DispatcherPriority.Background, async (_, _) => await FollowParty(), Dispatcher);
         UpdatePartyPill();
@@ -192,7 +192,9 @@ public partial class MainWindow
     async void SeekToKeyframe(string path, long ms)
     {
         var (forward, length) = (ms >= _seekFrom, _mp.Length);
-        var (hit, size) = await Task.Run(() => (Keyframes.Near(path, ms, forward, length), new FileInfo(path).Length));
+        Keyframes.Hit? hit; long size;
+        try { (hit, size) = await Task.Run(() => (Keyframes.Near(path, ms, forward, length), new FileInfo(path).Length)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { (hit, size) = (null, 0); } // the file went away
         if (CurrentPath != path || _seekTarget != ms) return; // a newer seek came meanwhile: that one moves
         if (hit is not { } k) _mp.Time = ms;
         else

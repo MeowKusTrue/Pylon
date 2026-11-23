@@ -215,6 +215,12 @@ Check("default player: formats to take", !take.Contains(".mkv") && take.Contains
     Check("subtitles: read and shift", cues.Count == 2 && cues[0].Text == "Hello there" && Math.Abs(cues[1].Start - 62.25) < 0.001
         && Math.Abs(shifted[0].Start - 3.5) < 0.001 && assCues.Count == 1 && assCues[0].Text == "Hi\nthere" && Math.Abs(assCues[0].Start - 5.1) < 0.001);
 
+    var vtt = "WEBVTT\n\n00:05.000 --> 00:07.500 align:start\nShort 12:34.567\n\n01:00:00.000 --> 01:00:01.000\nLong\n";
+    var vttCues = SubText.Parse(vtt, ".vtt");
+    var vttShifted = SubText.Parse(SubText.Shift(vtt, ".vtt", 1, 1), ".vtt");
+    Check("subtitles: short VTT times read and shift", vttCues.Count == 2 && Math.Abs(vttCues[0].End - 7.5) < 0.001 && vttCues[0].Text == "Short 12:34.567"
+        && Math.Abs(vttShifted[0].Start - 6) < 0.001 && Math.Abs(vttShifted[0].End - 8.5) < 0.001 && Math.Abs(vttShifted[1].Start - 3601) < 0.001);
+
     // speech where the (shifted, sped-up) lines really are; the file's cues are the unshifted ones
     var rnd = new Random(7);
     var lines = new List<SubText.Cue>();
@@ -913,6 +919,37 @@ Check("isolated data profiles cannot alter the Windows shell", !ShellRegistratio
     });
     thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
     Check("custom seek control exposes a writable UI Automation range", accessible, failure?.Message ?? "");
+}
+{
+    Exception? failure = null; var (fast, worst, worstName) = (0, 0.0, "");
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            static byte[] Pixels(System.Windows.Media.Drawing d)
+            {
+                var visual = new System.Windows.Media.DrawingVisual();
+                using (var dc = visual.RenderOpen()) dc.DrawImage(new System.Windows.Media.DrawingImage(d), new System.Windows.Rect(0, 0, 64, 64));
+                var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(64, 64, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                bmp.Render(visual);
+                var px = new byte[64 * 64 * 4];
+                bmp.CopyPixels(px, 64 * 4, 0);
+                return px;
+            }
+            foreach (var file in Directory.GetFiles(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "Pylon", "Assets", "Icons"), "*.svg"))
+            {
+                var svg = File.ReadAllText(file).Replace("currentColor", "#FFFFFF").Replace("accentColor", "#FF8000").Replace("opacity=\"0.2\"", "fill=\"#FF8000\" opacity=\"0.55\"");
+                if (Icon.Paths(svg) is not { } quick) continue;
+                fast++;
+                var (a, b) = (Pixels(quick), Pixels(Icon.Vector(svg)));
+                var diff = a.Count(x => x > 0) < 100 ? 99 : a.Zip(b, (x, y) => Math.Abs(x - y)).Average(); // an empty picture is a failure too
+                if (diff > worst) (worst, worstName) = (diff, Path.GetFileName(file));
+            }
+        }
+        catch (Exception e) { failure = e; }
+    });
+    thread.SetApartmentState(ApartmentState.STA); thread.Start(); thread.Join();
+    Check("icons: quick path reader draws like SharpVectors", failure == null && fast > 100 && worst < 1.0, failure?.Message ?? $"{fast} icons, worst {worstName} {worst:0.00}");
 }
 {
     Check("power policy distinguishes battery AC and unknown power status", PowerPolicy.BatteryActive(0) && !PowerPolicy.BatteryActive(1) && !PowerPolicy.BatteryActive(255));

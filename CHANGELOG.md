@@ -3,6 +3,21 @@
 Each version's section becomes its GitHub release notes (`.github/workflows/release.yml`), and Pylon shows it in
 "What's new" after updating — the part between `<!-- ru -->` and `<!-- en -->` in Russian, the rest in English.
 
+## 2.1.8
+
+<!-- ru -->
+- Прогресс для всех долгих операций: полоса, скорость и оставшееся время — модель речи, ffmpeg, библиотеки движка, yt-dlp, офлайн-плейлисты, синхронизация субтитров, конвертация и фоновые задачи.
+- В окне приветствия можно сразу включить быстрый видеодвижок (скачает FFmpeg, около 80 МБ).
+- Фон «Размытый кадр» под видео нагружает процессор в 4–5 раз меньше; полоса перемотки и таймер в трее тоже стали экономнее.
+- Иконки строятся в 8 раз быстрее при запуске; обложки и волна загружаются без подвисаний интерфейса, поиск в библиотеке не пересобирает список на каждую букву.
+- Исправлено: анализ звука, синхронизация и субтитры из речи при апострофе в пути временной папки; короткие метки времени VTT при сдвиге; копившиеся соединения в «Смотреть вместе»; обложка прошлого трека в медиа-плашке Windows; зависший ffmpeg при чтении субтитров; сбои при недоступном диске.
+
+<!-- en -->
+- Progress for every long operation: a bar, speed and time left for the speech model, ffmpeg, engine libraries, yt-dlp, offline playlists, subtitle sync, conversion and background tasks.
+- The welcome window can turn on the fast video engine right away (downloads FFmpeg, about 80 MB).
+- The "Blurred frame" backdrop behind video uses 4–5 times less CPU; the seek bar and the tray timer are cheaper too.
+- Icons are built 8 times faster at startup; covers and waveforms load without UI stalls, and library search no longer rebuilds the list on every letter.
+- Fixed: sound analysis, subtitle sync and speech subtitles with an apostrophe in the temp folder path; short VTT timestamps when shifting; piling connections in Watch Together; the previous track's cover in Windows media controls; a stuck ffmpeg when reading subtitles; crashes on an unavailable drive.
 ## 2.1.7
 
 <!-- ru -->

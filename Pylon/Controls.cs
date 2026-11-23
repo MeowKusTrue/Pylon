@@ -64,14 +64,53 @@ public class Icon : Image
         svg = svg.Replace("currentColor", Resolve(tint ?? "@FgA2"))
                  .Replace("accentColor", Resolve("@Accent"))
                  .Replace("opacity=\"0.2\"", $"fill=\"{Resolve("@Accent")}\" opacity=\"0.55\"");
-        var reader = new FileSvgReader(new WpfDrawingSettings
-        {
-            IncludeRuntime = false, TextAsGeometry = false, EnsureViewboxSize = true, EnsureViewboxPosition = true,
-        });
-        img = new DrawingImage(reader.Read(new MemoryStream(Encoding.UTF8.GetBytes(svg))));
+        img = new DrawingImage(Paths(svg) ?? Vector(svg));
         img.Freeze();
         return Cache[key] = img;
     }
+
+    /// <summary>
+    /// A Phosphor icon is filled paths on a 256 grid: read straight into WPF geometry. SharpVectors took about 3 ms an icon
+    /// and 60 ms for the first, all before the first frame. Null for anything else (groups, transforms, strokes), which
+    /// SharpVectors still draws. Plain string scanning: the first Regex alone cost 60 ms at startup.
+    /// </summary>
+    public static Drawing? Paths(string svg)
+    {
+        if (!svg.Contains("viewBox=\"0 0 256 256\"")) return null;
+        for (var at = svg.IndexOf('<'); at >= 0; at = svg.IndexOf('<', at + 1))
+            if (!(At(svg, at, "<svg ") || At(svg, at, "</svg") || At(svg, at, "<path ") || At(svg, at, "</path") || At(svg, at, "<!--"))) return null;
+        try
+        {
+            var fill = Attribute(svg[..svg.IndexOf('>')], "fill") ?? "#000000";
+            var group = new DrawingGroup();
+            group.Children.Add(new GeometryDrawing(Brushes.Transparent, null, new RectangleGeometry(new Rect(0, 0, 256, 256)))); // the whole viewBox, as SharpVectors keeps it
+            for (var at = svg.IndexOf("<path "); at >= 0; at = svg.IndexOf("<path ", at + 1))
+            {
+                var tag = svg[at..svg.IndexOf('>', at)];
+                var (d, color, opacity) = (Attribute(tag, "d"), Attribute(tag, "fill"), Attribute(tag, "opacity"));
+                if (d == null || tag.Split("=\"").Length - 1 != 1 + (color == null ? 0 : 1) + (opacity == null ? 0 : 1)) return null; // an attribute it doesn't know
+                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color ?? fill));
+                if (opacity != null) brush.Opacity = double.Parse(opacity, System.Globalization.CultureInfo.InvariantCulture);
+                group.Children.Add(new GeometryDrawing(brush, null, Geometry.Parse("F1 " + d))); // SVG fills nonzero, WPF's default is even-odd
+            }
+            return group;
+        }
+        catch (Exception e) when (e is FormatException or NotSupportedException or InvalidOperationException or ArgumentException) { return null; }
+
+        static bool At(string s, int i, string what) => string.CompareOrdinal(s, i, what, 0, what.Length) == 0;
+        static string? Attribute(string tag, string name)
+        {
+            var i = tag.IndexOf(" " + name + "=\"", StringComparison.Ordinal);
+            if (i < 0) return null;
+            i += name.Length + 3;
+            return tag[i..tag.IndexOf('"', i)];
+        }
+    }
+
+    public static Drawing Vector(string svg) => new FileSvgReader(new WpfDrawingSettings
+    {
+        IncludeRuntime = false, TextAsGeometry = false, EnsureViewboxSize = true, EnsureViewboxPosition = true,
+    }).Read(new MemoryStream(Encoding.UTF8.GetBytes(svg)));
 }
 
 /// <summary>Seek bar: video style (filled track + 8px thumb) or music style (waveform bars + 4px thumb).</summary>

@@ -205,7 +205,13 @@ public partial class DialogWindow
                         if (succeeded.Contains(path)) continue;
                         var dst = Converter.OutputPath(path, preset, folder, cutFrom >= 0 ? $" ({Time(cutFrom).Replace(':', '.')}-{Time(cutTo > 0 ? cutTo : length).Replace(':', '.')})" : "");
                         state.Text = "…";
-                        var progress = new Progress<double>(p => { bar.ScaleX = p; job.Report((succeeded.Count + p) / items.Count, Path.GetFileName(path)); });
+                        var progress = new Progress<double>(p =>
+                        {
+                            bar.ScaleX = p;
+                            state.Text = $"{(int)(p * 100)}%";
+                            job.Report((succeeded.Count + p) / items.Count, Path.GetFileName(path));
+                            dlg.SaveBtn.Content = Busy("Converting…", job);
+                        });
                         var (ok, error) = await Converter.RunAsync(path, dst, preset, cutFrom, cutTo, progress, cancel);
                         bar.ScaleX = ok ? 1 : 0;
                         state.Text = ok ? "✓" : L.T(cancel.IsCancellationRequested ? "Cancelled" : error?.Contains("does not contain any stream") == true ? "No sound in this file" : "Failed");
@@ -233,6 +239,8 @@ public partial class DialogWindow
     }
 
     /// <summary>Asks and fetches ffmpeg the first time; false when it isn't there after that.</summary>
+    static string Busy(string label, BackgroundJob job) => job.Meter.Line(job.Progress) is { Length: > 0 } left ? $"{L.T(label)} · {left}" : L.T(label);
+
     static async Task<bool> EnsureFfmpeg(DialogWindow dlg, TextBlock status, ScaleTransform bar)
     {
         if (await Task.Run(() => Ffmpeg.Available)) return true;
@@ -241,10 +249,12 @@ public partial class DialogWindow
         dlg.SaveBtn.IsEnabled = false;
         var download = BackgroundJobs.Start("ffmpeg", async (job, cancel) =>
         {
+            var meter = new Meter();
             var ok = await Ffmpeg.InstallAsync(new Progress<double>(p =>
             {
                 job.Report(p);
-                status.Text = L.F("ffmpeg {0}%", (int)(p * 100)); bar.ScaleX = p;
+                var line = meter.Line(p);
+                status.Text = L.F("ffmpeg {0}%", (int)(p * 100)) + (line.Length > 0 ? " · " + line : ""); bar.ScaleX = p;
             }), cancel);
             if (!ok) throw new IOException(L.T("Couldn't download ffmpeg"));
             return Ffmpeg.Exe;
@@ -275,7 +285,7 @@ public partial class DialogWindow
         dlg.SaveBtn.Content = L.T("Joining…");
         foreach (var i in items) i.State.Text = "…";
         var (done, error) = await Ffmpeg.JoinAsync([.. items.Select(i => i.Path)], dst, preset,
-            new Progress<double>(p => { foreach (var i in items) i.Bar.ScaleX = p; job.Report(p); }), cancel);
+            new Progress<double>(p => { foreach (var i in items) i.Bar.ScaleX = p; job.Report(p); dlg.SaveBtn.Content = Busy("Joining…", job); }), cancel);
         foreach (var i in items)
         {
             i.Bar.ScaleX = done ? 1 : 0;

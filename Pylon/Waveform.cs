@@ -15,6 +15,7 @@ public static class Waveform
     public const int Bins = 400;
     static readonly string CacheDir = Path.Combine(Library.Dir, "waves");
     static readonly ConcurrentDictionary<string, byte[]> Memory = new(StringComparer.OrdinalIgnoreCase);
+    static readonly ConcurrentDictionary<string, byte> Missing = new(StringComparer.OrdinalIgnoreCase);
     static readonly ConcurrentDictionary<string, double> Loud = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The track's average loudness (RMS, dBFS) once it has been analyzed, for "Replay gain: Measured".</summary>
@@ -42,8 +43,11 @@ public static class Waveform
     public static byte[]? Cached(string path)
     {
         if (Memory.TryGetValue(path, out var known)) return known;
-        try { return CacheFile(path) is { } f && File.Exists(f) && File.ReadAllBytes(f) is { Length: Bins } c ? c : null; }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        if (Missing.ContainsKey(path)) return null; // asked every 200 ms near the end of a track: one disk look is enough
+        try { if (CacheFile(path) is { } f && File.Exists(f) && File.ReadAllBytes(f) is { Length: Bins } c) return Memory[path] = c; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        Missing[path] = 0;
+        return null;
     }
 
     /// <summary>
@@ -93,6 +97,9 @@ public static class Waveform
         finally { try { File.Delete(wav); } catch (IOException) { } }
     }
 
+    /// <summary>A path inside a quoted sout option: dropping the apostrophe (O'Brien's temp folder) pointed at a folder that isn't there.</summary>
+    public static string SoutPath(string path) => path.Replace("\\", "\\\\").Replace("'", "\\'");
+
     static bool Decode(string path, string wav)
     {
         _vlc ??= new LibVLC("--quiet", "--no-video", "--no-sout-video", "--no-spu");
@@ -100,7 +107,7 @@ public static class Waveform
         media.Parse(MediaParseOptions.ParseLocal).Wait(5000);
         var seconds = media.Duration / 1000.0;
         var rate = seconds > 3600 ? 2000 : 8000; // a loudness outline needs no more; keeps a 10-hour book at 144 MB of temp WAV
-        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={rate}}}:std{{access=file,mux=wav,dst='{wav.Replace("'", "")}'}}");
+        media.AddOption($":sout=#transcode{{acodec=s16l,channels=1,samplerate={rate}}}:std{{access=file,mux=wav,dst='{Waveform.SoutPath(wav)}'}}");
         media.AddOption(":sout-keep");
         using var player = new MediaPlayer(media);
         var done = new ManualResetEventSlim();

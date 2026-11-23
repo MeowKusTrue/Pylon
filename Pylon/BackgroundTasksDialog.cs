@@ -46,7 +46,9 @@ public partial class DialogWindow
                         new StackPanel { Orientation = Orientation.Horizontal, Children = { cancel, retry, open } }) });
                     rows[job] = row = (detail, bar, cancel, retry, open);
                 }
-                row.Detail.Text = L.T(job.State.ToString()) + (job.Detail.Length > 0 ? " — " + L.T(job.Detail) : "");
+                var speed = job.State == JobState.Running ? job.Meter.Line(job.Progress) : "";
+                row.Detail.Text = L.T(job.State.ToString()) + (job.State == JobState.Running && job.Progress > 0 ? $" {(int)(job.Progress * 100)}%" : "")
+                    + (job.Detail.Length > 0 ? " — " + L.T(job.Detail) : "") + (speed.Length > 0 ? " · " + speed : "");
                 row.Bar.Value = job.Progress;
                 row.Cancel.IsEnabled = job.State == JobState.Running;
                 row.Retry.IsEnabled = job.State is JobState.Failed or JobState.Cancelled;

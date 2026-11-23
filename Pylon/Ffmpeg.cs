@@ -113,6 +113,7 @@ public static class Ffmpeg
         {
             await dst.WriteAsync(buf.AsMemory(0, n), idle.Token);
             done += n;
+            Transfer.Add(n);
             idle.CancelAfter(TimeSpan.FromSeconds(30));
             if (total > 0) progress?.Report((double)done / total);
         }

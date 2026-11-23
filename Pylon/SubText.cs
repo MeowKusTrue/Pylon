@@ -14,7 +14,7 @@ public static class SubText
 
     static readonly Regex SrtTime = new(@"(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})", RegexOptions.Compiled);
     static readonly Regex SrtLine = new(@"(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3})", RegexOptions.Compiled);
-    static readonly Regex VttShort = new(@"(?<![\d:])(\d{2}):(\d{2})\.(\d{3})(?=\s*-->|\s*$)", RegexOptions.Compiled); // "mm:ss.mmm" without hours
+    static readonly Regex VttShort = new(@"(?<=^[ \t]*|-->[ \t]*)(\d{2}):(\d{2})\.(\d{3})(?=[ \t]*-->|[ \t]|\r?$)", RegexOptions.Compiled | RegexOptions.Multiline); // cue times "mm:ss.mmm" without hours
     static readonly Regex AssTime = new(@"(\d):(\d{2}):(\d{2})\.(\d{2})", RegexOptions.Compiled);
     static readonly Regex Tags = new(@"<[^>]+>|\{[^}]*\}", RegexOptions.Compiled);
 
@@ -101,6 +101,7 @@ public static class SubText
                 return $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds / 10:00}";
             });
         var sep = ext == ".vtt" ? "." : ",";
+        if (ext == ".vtt") text = VttShort.Replace(text, "00:$1:$2.$3"); // short times were left unshifted
         return SrtTime.Replace(text, m =>
         {
             var t = int.Parse(m.Groups[1].Value) * 3600 + int.Parse(m.Groups[2].Value) * 60 + int.Parse(m.Groups[3].Value) + int.Parse(m.Groups[4].Value.PadRight(3, '0')) / 1000.0;

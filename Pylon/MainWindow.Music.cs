@@ -110,13 +110,14 @@ public partial class MainWindow
                 cancel.ThrowIfCancellationRequested();
                 if (!p.Offline || !Library.Data.Playlists.Contains(p)) throw new OperationCanceledException();
                 job.Report((saved + missed) / (double)Math.Max(1, todo.Count), Library.TitleOf(item));
-                Osd(L.F("Saving “{0}” for offline: {1} of {2}", p.Name, saved + missed + 1, todo.Count), 4);
+                OsdProgress(L.F("Saving “{0}” for offline: {1} of {2}", p.Name, saved + missed + 1, todo.Count), (saved + missed) / (double)Math.Max(1, todo.Count), job.Meter, 4);
                 var meta = Library.Data.Meta.GetValueOrDefault(item);
                 var name = Safe(meta is { Title: { } t } ? meta.Artist is { } a ? $"{a} - {t}" : t : Library.TitleOf(item));
                 var page = await YtDlp.PageOf(item);
                 var stem = YtDlp.OfflineStem(name, page);
                 if (await YtDlp.DownloadAudioAsync(page, Path.Combine(dir, stem), cancel) is not { } file)
                 { cancel.ThrowIfCancellationRequested(); missed++; continue; }
+                try { Transfer.Add(new FileInfo(file).Length); } catch (IOException) { } // yt-dlp moves the bytes: counted per song
                 // the file carries the song's names and cover; its stamp tells the music indexer it's read already
                 await WriteTags(file, meta?.Title ?? name, meta?.Artist, meta?.Album, meta?.Art);
                 Library.Data.Meta[file] = new TrackMeta

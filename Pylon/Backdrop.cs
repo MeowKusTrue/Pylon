@@ -48,18 +48,42 @@ public class Backdrop : Grid
     {
         var (front, back) = _aFront ? (_a, _b) : (_b, _a);
         _mirror.Source = source;
+        var shown = front.Opacity; // read while a fade still holds it: taking the fade off falls back to the old value
+        Hold(front, shown);
+        Hold(back, 0);
         if (!fade || !Motion.Enabled || front.Source == null)
         {
             front.Source = source;
-            Motion.Set(front, OpacityProperty, 1);
-            Motion.Set(back, OpacityProperty, 0);
+            Hold(front, 1);
             back.Source = null;
             return;
         }
         back.Source = source;
-        Motion.Animate(back, OpacityProperty, 1, Fade, from: 0);
-        Motion.Animate(front, OpacityProperty, 0, Fade);
+        back.BeginAnimation(OpacityProperty, Slow(0, 1));
+        front.BeginAnimation(OpacityProperty, Slow(shown, 0));
         _aFront = !_aFront;
+    }
+
+    // a blurred picture changing slowly looks the same at 30 frames a second as at the monitor's 180, and every frame
+    // here redraws the whole window: the video's backdrop cost 40 % of a core with 2 s snapshots cross-fading on springs
+    static DoubleAnimation Slow(double from, double to)
+    {
+        var a = new DoubleAnimation(from, to, TimeSpan.FromSeconds(1.4)) { EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+        Timeline.SetDesiredFrameRate(a, 30);
+        a.Freeze();
+        return a;
+    }
+
+    static void Hold(UIElement e, double opacity)
+    {
+        e.BeginAnimation(OpacityProperty, null);
+        Motion.Set(e, OpacityProperty, opacity);
+    }
+
+    static T Capped<T>(T a) where T : Timeline
+    {
+        Timeline.SetDesiredFrameRate(a, 30);
+        return a;
     }
 
     /// <summary>Slow constant motion (linear rotation, sine breathing); off when Windows animations are off.</summary>
@@ -75,9 +99,9 @@ public class Backdrop : Grid
             if (on)
             {
                 // big enough that the turning picture always covers the corners of a wide stage
-                _rot.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(90)) { RepeatBehavior = RepeatBehavior.Forever });
-                _rot2.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(360, 0, TimeSpan.FromSeconds(130)) { RepeatBehavior = RepeatBehavior.Forever });
-                var breathe = new DoubleAnimation(2.1, 2.45, TimeSpan.FromSeconds(17)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } };
+                _rot.BeginAnimation(RotateTransform.AngleProperty, Capped(new DoubleAnimation(0, 360, TimeSpan.FromSeconds(90)) { RepeatBehavior = RepeatBehavior.Forever }));
+                _rot2.BeginAnimation(RotateTransform.AngleProperty, Capped(new DoubleAnimation(360, 0, TimeSpan.FromSeconds(130)) { RepeatBehavior = RepeatBehavior.Forever }));
+                var breathe = Capped(new DoubleAnimation(2.1, 2.45, TimeSpan.FromSeconds(17)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever, EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut } });
                 _scale.BeginAnimation(ScaleTransform.ScaleXProperty, breathe);
                 _scale.BeginAnimation(ScaleTransform.ScaleYProperty, breathe);
                 Motion.Animate(_counter, OpacityProperty, 0.45, Fade);

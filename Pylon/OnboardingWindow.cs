@@ -18,6 +18,7 @@ namespace Pylon;
 public class OnboardingWindow : Window
 {
     int _step;
+    bool _fastEngine;
     string _folder = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
     readonly Border _card = new();
 
@@ -87,6 +88,11 @@ public class OnboardingWindow : Window
         if (_step == 2)
         {
             Settings.Set("app.onboarded", true);
+            if (_fastEngine && !Settings.Bool("playback.ownengine"))
+            {
+                MainWindow.EngineAgreed = true; // agreed to the download here: no second question
+                Settings.Set("playback.ownengine", true);
+            }
             Close();
             return;
         }
@@ -124,6 +130,7 @@ public class OnboardingWindow : Window
                 new TextBlock { Text = L.T("Choose a Media Folder to get started with"), FontSize = 16, Foreground = R("FgA0"), Margin = new Thickness(0, 48, 0, 12) },
                 pick,
                 DefaultPlayer(),
+                EngineOffer(),
             },
         };
     }
@@ -134,6 +141,31 @@ public class OnboardingWindow : Window
         var b = new Button { Content = L.T("Make Pylon the default player"), Style = St("SecondaryButton"), Background = R("BgRaised"), Height = 40, Margin = new Thickness(0, 20, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
         b.Click += (_, _) => { Settings.Set("app.assocasked", true); DialogWindow.FileTypes(this); };
         return b;
+    }
+
+    /// <summary>Pylon's own engine, off unless chosen: it needs FFmpeg's libraries, downloaded when the window closes.</summary>
+    FrameworkElement EngineOffer()
+    {
+        var toggle = new CheckBox { Style = St("ToggleSwitch"), IsChecked = _fastEngine, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+        toggle.Click += (_, _) => _fastEngine = toggle.IsChecked == true;
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Margin = new Thickness(0, 20, 0, 0),
+            Children =
+            {
+                toggle,
+                new StackPanel
+                {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children =
+                    {
+                        new TextBlock { Text = L.T("Faster video engine (experimental)"), FontSize = 15, Foreground = R("FgA0") },
+                        new TextBlock { Text = L.T("Local videos open several times faster. Downloads FFmpeg's libraries (about 80 MB); can be turned off in Settings."),
+                            FontSize = 13, Foreground = R("FgA3"), TextWrapping = TextWrapping.Wrap, MaxWidth = 560, Margin = new Thickness(0, 3, 0, 0) },
+                    },
+                },
+            },
+        };
     }
 
     FrameworkElement ThemeStep()

@@ -271,6 +271,7 @@ public static class YtDlp
                     stall.CancelAfter(TimeSpan.FromSeconds(20));
                     await dst.WriteAsync(buf.AsMemory(0, n));
                     done += n;
+                    Transfer.Add(n);
                     if (total > 0) progress?.Report((double)done / total);
                 }
             }

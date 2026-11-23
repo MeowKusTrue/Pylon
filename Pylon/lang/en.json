@@ -1459,5 +1459,7 @@
   "Undo queue change": "Undo queue change",
   "Enter an absolute folder path.": "Enter an absolute folder path.",
   "Files to relink: {0}": "Files to relink: {0}",
-  "Files changed during preview. Scan the folder again.": "Files changed during preview. Scan the folder again."
+  "Files changed during preview. Scan the folder again.": "Files changed during preview. Scan the folder again.",
+  "Faster video engine (experimental)": "Faster video engine (experimental)",
+  "Local videos open several times faster. Downloads FFmpeg's libraries (about 80 MB); can be turned off in Settings.": "Local videos open several times faster. Downloads FFmpeg's libraries (about 80 MB); can be turned off in Settings."
 }

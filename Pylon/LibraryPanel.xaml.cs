@@ -42,11 +42,17 @@ public class Row : INotifyPropertyChanged
     bool _thumbRequested;
     public ImageSource? Thumb { get => _thumb; private set { _thumb = value; PropertyChanged?.Invoke(this, new(nameof(Thumb))); } }
 
+    static readonly SemaphoreSlim ImageGate = new(6);
+
     public async void RequestThumb()
     {
         if (_thumbRequested || !HasThumbBox) return;
         _thumbRequested = true;
-        Thumb = Image != null ? (Image.Length == 0 ? null : await Task.Run(() => Library.LoadImage(Image))) : await Library.ThumbnailAsync(Path!);
+        if (Image == null) { Thumb = await Library.ThumbnailAsync(Path!); return; }
+        if (Image.Length == 0) return;
+        await ImageGate.WaitAsync(); // a radio page asked for 200 web icons at once, each blocking a pool thread
+        try { Thumb = await Task.Run(() => Library.LoadImage(Image)); }
+        finally { ImageGate.Release(); }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -89,16 +95,19 @@ public partial class LibraryPanel : UserControl
         add.Click += (_, _) => Player.ShowOpenMenu(add);
         Rail.Children.Add(add);
         RenderPins();
-        Library.Changed += () => { _groupVersion++; _groups.Clear(); _groupLoading.Clear(); RenderPins(); if (IsVisible) Render(); };
+        Library.Changed += () => { _groupVersion++; _groups.Clear(); _groupLoading.Clear(); if (!Library.Data.Pinned.SequenceEqual(_pinsShown)) RenderPins(); if (IsVisible) Render(); };
         Library.FoldersScanned += () => Dispatcher.BeginInvoke(() => { if (IsVisible && _pos >= 0 && _nav[_pos].Folder != null) Render(); });
         IsVisibleChanged += (_, _) => { if (IsVisible) { RenderPins(); Render(); } }; // the library may load after this panel is built
     }
+
+    List<string> _pinsShown = [];
 
     /// <summary>Pinned folders as rail buttons between the sections and "+".</summary>
     void RenderPins()
     {
         foreach (var old in Rail.Children.OfType<FrameworkElement>().Where(c => c.Tag is "pin" || c.DataContext is string).ToList()) Rail.Children.Remove(old);
         var at = Rail.Children.Count - 1; // before "+"
+        _pinsShown = [.. Library.Data.Pinned]; // every library change used to check each pin on disk (a pinned drive gone offline hung the window)
         var pins = Library.Data.Pinned.Where(Directory.Exists).ToList();
         if (pins.Count == 0) return;
         var line = new Border { Height = 1, Width = 22, Margin = new Thickness(0, 0, 0, 14), Tag = "pin" };
@@ -203,12 +212,20 @@ public partial class LibraryPanel : UserControl
         if (IsVisible && Motion.ByPointer) Motion.Pop(List, scale: 1, dx: 28 * direction, spring: Spring.Smooth);
     }
 
-    public void Render()
+    public void Render() => Render(reuse: false);
+
+    Page? _builtPage;
+    List<Row>? _builtRows;
+
+    /// <summary><paramref name="reuse"/>: the page's rows as last built (typing in the search only filters them; building
+    /// a page can list folders and check every file on disk).</summary>
+    void Render(bool reuse)
     {
         if (!IsVisible) return; // re-rendered by IsVisibleChanged when shown
         if (_pos < 0) { Navigate(Home()); return; }
         var page = _nav[_pos];
-        var rows = page.Build();
+        var rows = reuse && ReferenceEquals(_builtPage, page) && _builtRows != null ? _builtRows : page.Build();
+        (_builtPage, _builtRows) = (page, rows);
 
         var q = SearchBox.Text.Trim();
         if (q.Length > 0) rows = rows.Where(r => !r.IsHeader && r.Sortable && r.Title.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -748,7 +765,7 @@ public partial class LibraryPanel : UserControl
         if (SearchBox.Text.Length > 0) SearchBox.Text = "";
     }
 
-    void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Render();
+    void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Render(reuse: true);
 
     // ───────── YouTube Music in the search ─────────
 

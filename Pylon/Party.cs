@@ -55,11 +55,13 @@ public sealed class PartyRelay : IDisposable
             try
             {
                 using var body = new StringContent(JsonSerializer.Serialize(_state()), Encoding.UTF8, "application/json");
-                using var res = await _http.PostAsync($"{_host}state?key={key}", body, _stop.Token).WaitAsync(TimeSpan.FromSeconds(8));
+                using var cut = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+                cut.CancelAfter(TimeSpan.FromSeconds(8)); // WaitAsync gave up waiting but left the request open: they piled up
+                using var res = await _http.PostAsync($"{_host}state?key={key}", body, cut.Token);
                 Connected = res.IsSuccessStatusCode;
                 if (Connected)
                 {
-                    using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(_stop.Token));
+                    using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(cut.Token));
                     if (doc.RootElement.TryGetProperty("cmds", out var cmds))
                         foreach (var c in cmds.EnumerateArray()) if (c.GetString() is { } cmd) _command(cmd);
                     Viewers = doc.RootElement.TryGetProperty("viewers", out var v) && v.TryGetInt32(out var n) ? n : null;
